@@ -32,6 +32,7 @@ import { SessionHeader } from "../session/SessionHeader";
 import { ArchivedSessionItems } from "../ArchivedSessionItems";
 import { ModelMenuRow } from "../ModelMenuRow";
 import { PortalsPage } from "../PortalsPanel";
+import { PortalLaunchButton } from "../PortalLaunchButton";
 import { PrStatusBar } from "../PrStatusBar";
 import type { PrReviewPage } from "../PrPanel";
 import { RepoBar } from "../RepoBar";
@@ -259,11 +260,18 @@ interface SessionArtifacts {
   reports: ReportMeta[];
   databases: DatabaseMeta[];
 }
+/** Starting a declared Portal, from the Portals page or the header's play
+ *  button, and which recipe the button is waiting on to open. */
+interface ChromePortalLaunch {
+  start: (recipe: PreviewPortalRecipe) => Promise<void>;
+  launching: string | null;
+  setLaunching: (recipeId: string | null) => void;
+}
 interface ChromeInfoActions {
   setPreviewStatus: Dispatch<SetStateAction<PreviewStatus | null>>;
   portalTarget: PortalTarget | null;
   openPortal: ((target: PortalTarget) => void) | undefined;
-  startDeclaredPortal: (recipe: PreviewPortalRecipe) => Promise<void>;
+  portalLaunch: ChromePortalLaunch;
   workflowRuns: WorkflowRunSnapshot[];
   workflowAction: (
     runId: string,
@@ -441,7 +449,7 @@ export function SessionViewerChrome({
     setPreviewStatus,
     portalTarget,
     openPortal,
-    startDeclaredPortal,
+    portalLaunch,
     workflowRuns,
     workflowAction,
     subagents,
@@ -1091,6 +1099,19 @@ export function SessionViewerChrome({
 					    the globe rides here only while nothing else is showing it. The
 					    panel carries it in its PR row, the summary card as a row of its
 					    own, so it is never in two places at once. */}
+                  {/* Play starts the repository's declared Portal and opens it
+					    in the Portal pane, on both widths. */}
+                  {!session.archived && openPortal && !infoPageOpen && (
+                    <PortalLaunchButton
+                      sessionId={session.id}
+                      status={previewStatus}
+                      launching={portalLaunch.launching}
+                      onLaunchingChange={portalLaunch.setLaunching}
+                      onStart={portalLaunch.start}
+                      onOpen={openPortal}
+                      isPhone={isPhone}
+                    />
+                  )}
                   {!isPhone && !showReview && !panelOpen && !summaryVisible && (
                     <StagingLink
                       session={session}
@@ -1307,7 +1328,7 @@ export function SessionViewerChrome({
                           setInfoPageOpen(false);
                           openPortal?.(target);
                         }}
-                        onStartPortal={startDeclaredPortal}
+                        onStartPortal={portalLaunch.start}
                         onPortalAction={async (name, action) => {
                           setPreviewStatus(
                             await portalActionApi(session.id, name, action),

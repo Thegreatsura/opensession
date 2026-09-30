@@ -496,7 +496,12 @@ export function useSessionRuntimeController({
   const [previewStatus, setPreviewStatus] = useState<PreviewStatus | null>(
     null,
   );
-  useEffect(() => setPreviewStatus(null), [session.id]);
+  // The recipe the header's play button is starting, until its Portal opens.
+  const [launchingPortal, setLaunchingPortal] = useState<string | null>(null);
+  useEffect(() => {
+    setPreviewStatus(null);
+    setLaunchingPortal(null);
+  }, [session.id]);
   async function startDeclaredPortal(recipe: PreviewPortalRecipe) {
     if (!recipe.command) {
       if (!recipe.skill) throw new Error("This Portal has no start command.");
@@ -556,6 +561,12 @@ export function useSessionRuntimeController({
       setStatus: setPreviewStatus,
       startDeclaredPortal,
       livePortals,
+      launchingPortal,
+      portalLaunch: {
+        start: startDeclaredPortal,
+        launching: launchingPortal,
+        setLaunching: setLaunchingPortal,
+      },
     },
   };
 }
@@ -573,12 +584,27 @@ export function useSessionPreviewStatusEffect(
   const setPreviewStatus = useEffectEvent((status: PreviewStatus) => {
     preview.setStatus(status);
   });
-  // Keep status warm while the portal browser is up and while the workspace
-  // panel is open. Its bottom bar counts live portals and its portals page
+  const launching = preview.launchingPortal != null;
+  // One read when the session opens, so the header knows which Portals the
+  // repository declares. The route never wakes a Sandbox.
+  useEffect(() => {
+    if (!worktreeDir) return;
+    const controller = new AbortController();
+    fetchPreview(sessionId, controller.signal)
+      .then((status) => setPreviewStatus(status))
+      .catch(() => {});
+    return () => controller.abort();
+  }, [sessionId, worktreeDir]);
+  // Keep status warm while the portal browser is up, while the header's play
+  // button waits for the Portal it started, and while the workspace panel is
+  // open. Its bottom bar counts live portals and its portals page
   // lists them. Status requests also renew the authenticated Caddy routes for
   // remote sandbox services.
   useEffect(() => {
-    if ((!showPortal && !activePanelOpen && !infoPageOpen) || !worktreeDir)
+    if (
+      (!showPortal && !activePanelOpen && !infoPageOpen && !launching) ||
+      !worktreeDir
+    )
       return;
     let alive = true;
     const load = (signal?: AbortSignal) =>
@@ -592,5 +618,12 @@ export function useSessionPreviewStatusEffect(
       alive = false;
       stop();
     };
-  }, [showPortal, activePanelOpen, infoPageOpen, sessionId, worktreeDir]);
+  }, [
+    showPortal,
+    activePanelOpen,
+    infoPageOpen,
+    launching,
+    sessionId,
+    worktreeDir,
+  ]);
 }
