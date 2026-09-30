@@ -18,10 +18,7 @@
 import { createSdkMcpServer, tool } from "./inprocess-mcp";
 import { z } from "zod";
 import type { TranscriptEntry } from "./types";
-import {
-  declaringSessionFor,
-  incidentKey,
-} from "./incident-declarations";
+import { declaringSessionFor, incidentKey } from "./incident-declarations";
 
 const MAX_ASSISTANT_MESSAGES = 4;
 const MAX_MESSAGE_CHARS = 4_000;
@@ -38,9 +35,8 @@ export interface IncidentMcpDeps {
 async function defaultDeps(): Promise<IncidentMcpDeps> {
   const { getSessionControl } = await import("./session-control");
   const { sessionLink } = await import("./run-instructions");
-  const { collectHandoffEvidence, formatHandoffEvidence } = await import(
-    "./handoff-evidence"
-  );
+  const { collectHandoffEvidence, formatHandoffEvidence } =
+    await import("./handoff-evidence");
   const control = getSessionControl();
   return {
     declaringSessionFor,

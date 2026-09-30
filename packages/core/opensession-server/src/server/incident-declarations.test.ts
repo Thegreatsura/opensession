@@ -1,4 +1,11 @@
-import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import {
@@ -153,9 +160,7 @@ describe("recordIncidentDeclaration", () => {
       reference: "INC-105",
     });
     expect((await declaringSessionFor(ULID))?.sessionId).toBe("os-first");
-    expect((await declaringSessionFor("#INC-105"))?.sessionId).toBe(
-      "os-first",
-    );
+    expect((await declaringSessionFor("#INC-105"))?.sessionId).toBe("os-first");
     expect(await declaringSessionFor("INC-999")).toBeNull();
     expect(await declaringSessionFor("nonsense")).toBeNull();
   });

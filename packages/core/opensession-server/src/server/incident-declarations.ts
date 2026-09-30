@@ -104,7 +104,9 @@ export function createIncidentDeclarationScanner(): (event: {
     if (/"already_existed"\s*:\s*true/.test(result)) return undefined;
     // Lenient regexes rather than JSON.parse: the stream copy of a result can
     // be truncated, and the id sits near the head of incident.io's reply.
-    const incidentId = result.match(/"id"\s*:\s*"([0-9A-HJKMNP-TV-Z]{26})"/)?.[1];
+    const incidentId = result.match(
+      /"id"\s*:\s*"([0-9A-HJKMNP-TV-Z]{26})"/,
+    )?.[1];
     if (!incidentId) return undefined;
     const reference = incidentKey(
       result.match(/"reference"\s*:\s*"(#?INC-\d+)"/i)?.[1],
@@ -180,7 +182,9 @@ export function incidentsInEvent(eventContext: string | undefined): string[] {
  */
 export function createIncidentDeclarationRecorder(
   sessionId: string,
-): (event: Parameters<ReturnType<typeof createIncidentDeclarationScanner>>[0]) => void {
+): (
+  event: Parameters<ReturnType<typeof createIncidentDeclarationScanner>>[0],
+) => void {
   const scan = createIncidentDeclarationScanner();
   return (event) => {
     const declared = scan(event);
