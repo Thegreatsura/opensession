@@ -32,6 +32,9 @@ export const APPLICATION_CATALOG_NAMESPACES = [
   "settlements",
   "mentions",
   "notifications",
+  // incident.io incident (ULID and INC-n) → the session that declared it
+  // (incident-declarations.ts).
+  "incident-declarations",
 ] as const;
 
 export type ApplicationCatalogNamespace =

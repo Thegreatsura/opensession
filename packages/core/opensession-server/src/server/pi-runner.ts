@@ -99,7 +99,9 @@ import {
   assembleRunSystemPrompt,
   buildRunInstructions,
   buildSessionContext,
+  sessionLink,
 } from "./run-instructions";
+import { stampIncidentDeclaration } from "./incident-declarations";
 import {
   logInjectedContext,
   logStandingContext,
@@ -2610,6 +2612,14 @@ async function* runPiAttempt(
       deniedToolIds: new Set(Object.keys(policy.disables)),
       inProcessMcp: mcpMounts.sdk,
       legacyProxyMcp: mcpMounts.legacyProxy,
+      // An incident this run declares names the session it came from, so the
+      // responder and the people in the channel can find the evidence.
+      rewriteArgs: (tool, args) =>
+        stampIncidentDeclaration(
+          tool.name,
+          args,
+          journal?.osSessionId ? sessionLink(journal.osSessionId) : undefined,
+        ),
       onAudit: (e) =>
         audit({
           msg: "pi_mcp_call",

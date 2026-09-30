@@ -88,6 +88,7 @@ import {
   type ActiveRunRecord,
 } from "./run-journal";
 import { createSlackPostScanner, linkThreadInIndex } from "./slack-links";
+import { createIncidentDeclarationRecorder } from "./incident-declarations";
 import {
   STRIPE_CONFIRM_TOOLS,
   looksLikeFabricatedToolTranscript,
@@ -1082,6 +1083,11 @@ const recoveredSlackScanners = new Map<
   string,
   ReturnType<typeof createSlackPostScanner>
 >();
+/** Same, for incidents a recovered run declares (incident-declarations.ts). */
+const recoveredIncidentRecorders = new Map<
+  string,
+  ReturnType<typeof createIncidentDeclarationRecorder>
+>();
 const recoveredFeedStarted: Set<string> = (g.__recoveredFeedStarted ??=
   new Set());
 
@@ -1283,6 +1289,16 @@ export async function recordRecoveredRunEvent(
     }
     if (event.type === "done" || event.type === "error")
       recoveredSlackScanners.delete(osSessionId);
+  }
+  {
+    let recordIncidents = recoveredIncidentRecorders.get(osSessionId);
+    if (!recordIncidents) {
+      recordIncidents = createIncidentDeclarationRecorder(osSessionId);
+      recoveredIncidentRecorders.set(osSessionId, recordIncidents);
+    }
+    recordIncidents(event);
+    if (event.type === "done" || event.type === "error")
+      recoveredIncidentRecorders.delete(osSessionId);
   }
 
   if (event.type === "model_switch") {
@@ -3370,6 +3386,11 @@ async function runSessionPromptInner(
   // Tool calls seen this run — used to replenish the continuation budget only
   // while human messages are queued behind ongoing work.
   let toolUseCount = 0;
+  // An incident this turn declares is recorded against the session, so the
+  // incident's responder can find it (incident-declarations.ts).
+  const recordIncidentDeclarations = createIncidentDeclarationRecorder(
+    session.id,
+  );
 
   for await (const event of runnerRun ??
     sandboxRun ??
@@ -3450,6 +3471,7 @@ async function runSessionPromptInner(
       onAskUser: makeAskHandler(sessionId),
     })) {
     firstEventMs ??= Date.now() - turnMetricStartedAt;
+    recordIncidentDeclarations(event);
     switch (event.type) {
       case "init":
         if (event.provider) effectiveProvider = event.provider;
