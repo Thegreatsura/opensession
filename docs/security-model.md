@@ -169,13 +169,22 @@ posed as a card in the asking session, because anyone watching that session,
 or another agent through session control, could answer a card.
 
 Approval mints a grant for the asking session: once (one call, one hour) or
-standing (seven days), revocable by the owner or requester. The grant id is
-the broker's bearer token, so the keychain listing shows grants and asks only
-to their owner and requester. The broker injects the secret, refuses
-redirects, and scrubs the literal secret from text responses. The grant id
-still lands in the asking session's transcript, so the method and path
-ceiling, short lifetimes, revocation, and the per-call audit line are what
-bound a replayed token.
+standing (seven days), revocable by the owner or requester. The agent uses it
+only through the interactive-only `call_credential` tool. The tool runs in the
+server and takes its session from the run-rpc token that routed the call,
+never from the agent's arguments, so a grant works only in the session it was
+issued to; a grant id copied from a transcript authorizes nothing elsewhere.
+There is no HTTP broker route. The call goes only to the credential's host
+over HTTPS; the method and the parsed, normalized path are checked against the
+credential's ceiling; redirects are not followed; agent-supplied headers are
+limited to a short allowlist. The secret is scrubbed from the returned headers
+and body verbatim and in common encodings (URL, JSON, base64), which is best
+effort. A credential registered as status-only returns only the HTTP status,
+for APIs that might echo the secret in a form scrubbing cannot catch.
+
+The store is a 0600 file owned by the service user. Agent shells run as the
+same Unix user today, so the file does not protect secrets from a local agent
+that reads it directly. This is a known gap.
 
 ## Mac Keychain requests
 
@@ -443,8 +452,7 @@ Enabling `userPrAuth` activates both halves below:
   `~/.opensession/web-sessions.json`, sliding 90d). Ordinary `/api/*` requests
   and the UI `/ws` require that web session. Exceptions are `/api/auth/*`;
   health/readiness endpoints; client update feeds and artifacts; runner
-  registration/heartbeat; the scoped keychain broker; the separately
-  bearer-gated keypad route; workload-identity discovery, JWKS, and
+  registration/heartbeat; the separately bearer-gated keypad route; workload-identity discovery, JWKS, and
   lease-gated token endpoints; and machine WebSocket transports authenticated
   by their own transport credentials. Page and static-asset loads remain open
   so sign-in can render, while published `/d` applications are authenticated.

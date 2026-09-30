@@ -172,6 +172,7 @@ export interface KeychainCredentialDto {
   injection?: { header?: string; scheme?: string };
   allowedMethods?: string[];
   allowedPathPrefixes?: string[];
+  statusOnly?: boolean;
   createdAt: string;
   updatedAt: string;
   /** The signed-in person owns it, so they can delete it. */
@@ -221,6 +222,7 @@ export async function addKeychainCredential(input: {
   injection?: { header?: string; scheme?: string };
   allowedMethods?: string[];
   allowedPathPrefixes?: string[];
+  statusOnly?: boolean;
 }): Promise<{ credential: KeychainCredentialDto }> {
   return request("/keychain/credentials", { method: "POST", body: input });
 }

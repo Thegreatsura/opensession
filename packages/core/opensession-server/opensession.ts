@@ -576,20 +576,12 @@ const server: import("bun").Server<WSClientData> = hotServe({
         (path === "/api/runners/register" ||
           path === "/api/runners/heartbeat") &&
         req.method === "POST";
-      // The keychain broker's caller is an agent subprocess on
-      // loopback with no browser session. Its own credential is the
-      // grant id in the path: unguessable, scoped to one credential
-      // and one session's approved purpose, method/path-limited,
-      // expiring, revocable and audited per call (src/server/
-      // keychain.ts). Same reasoning as the node routes above.
-      const openKeychainBroker = path.startsWith("/api/keychain/broker/");
       if (
         !authUser &&
         !openHealth &&
         !keypadBearer &&
         !openOs1Update &&
         !openRunnerAuth &&
-        !openKeychainBroker &&
         ((path.startsWith("/api/") && !path.startsWith("/api/auth/")) ||
           path === "/ws" ||
           // Agent-published apps (src/server/deploys.ts). Explicitly

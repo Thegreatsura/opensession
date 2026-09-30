@@ -47,7 +47,7 @@ touches an in-process tool:
 | [`opensession-search`](#opensession-search) | 2 | interactive | – |
 | [`opensession-self-deploy`](#opensession-self-deploy) | 2 | interactive | Withheld from dev instances (isDevInstance()) — the script targets the production service and state. |
 | [`opensession-humans`](#opensession-humans) | 3 | interactive, Slack loop, goal wake | Interactive runs need a session id (the answer routes back to it). |
-| [`opensession-keychain`](#opensession-keychain) | 7 | interactive | Needs a session id. |
+| [`opensession-keychain`](#opensession-keychain) | 8 | interactive | Needs a session id. |
 | [`opensession-publish`](#opensession-publish) | 4 | interactive | Needs a session id. |
 | [`opensession-repos`](#opensession-repos) | 6 | interactive | Needs a session id. |
 | [`opensession-memory`](#opensession-memory) | 9 | interactive | Needs a session id. |
@@ -74,7 +74,7 @@ touches an in-process tool:
 | [`opensession-github`](#opensession-github) | 4 | Slack loop | – |
 | [`opensession-goal-self`](#opensession-goal-self) | 6 | goal wake | Only on a session that carries a goalId. |
 
-33 servers, 157 tools.
+33 servers, 158 tools.
 
 ## opensession-sessions
 
@@ -517,6 +517,12 @@ List the credentials teammates have registered in the keychain — service, owne
 
 Ask a credential's owner to lend it to THIS session for a stated purpose. They get a DM (or a card, if they're driving a session) with Approve once / Approve standing / Decline, and this call blocks until they answer. On approval you receive broker instructions — a URL that injects the credential server-side; you never see the secret itself. Ask only when you actually need the access now, state the real purpose (the owner is approving that sentence, and every call is audited against it), and prefer 'once' unless the task genuinely needs repeated calls. If they decline, don't re-ask. Calling again with the same purpose while your ask is pending reminds the owner and waits on that same ask; if they already approved it, you get the live grant back.
 
+### `call_credential`
+
+`mcp__opensession-keychain__call_credential` · input: `credential` (string, required), `method` ("GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE", required), `path` (string, required), `headers` (object), `body` (string)
+
+Make one HTTPS API call with a credential this session holds a live grant for (see request_credential and list_grants). The credential is injected server-side; you never see it. The call goes to the credential's own host, within its method and path limits, and does not follow redirects. A once grant is spent by this call even if it fails. Returns the status, a few response headers and the text body (secret scrubbed, long bodies truncated, binary omitted), or only the status for a status-only credential. Stay within the purpose the owner approved; every call is audited.
+
 ### `cancel_credential_ask`
 
 `mcp__opensession-keychain__cancel_credential_ask` · input: `askId` (string, required)
@@ -525,7 +531,7 @@ Withdraw one of this session's pending keychain asks (ids from list_grants). The
 
 ### `register_credential`
 
-`mcp__opensession-keychain__register_credential` · input: `service` (string, required), `host` (string, required), `description` (string), `allowedMethods` ("GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE"[]), `allowedPathPrefixes` (string[]), `header` (string), `scheme` (string)
+`mcp__opensession-keychain__register_credential` · input: `service` (string, required), `host` (string, required), `description` (string), `allowedMethods` ("GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE"[]), `allowedPathPrefixes` (string[]), `header` (string), `scheme` (string), `statusOnly` (boolean)
 
 Add a credential to the keychain, owned by the person driving this session, so this and later sessions can borrow it through request_credential. You supply only metadata. A card appears in the session where THEY paste the secret; it goes straight to the keychain and you never see it. This call waits until they save or decline (15 minutes at most) and returns the credential's id, service, host and owner. If the call is cut short, the card stays open: call again with the same service and host to keep waiting on it, or check list_credentials. Never ask anyone to paste a secret in chat; if they already did, tell them to rotate it. Check list_credentials first: service slugs are unique. Set allowedMethods / allowedPathPrefixes when the task needs less than full access. Interactive sessions with a signed-in teammate only.
 

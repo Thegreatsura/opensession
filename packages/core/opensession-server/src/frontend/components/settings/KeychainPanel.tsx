@@ -16,6 +16,7 @@ import {
   type KeychainGrantDto,
 } from "../../lib/api";
 import { Button } from "../../ui/button";
+import { Checkbox } from "../../ui/checkbox";
 import { Field, Input } from "../../ui/input";
 import { Modal } from "../../ui/modal";
 import {
@@ -153,6 +154,7 @@ export function KeychainSection() {
                 c.allowedPathPrefixes?.length
                   ? `paths ${c.allowedPathPrefixes.join(", ")}`
                   : null,
+                c.statusOnly ? "status only" : null,
               ]
                 .filter(Boolean)
                 .join(" · ")}
@@ -300,6 +302,7 @@ function AddCredentialForm({
   const [header, setHeader] = useState("");
   const [methods, setMethods] = useState("");
   const [prefixes, setPrefixes] = useState("");
+  const [statusOnly, setStatusOnly] = useState(false);
   const [busy, setBusy] = useState(false);
   const ready = Boolean(service.trim() && host.trim() && secret);
 
@@ -316,6 +319,7 @@ function AddCredentialForm({
     if (header.trim()) credential.injection = { header: header.trim() };
     if (methods.trim()) credential.allowedMethods = list(methods);
     if (prefixes.trim()) credential.allowedPathPrefixes = list(prefixes);
+    if (statusOnly) credential.statusOnly = true;
     addKeychainCredential(credential)
       .then(() => {
         // Clear the secret first and always — it must not survive a
@@ -399,6 +403,13 @@ function AddCredentialForm({
               spellCheck={false}
             />
           </Field>
+          <label className="flex cursor-pointer items-center gap-2 text-label">
+            <Checkbox
+              checked={statusOnly}
+              onCheckedChange={(v) => setStatusOnly(v === true)}
+            />
+            Return only the status code, never the response
+          </label>
           {/* The hint belongs to this zone, so it sits inside it rather
 					    than floating between the fields and the actions. */}
           <p className="m-0 text-supporting leading-relaxed text-faint">

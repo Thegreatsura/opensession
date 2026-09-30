@@ -128,7 +128,7 @@ describe("owner answers", () => {
 
 describe("broker", () => {
   test("rejects unknown, revoked and expired grants", () => {
-    const r = kc.consumeGrantForBroker("kg-nope", "GET", "/v1/x");
+    const r = kc.consumeGrantForBroker("kg-nope", "bks-1", "GET", "/v1/x");
     expect(r).toMatchObject({ status: 404 });
   });
 
@@ -208,12 +208,22 @@ describe("grant enforcement", () => {
       requestedBy: "Grant",
       mode: "once",
     });
-    const first = kc.consumeGrantForBroker(gr.id, "GET", "/v1/deployments");
+    const first = kc.consumeGrantForBroker(
+      gr.id,
+      "bks-1",
+      "GET",
+      "/v1/deployments",
+    );
     expect(first).toHaveProperty("credential");
     expect(
       (first as { credential: { secret: string } }).credential.secret,
     ).toBe("sk-live-secret");
-    const second = kc.consumeGrantForBroker(gr.id, "GET", "/v1/deployments");
+    const second = kc.consumeGrantForBroker(
+      gr.id,
+      "bks-1",
+      "GET",
+      "/v1/deployments",
+    );
     expect(second).toMatchObject({ status: 403 });
     expect((second as { error: string }).error).toContain("used");
   });
@@ -226,14 +236,16 @@ describe("grant enforcement", () => {
       requestedBy: "Grant",
       mode: "standing",
     });
-    expect(kc.consumeGrantForBroker(gr.id, "GET", "/v1/x")).toHaveProperty(
-      "credential",
-    );
-    expect(kc.consumeGrantForBroker(gr.id, "GET", "/v1/x")).toHaveProperty(
-      "credential",
-    );
+    expect(
+      kc.consumeGrantForBroker(gr.id, "bks-1", "GET", "/v1/x"),
+    ).toHaveProperty("credential");
+    expect(
+      kc.consumeGrantForBroker(gr.id, "bks-1", "GET", "/v1/x"),
+    ).toHaveProperty("credential");
     expect(kc.revokeGrant(gr.id, "Alex")).toEqual({ ok: true });
-    expect(kc.consumeGrantForBroker(gr.id, "GET", "/v1/x")).toMatchObject({
+    expect(
+      kc.consumeGrantForBroker(gr.id, "bks-1", "GET", "/v1/x"),
+    ).toMatchObject({
       status: 403,
     });
   });
@@ -247,7 +259,9 @@ describe("grant enforcement", () => {
       mode: "standing",
       expiresAt: new Date(Date.now() - 1000).toISOString(),
     });
-    expect(kc.consumeGrantForBroker(gr.id, "GET", "/v1/x")).toMatchObject({
+    expect(
+      kc.consumeGrantForBroker(gr.id, "bks-1", "GET", "/v1/x"),
+    ).toMatchObject({
       status: 403,
     });
     expect(kc.listGrants({ sessionId: "bks-1" })[0]!.status).toBe("expired");
@@ -267,14 +281,16 @@ describe("grant enforcement", () => {
       });
     const gr = grant();
     expect(
-      kc.consumeGrantForBroker(gr.id, "GET", "/v1/deployments/abc"),
+      kc.consumeGrantForBroker(gr.id, "bks-1", "GET", "/v1/deployments/abc"),
     ).toHaveProperty("credential");
     expect(
-      kc.consumeGrantForBroker(gr.id, "DELETE", "/v1/deployments/abc"),
+      kc.consumeGrantForBroker(gr.id, "bks-1", "DELETE", "/v1/deployments/abc"),
     ).toMatchObject({
       status: 403,
     });
-    expect(kc.consumeGrantForBroker(gr.id, "GET", "/v1/teams")).toMatchObject({
+    expect(
+      kc.consumeGrantForBroker(gr.id, "bks-1", "GET", "/v1/teams"),
+    ).toMatchObject({
       status: 403,
     });
   });
@@ -288,7 +304,9 @@ describe("grant enforcement", () => {
       mode: "standing",
     });
     kc.deleteCredential(meta.id, "Alex");
-    expect(kc.consumeGrantForBroker(gr.id, "GET", "/v1/x")).toMatchObject({
+    expect(
+      kc.consumeGrantForBroker(gr.id, "bks-1", "GET", "/v1/x"),
+    ).toMatchObject({
       status: 403,
     });
   });
@@ -319,7 +337,7 @@ describe("grant enforcement", () => {
 });
 
 describe("grant instructions", () => {
-  test("name the broker URL, the limits and the single-use rule", () => {
+  test("name the call_credential tool, the limits and the single-use rule", () => {
     const meta = cred({
       allowedMethods: ["GET"],
       allowedPathPrefixes: ["/v1/deployments"],
@@ -340,6 +358,7 @@ describe("grant instructions", () => {
       meta,
     );
     expect(text).toContain("kg-abc");
+    expect(text).toContain("call_credential");
     expect(text).toContain("api.vercel.com");
     expect(text).toContain("SINGLE-USE");
     expect(text).toContain("GET");

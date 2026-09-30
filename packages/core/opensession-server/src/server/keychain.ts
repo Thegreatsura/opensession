@@ -20,18 +20,16 @@
  *                once (single broker call, 1h) or standing (7d), revocable,
  *                audited.
  *
- * Delivery is broker-only: the agent never sees the secret, it gets a grant
- * token and calls
- *
- *   http://127.0.0.1:<port>/api/keychain/broker/<grantId>/<path>
- *
- * (routes/keychain.ts) which injects the credential's header server-side and
- * proxies to the credential's host — constrained by the credential's
- * allowedMethods / allowedPathPrefixes, and with the secret scrubbed from any
- * text response that echoes it. A leaked grant token is scoped (one
- * credential, one session's purpose, method/path-limited, short-lived,
- * revocable, fully audited) where a leaked secret is forever — that
- * asymmetry is the whole design, same as qm's.
+ * Delivery is broker-only: the agent never sees the secret. It calls the
+ * keychain's call_credential tool (keychain-broker.ts), which runs inside
+ * this process, injects the credential's header and makes the request to
+ * the credential's host, constrained by its allowedMethods /
+ * allowedPathPrefixes, with the secret scrubbed from what comes back. The
+ * tool is bound to the calling run's session by the run-rpc token, so a
+ * grant only works in the session it was issued to: a grant id copied out
+ * of a transcript is not a credential anywhere else. A credential marked
+ * statusOnly returns just the HTTP status, for keys whose API might echo
+ * or encode the secret in a way scrubbing can't catch.
  *
  * Trust boundary: the opensession-keychain MCP server is interactive-only
  * (same bar as opensession-humans — never automation runs), so untrusted
@@ -42,22 +40,9 @@
  * agent supplies only metadata, and the session's own driver pastes the
  * secret into a card that posts straight to that HTTP path.
  *
- * Two limitations, stated rather than papered over:
- *
- *  1. The broker rides loopback, so grants work for runs on this box
- *     (worktrees, the shared checkout) but not inside remote sandboxes —
- *     those would need the dial-back channel, out of scope here.
- *  2. The grant id is a bearer token that lands in the requesting session's
- *     transcript, and transcripts are searchable across sessions
- *     (opensession-search). So a grant is scoped to a session by INTENT and
- *     by audit, not by cryptographic isolation: another session on this box
- *     that went looking could find and replay it inside its TTL. What bounds
- *     the damage is everything else — the credential's method/path ceiling,
- *     once-grants dying on first use, short TTLs, revocation, and an audit
- *     line per call recording the session a grant was issued to (so a replay
- *     from elsewhere is visible after the fact). Binding the broker to the
- *     calling run would need per-run identity on the loopback call, which the
- *     agent's shell does not have today.
+ * Stated limitation: the store is a 0600 file owned by the service user,
+ * which agent shells also run as on this box, so the file protects the
+ * secret from other Unix users, not from a local agent that goes looking.
  */
 
 import { stateDir } from "./paths";
@@ -108,6 +93,8 @@ export interface KeychainCredential {
   allowedMethods?: string[];
   /** Empty/undefined = all paths. */
   allowedPathPrefixes?: string[];
+  /** Calls return only the HTTP status, never headers or body. */
+  statusOnly?: boolean;
   secret: string;
   createdAt: string;
   updatedAt: string;
@@ -306,6 +293,7 @@ export interface AddCredentialInput {
   injection?: { header?: string; scheme?: string };
   allowedMethods?: string[];
   allowedPathPrefixes?: string[];
+  statusOnly?: boolean;
 }
 
 export type CredentialSpec = Omit<AddCredentialInput, "owner" | "secret">;
@@ -317,6 +305,7 @@ export interface NormalizedCredentialSpec {
   injection?: { header?: string; scheme?: string };
   allowedMethods?: string[];
   allowedPathPrefixes?: string[];
+  statusOnly?: boolean;
 }
 
 const HTTP_METHODS = new Set([
@@ -395,6 +384,7 @@ export function normalizeCredentialSpec(
     ...(injection && Object.keys(injection).length ? { injection } : {}),
     ...(methods.length ? { allowedMethods: methods } : {}),
     ...(prefixes.length ? { allowedPathPrefixes: prefixes } : {}),
+    ...(input.statusOnly === true ? { statusOnly: true } : {}),
   };
 }
 
@@ -617,12 +607,15 @@ export interface BrokerUse {
  */
 export function consumeGrantForBroker(
   grantId: string,
+  sessionId: string,
   method: string,
   path: string,
 ): BrokerUse | { error: string; status: number } {
   load();
   const gr = grants.get(grantId);
-  if (!gr) return { error: "unknown grant", status: 404 };
+  // A grant from another session is reported exactly like a missing one.
+  if (!gr || gr.sessionId !== sessionId)
+    return { error: "unknown grant", status: 404 };
   settleExpiry(gr);
   if (gr.status !== "active")
     return { error: `grant is ${gr.status}`, status: 403 };
@@ -653,6 +646,23 @@ export function consumeGrantForBroker(
   return { credential: cred, grant: gr };
 }
 
+/**
+ * The grant this session would use for a credential: its live standing grant
+ * if it has one (so a once grant is not spent by accident), else its newest
+ * live once grant.
+ */
+export function activeGrantFor(
+  sessionId: string,
+  credentialRef: string,
+): KeychainGrant | undefined {
+  const cred = findCredential(credentialRef);
+  if (!cred) return undefined;
+  const live = listGrants({ sessionId }).filter(
+    (gr) => gr.credentialId === cred.id && gr.status === "active",
+  );
+  return live.find((gr) => gr.mode === "standing") ?? live[0];
+}
+
 export function brokerHeaders(
   cred: KeychainCredential,
 ): Record<string, string> {
@@ -662,11 +672,22 @@ export function brokerHeaders(
   return { [header]: scheme ? `${scheme} ${cred.secret}` : cred.secret };
 }
 
-/** Scrub the secret from a text body the remote echoed back. */
+/** Scrub the secret from a text body the remote echoed back: verbatim, and
+ *  in its common encodings. Best effort; statusOnly is the guarantee. */
 export function scrubSecret(body: string, secret: string): string {
-  return secret && body.includes(secret)
-    ? body.split(secret).join("[redacted]")
-    : body;
+  if (!secret) return body;
+  const forms = new Set([
+    secret,
+    encodeURIComponent(secret),
+    JSON.stringify(secret).slice(1, -1),
+    Buffer.from(secret).toString("base64"),
+    Buffer.from(secret).toString("base64url"),
+  ]);
+  let out = body;
+  for (const form of forms)
+    if (form.length >= 4 && out.includes(form))
+      out = out.split(form).join("[redacted]");
+  return out;
 }
 
 // ── Asks (through the human-asks transport) ─────────────────────────────────
@@ -676,11 +697,6 @@ const APPROVE_STANDING = "Approve standing";
 const DECLINE = "Decline";
 
 const KEYCHAIN_ASK_DOMAIN = "keychain-ask";
-
-function brokerBaseUrl(): string {
-  const port = parseInt(process.env.PORT || "3850");
-  return `http://127.0.0.1:${port}/api/keychain/broker`;
-}
 
 /** The steer/tool text a session gets when its ask is approved. This is the
  *  agent's entire manual for the grant, so it names every constraint. */
@@ -700,15 +716,16 @@ export function grantInstructions(
     .join("; ");
   return (
     `${gr.owner} approved your keychain ask for **${credMeta.service}** ` +
-    `(${gr.mode === "once" ? "one single call" : `standing until ${gr.expiresAt}`}).\n` +
-    `Call the service through the broker — the secret itself is never exposed to you:\n\n` +
-    "```\n" +
-    `curl -sS -X GET '${brokerBaseUrl()}/${gr.id}/<path-on-${credMeta.host}>'\n` +
-    "```\n" +
-    `The broker injects the credential server-side and proxies to https://${credMeta.host}. ` +
+    `(${gr.mode === "once" ? "one single call" : `standing until ${gr.expiresAt}`}, grant ${gr.id}).\n` +
+    `Call the API with the call_credential tool: ` +
+    `call_credential({ credential: "${credMeta.service}", method, path }), where path is the path and query on https://${credMeta.host}. ` +
+    `The credential is injected server-side; you never see the secret, and the grant works only in this session. ` +
     (limits ? `Limits: ${limits}. ` : "") +
+    (credMeta.statusOnly
+      ? "This credential returns only the HTTP status, never the response body. "
+      : "") +
     (gr.mode === "once"
-      ? "The grant is SINGLE-USE — the first call consumes it, so make it the right one. "
+      ? "The grant is SINGLE-USE: the first call consumes it, so make it the right one. "
       : "") +
     `Stay within the approved purpose ("${gr.purpose}"); every call is audited.`
   );

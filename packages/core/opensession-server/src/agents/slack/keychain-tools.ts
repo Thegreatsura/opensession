@@ -3,8 +3,9 @@
  *
  * No tool handles secret values: list what exists, ask an owner
  * for a scoped grant, list this session's grants. Approved calls go through
- * the broker (routes/keychain.ts) with the credential injected server-side, so
- * the model never holds the secret and cannot leak one it never had.
+ * call_credential (keychain-broker.ts), which injects the credential
+ * server-side and is bound to this session, so the model never holds the
+ * secret and a grant id is useless outside the session it was issued to.
  * Mac requests instead resolve one Keychain item locally and return status only.
  *
  * Interactive runs ONLY — same boundary as opensession-humans. An ask is a DM
@@ -31,6 +32,7 @@ import {
   macKeychainRequestSchema,
   macKeychainRequests,
 } from "../../server/mac-keychain-requests";
+import { BROKER_METHODS, brokerCall } from "../../server/keychain-broker";
 import {
   cancelCredentialAsk,
   ensureKeychainLoaded,
@@ -217,6 +219,56 @@ export function createKeychainMcpServer(ctx: KeychainToolContext) {
       },
     ),
     tool(
+      "call_credential",
+      "Make one HTTPS API call with a credential this session holds a live grant for (see request_credential and list_grants). The credential is injected server-side; you never see it. The call goes to the credential's own host, within its method and path limits, and does not follow redirects. A once grant is spent by this call even if it fails. Returns the status, a few response headers and the text body (secret scrubbed, long bodies truncated, binary omitted), or only the status for a status-only credential. Stay within the purpose the owner approved; every call is audited.",
+      {
+        credential: z
+          .string()
+          .describe("Service slug (from list_credentials) or a credential id."),
+        method: z.enum(BROKER_METHODS),
+        path: z
+          .string()
+          .min(1)
+          .max(4000)
+          .describe(
+            "Path and optional query on the credential's host, e.g. '/v1/deployments?limit=5'.",
+          ),
+        headers: z
+          .record(z.string(), z.string().max(1000))
+          .optional()
+          .describe(
+            "Optional: accept, content-type, if-match, if-none-match, idempotency-key, user-agent. Others are dropped.",
+          ),
+        body: z
+          .string()
+          .max(256 * 1024)
+          .optional()
+          .describe("Request body for POST, PUT, PATCH or DELETE."),
+      },
+      async (
+        args: {
+          credential: string;
+          method: (typeof BROKER_METHODS)[number];
+          path: string;
+          headers?: Record<string, string>;
+          body?: string;
+        },
+        extra: any,
+      ) => {
+        const result = await brokerCall({
+          sessionId: ctx.sessionId,
+          credential: args.credential,
+          method: args.method,
+          path: args.path,
+          ...(args.headers ? { headers: args.headers } : {}),
+          ...(args.body !== undefined ? { body: args.body } : {}),
+          ...(extra?.signal ? { signal: extra.signal } : {}),
+        });
+        if ("error" in result) return text(`Couldn't call: ${result.error}.`);
+        return text(JSON.stringify(result));
+      },
+    ),
+    tool(
       "cancel_credential_ask",
       "Withdraw one of this session's pending keychain asks (ids from list_grants). The owner is told it no longer needs an answer, and their buttons stop approving anything. Use it when the access is no longer needed or the ask should be replaced by a different one.",
       {
@@ -279,6 +331,12 @@ export function createKeychainMcpServer(ctx: KeychainToolContext) {
           .describe(
             "Prefix before the secret in that header, e.g. 'Bearer' or 'Token'. Empty string for none.",
           ),
+        statusOnly: z
+          .boolean()
+          .optional()
+          .describe(
+            "Calls return only the HTTP status, never the response. For keys whose API could echo the secret.",
+          ),
       },
       async (
         args: {
@@ -289,6 +347,7 @@ export function createKeychainMcpServer(ctx: KeychainToolContext) {
           allowedPathPrefixes?: string[];
           header?: string;
           scheme?: string;
+          statusOnly?: boolean;
         },
         extra: any,
       ) => {
@@ -315,6 +374,7 @@ export function createKeychainMcpServer(ctx: KeychainToolContext) {
                 ...(args.allowedPathPrefixes
                   ? { allowedPathPrefixes: args.allowedPathPrefixes }
                   : {}),
+                ...(args.statusOnly ? { statusOnly: true } : {}),
                 ...(args.header !== undefined || args.scheme !== undefined
                   ? {
                       injection: {
