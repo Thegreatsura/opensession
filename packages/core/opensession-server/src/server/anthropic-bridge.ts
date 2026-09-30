@@ -85,6 +85,7 @@ import {
   resolveAccount,
   type ClaudeAccount,
 } from "./claude-accounts";
+import { cacheCreationUsage } from "./claude-cache-writes";
 import { CLAUDE_CODE_BIN } from "./runner-shared";
 import {
   bridgePort,
@@ -749,6 +750,10 @@ async function handleBridgeRequest(req: Request): Promise<Response> {
       output_tokens: 0,
       cache_read_input_tokens: 0,
       cache_creation_input_tokens: 0,
+      cache_creation: {
+        ephemeral_1h_input_tokens: 0,
+        ephemeral_5m_input_tokens: 0,
+      },
     };
     let sdkSessionId = isContinuation ? stored!.sdkSessionId : undefined;
 
@@ -862,6 +867,10 @@ async function handleBridgeRequest(req: Request): Promise<Response> {
           cache_read_input_tokens: rm.usage?.cache_read_input_tokens || 0,
           cache_creation_input_tokens:
             rm.usage?.cache_creation_input_tokens || 0,
+          // Always forward the TTL split: pi-ai prices 1-hour writes from it
+          // and treats a missing split as all 5-minute writes, while an
+          // unsplit SDK write is a 1-hour one (see claude-cache-writes).
+          cache_creation: cacheCreationUsage(rm.usage),
         };
         break;
       }

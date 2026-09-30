@@ -70,6 +70,12 @@ export {
 } from "./anthropic-bridge";
 import { markExhausted, type ClaudeAccount } from "./claude-accounts";
 import {
+  CACHE_WRITE_5M_FIELD,
+  CLAUDE_1H_CACHE_WRITE_INPUT_MULTIPLIER,
+  claudeCacheWriteSplit,
+  reportedFiveMinuteWrites,
+} from "./claude-cache-writes";
+import {
   coalesceCompleteToolResultContinuation,
   createEarlyStopTracker,
   noteAssistantMessage,
@@ -149,6 +155,8 @@ interface PiUsageShape {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Subset of `cacheWrite` written with the 1-hour TTL (pi-ai `Usage`). */
+  cacheWrite1h?: number;
   totalTokens: number;
   cost: {
     input: number;
@@ -688,19 +696,22 @@ function zeroUsage(): PiUsageShape {
   };
 }
 
-/** SDK result usage → pi Usage with cost from the model's cost table —
- *  pi-ai's calculateCost math (request-wide tiers included; the SDK reports
- *  no 1h-write split, so every cache write prices at the base write rate). */
+/** SDK usage → pi Usage with cost from the model's cost table, using pi-ai's
+ *  calculateCost math: request-wide tiers, 5-minute cache writes at the
+ *  `cacheWrite` rate and 1-hour writes at 2x base input. Writes without a
+ *  reported 5-minute split count as 1-hour writes (see claude-cache-writes). */
 export function usageFromSdkResult(
   model: PiCatalogModel,
-  sdkUsage: Record<string, number | undefined> | null | undefined,
+  sdkUsage: Readonly<Record<string, unknown>> | null | undefined,
 ): PiUsageShape {
-  const u = sdkUsage || {};
+  const u = (sdkUsage || {}) as Record<string, number | undefined>;
   const usage = zeroUsage();
   usage.input = u.input_tokens || 0;
   usage.output = u.output_tokens || 0;
   usage.cacheRead = u.cache_read_input_tokens || 0;
-  usage.cacheWrite = u.cache_creation_input_tokens || 0;
+  const writes = claudeCacheWriteSplit(sdkUsage);
+  usage.cacheWrite = writes.oneHour + writes.fiveMinute;
+  usage.cacheWrite1h = writes.oneHour;
   usage.totalTokens =
     usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
   const inputTokens = usage.input + usage.cacheRead + usage.cacheWrite;
@@ -723,7 +734,10 @@ export function usageFromSdkResult(
   usage.cost.input = (rates.input / 1_000_000) * usage.input;
   usage.cost.output = (rates.output / 1_000_000) * usage.output;
   usage.cost.cacheRead = (rates.cacheRead / 1_000_000) * usage.cacheRead;
-  usage.cost.cacheWrite = (rates.cacheWrite / 1_000_000) * usage.cacheWrite;
+  usage.cost.cacheWrite =
+    (rates.cacheWrite * writes.fiveMinute +
+      rates.input * CLAUDE_1H_CACHE_WRITE_INPUT_MULTIPLIER * writes.oneHour) /
+    1_000_000;
   usage.cost.total =
     usage.cost.input +
     usage.cost.output +
@@ -989,6 +1003,9 @@ export function recordSdkStepUsage(
     const value = usage[field];
     if (typeof value === "number") entry[field] = value;
   }
+  // message_delta usage has no split, so only overwrite when one is reported.
+  const fiveMinute = reportedFiveMinuteWrites(usage);
+  if (fiveMinute !== undefined) entry[CACHE_WRITE_5M_FIELD] = fiveMinute;
   step.set(id, entry);
 }
 
@@ -1000,6 +1017,10 @@ export function sumSdkStepUsage(
   for (const field of SDK_USAGE_FIELDS) total[field] = 0;
   for (const entry of step.values()) {
     for (const field of SDK_USAGE_FIELDS) total[field] += entry[field] ?? 0;
+    // Requests with no split add no 5-minute writes: they count as 1-hour.
+    if (entry[CACHE_WRITE_5M_FIELD] !== undefined)
+      total[CACHE_WRITE_5M_FIELD] =
+        (total[CACHE_WRITE_5M_FIELD] ?? 0) + entry[CACHE_WRITE_5M_FIELD];
   }
   return total;
 }

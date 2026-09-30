@@ -933,6 +933,38 @@ describe("buildPiAnthropicModels", () => {
 });
 
 describe("SdkStepUsage", () => {
+  test("keeps the reported TTL split across a message_delta and sums it across requests", () => {
+    const step = new Map();
+    recordSdkStepUsage(step, "msg_1", {
+      input_tokens: 2,
+      output_tokens: 1,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 1_000,
+      cache_creation: {
+        ephemeral_1h_input_tokens: 400,
+        ephemeral_5m_input_tokens: 600,
+      },
+    });
+    // message_delta usage carries the total but no split.
+    recordSdkStepUsage(step, "msg_1", {
+      output_tokens: 9,
+      cache_creation_input_tokens: 1_000,
+    });
+    // A request without a split contributes 1-hour writes only.
+    recordSdkStepUsage(step, "msg_2", { cache_creation_input_tokens: 500 });
+    const total = sumSdkStepUsage(step);
+    expect(total).toMatchObject({
+      cache_creation_input_tokens: 1_500,
+      cache_creation_5m_input_tokens: 600,
+    });
+    const usage = usageFromSdkResult(model, total);
+    expect(usage.cacheWrite).toBe(1_500);
+    expect(usage.cacheWrite1h).toBe(900);
+    expect(usage.cost.cacheWrite).toBeCloseTo(
+      (3.75 * 600 + 6 * 900) / 1_000_000,
+    );
+  });
+
   const request = {
     input_tokens: 56,
     output_tokens: 569,
@@ -1001,8 +1033,64 @@ describe("usageFromSdkResult", () => {
     expect(usage.cost.input).toBeCloseTo(3);
     expect(usage.cost.output).toBeCloseTo(30);
     expect(usage.cost.cacheRead).toBeCloseTo(0.9);
-    expect(usage.cost.cacheWrite).toBeCloseTo(15);
-    expect(usage.cost.total).toBeCloseTo(48.9);
+    // No TTL split reported: every write prices as a 1-hour write (2x input).
+    expect(usage.cacheWrite1h).toBe(4_000_000);
+    expect(usage.cost.cacheWrite).toBeCloseTo(24);
+    expect(usage.cost.total).toBeCloseTo(57.9);
+  });
+
+  const writes = (
+    ephemeral_1h_input_tokens: number,
+    ephemeral_5m_input_tokens: number,
+  ) => ({
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens:
+      ephemeral_1h_input_tokens + ephemeral_5m_input_tokens,
+    cache_creation: { ephemeral_1h_input_tokens, ephemeral_5m_input_tokens },
+  });
+
+  test("prices reported 1-hour writes at 2x base input", () => {
+    const usage = usageFromSdkResult(model, writes(1_000_000, 0));
+    expect(usage.cacheWrite).toBe(1_000_000);
+    expect(usage.cacheWrite1h).toBe(1_000_000);
+    expect(usage.cost.cacheWrite).toBeCloseTo(6);
+  });
+
+  test("prices reported 5-minute writes at the model's cacheWrite rate", () => {
+    const usage = usageFromSdkResult(model, writes(0, 1_000_000));
+    expect(usage.cacheWrite).toBe(1_000_000);
+    expect(usage.cacheWrite1h).toBe(0);
+    expect(usage.cost.cacheWrite).toBeCloseTo(3.75);
+  });
+
+  test("prices a mixed split per TTL", () => {
+    const usage = usageFromSdkResult(model, writes(1_000_000, 2_000_000));
+    expect(usage.cacheWrite).toBe(3_000_000);
+    expect(usage.cacheWrite1h).toBe(1_000_000);
+    expect(usage.cost.cacheWrite).toBeCloseTo(6 + 7.5);
+    expect(usage.cost.total).toBeCloseTo(13.5);
+  });
+
+  test("prices 1-hour writes from the matched tier's input rate", () => {
+    const tiered = {
+      ...model,
+      cost: {
+        ...(model as any).cost,
+        tiers: [
+          {
+            inputTokensAbove: 200_000,
+            input: 6,
+            output: 22.5,
+            cacheRead: 0.6,
+            cacheWrite: 7.5,
+          },
+        ],
+      },
+    } as unknown as PiCatalogModel;
+    const usage = usageFromSdkResult(tiered, writes(1_000_000, 0));
+    expect(usage.cost.cacheWrite).toBeCloseTo(12);
   });
 
   test("applies the highest matching request-wide pricing tier", () => {
