@@ -157,6 +157,11 @@ describe("portal warm script", () => {
       expect(existsSync(logPath)).toBe(false);
       // A finished warm-up is left alone on a rebuild...
       writeFileSync(logPath, "/a 200 0.1s\ndone\n");
+      // Newer than the app's process by construction. With the real mtime a
+      // second boundary between this write and the script's `date` makes the
+      // log look a second old next to a test process that is younger.
+      const ahead = new Date(Date.now() + 60_000);
+      utimesSync(logPath, ahead, ahead);
       expect(
         await run(
           portalWarmScript({ ...opts, port: server.port!, skipIfWarm: true }),
