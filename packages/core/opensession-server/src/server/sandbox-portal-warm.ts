@@ -11,8 +11,8 @@
  * (`warmRoutes`, the same list its prepared image uses). A route with a
  * dynamic segment can name any value there: the compile is per route, not
  * per record. After the Portal's relay connects, a detached script inside
- * the Sandbox requests the routes a few at a time, then every script and
- * stylesheet each page references. The Portal URL is not held back: a person who opens a
+ * the Sandbox requests the routes a few at a time, one at a time while memory
+ * is short, then every script and stylesheet each page references. The Portal URL is not held back: a person who opens a
  * page meanwhile shares the compile already in progress.
  */
 import { configuredServer } from "./config";
@@ -65,12 +65,26 @@ export function portalWarmScript(input: {
   waitSeconds?: number;
   /** Routes requested at once (default 3). */
   parallel?: number;
+  /** Start another route next to one still compiling only while at least
+   *  this share of memory is available (default 30). Each route a dev
+   *  server compiles at once adds its own peak: on a 16 GB Sandbox,
+   *  a large app's editor route next to a page ran the machine out of memory and
+   *  the kernel killed the dev server. Where /proc/meminfo is missing
+   *  (macOS) the limit is `parallel` alone. */
+  minAvailablePercent?: number;
+  /** Test seam for /proc/meminfo. */
+  meminfoPath?: string;
 }): string {
   const base = `http://127.0.0.1:${input.port}`;
   const headers = `-H ${shellQuoteWord(`Host: ${input.host}`)} -H 'X-Forwarded-Proto: https'`;
   const routes = input.routes.map(shellQuoteWord).join(" ");
   const log = shellQuoteWord(input.logPath);
   const lock = shellQuoteWord(`${input.logPath}.lock`);
+  const meminfo = shellQuoteWord(input.meminfoPath ?? "/proc/meminfo");
+  const minAvailable = Math.max(
+    0,
+    Math.min(90, Math.floor(input.minAvailablePercent ?? 30)),
+  );
   return [
     // Nothing to warm until the app listens: a relay rebuilt during a
     // relaunch comes up first. Leave the log untouched meanwhile.
@@ -102,8 +116,9 @@ export function portalWarmScript(input: {
     // A few routes at a time: a dev server compiles independent routes in
     // parallel, so the editor no longer queues behind the slowest page.
     // Lines are logged as routes finish, not in declaration order.
+    `mem_low() { [ -r ${meminfo} ] && awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} END{exit !(t > 0 && a * 100 < t * ${minAvailable})}' ${meminfo}; }`,
     `for route in ${routes}; do`,
-    `  while [ "$(jobs -rp | wc -l)" -ge ${Math.max(1, Math.floor(input.parallel ?? 3))} ]; do sleep 0.2; done`,
+    `  while [ "$(jobs -rp | wc -l)" -ge ${Math.max(1, Math.floor(input.parallel ?? 3))} ] || { [ "$(jobs -rp | wc -l)" -gt 0 ] && mem_low; }; do sleep 0.2; done`,
     `  (`,
     `    page=$(mktemp)`,
     `    result=$(curl -s -o "$page" -m 300 ${headers} -w '%{http_code} %{time_total}s' ${shellQuoteWord(base)}"$route")`,

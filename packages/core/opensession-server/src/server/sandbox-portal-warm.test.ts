@@ -109,18 +109,66 @@ describe("portal warm script", () => {
     });
     try {
       const logPath = join(scratch, "parallel.log");
+      const meminfoPath = join(scratch, "meminfo-plenty");
+      writeFileSync(
+        meminfoPath,
+        "MemTotal: 16000000 kB\nMemAvailable: 12000000 kB\n",
+      );
       const script = portalWarmScript({
         port: server.port!,
         host: "portal.example.test:21000",
         routes: ["/a", "/b", "/c", "/d", "/e"],
         logPath,
         parallel: 2,
+        meminfoPath,
       });
       expect(await Bun.spawn(["bash", "-c", script]).exited).toBe(0);
       expect(peak).toBe(2);
       const log = readFileSync(logPath, "utf8").trim().split("\n");
       expect(log).toHaveLength(6);
       expect(log.at(-1)).toBe("done");
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("compiles one route at a time while memory is short, and in parallel when it is not", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch() {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await Bun.sleep(150);
+        inFlight -= 1;
+        return new Response("ok");
+      },
+    });
+    const meminfoPath = join(scratch, "meminfo");
+    const warm = async (availableKb: number) => {
+      writeFileSync(
+        meminfoPath,
+        `MemTotal:       16000000 kB\nMemFree:          100000 kB\nMemAvailable:   ${availableKb} kB\n`,
+      );
+      peak = 0;
+      const script = portalWarmScript({
+        port: server.port!,
+        host: "portal.example.test:21000",
+        routes: ["/a", "/b", "/c", "/d"],
+        logPath: join(scratch, `memory-${availableKb}.log`),
+        parallel: 3,
+        meminfoPath,
+      });
+      expect(await Bun.spawn(["bash", "-c", script]).exited).toBe(0);
+      return peak;
+    };
+    try {
+      // 10% available: below the 30% floor, so never two at once.
+      expect(await warm(1_600_000)).toBe(1);
+      // 60% available: the route limit applies.
+      expect(await warm(9_600_000)).toBe(3);
     } finally {
       server.stop(true);
     }

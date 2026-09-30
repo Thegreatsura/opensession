@@ -17,6 +17,11 @@ import {
   restartPortalService,
   restartSandboxPortalService,
   normalizePortalPath,
+  PORTAL_LOG_MAX_LINES,
+  readHostPortalLog,
+  readSandboxPortalLog,
+  type PortalLogRead,
+  type PortalOomKill,
   setPortalPath,
   setSandboxPortalPath,
   startPortalService,
@@ -82,6 +87,44 @@ export interface PortalsMcpContext {
 
 function result(value: string) {
   return { content: [{ type: "text" as const, text: value }] };
+}
+
+/** Most of a log's bytes one answer carries; the tail wins. */
+const PORTAL_LOG_MAX_CHARS = 30_000;
+
+/** One sentence per out-of-memory kill, for list_portals and read_portal_log. */
+export function describeOomKills(kills: PortalOomKill[]): string {
+  if (!kills.length) return "";
+  const listed = kills
+    .map((kill) => `${kill.process} (pid ${kill.pid}, ${kill.rssMb} MB)`)
+    .join(", ");
+  return `Since the Sandbox booted, its kernel killed these processes for running out of memory: ${listed}.`;
+}
+
+export function formatPortalLog(
+  name: string,
+  read: PortalLogRead,
+  match?: string,
+): string {
+  const oom = describeOomKills(read.oomKills);
+  if (read.log === null)
+    return [`${name} has not written a log yet.`, oom]
+      .filter(Boolean)
+      .join("\n");
+  // Dev servers color their prefixes; the escapes only cost tokens here.
+  let log = read.log.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
+  if (log.length > PORTAL_LOG_MAX_CHARS)
+    log = `…${log.slice(-PORTAL_LOG_MAX_CHARS)}`;
+  const header = match
+    ? `${name} log, lines matching "${match}":`
+    : `${name} log (latest lines):`;
+  return [
+    oom,
+    header,
+    log.trim() ? log : match ? "(no matching lines)" : "(empty)",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 /**
@@ -521,7 +564,8 @@ export function createPortalsMcpServer(ctx: PortalsMcpContext) {
             return result(
               "No Portals are registered. Use start_portal for a live app or service.",
             );
-          const [status, warming, local] = await Promise.all([
+          const failed = portals.filter((portal) => portal.state === "failed");
+          const [status, warming, local, oom] = await Promise.all([
             portalStatus(ctx, dir, sandbox),
             sandbox
               ? sandboxPortalsWarming(
@@ -535,6 +579,18 @@ export function createPortalsMcpServer(ctx: PortalsMcpContext) {
             sandbox && ctx.shellOnHost?.()
               ? sandboxPortalLocalUrls(ctx.sessionId)
               : new Map<string, string>(),
+            // A dev server that stopped listening in a Sandbox is most often
+            // an out-of-memory kill; say so instead of a bare "failed".
+            sandbox && failed[0]
+              ? readSandboxPortalLog({
+                  sessionId: ctx.sessionId,
+                  sandbox,
+                  name: failed[0].name,
+                  lines: 1,
+                })
+                  .then((read) => describeOomKills(read.oomKills))
+                  .catch(() => "")
+              : Promise.resolve(""),
           ]);
           return result(
             portals
@@ -542,10 +598,61 @@ export function createPortalsMcpServer(ctx: PortalsMcpContext) {
                 const service = status.services.find(
                   (candidate) => candidate.key === portal.key,
                 );
-                return `${portal.name}\nstate: ${portal.state}\nport: ${portal.port}\nurl: ${service?.previewUrl ?? "not ready"}${portal.state === "awake" && local.has(portal.name) ? `\nlocal: ${local.get(portal.name)} (from this shell, no sign-in: use it for curl, scripts, and screenshots)` : ""}${portal.description ? `\ndescription: ${portal.description}` : ""}${warming.has(portal.name) ? "\nwarming: its first pages are still compiling, so opening one now can take a minute. Say so rather than calling it ready." : ""}${portal.state === "failed" && portal.lastError ? `\nerror: ${portal.lastError}` : ""}`;
+                return `${portal.name}\nstate: ${portal.state}\nport: ${portal.port}\nurl: ${service?.previewUrl ?? "not ready"}${portal.state === "awake" && local.has(portal.name) ? `\nlocal: ${local.get(portal.name)} (from this shell, no sign-in: use it for curl, scripts, and screenshots)` : ""}${portal.description ? `\ndescription: ${portal.description}` : ""}${warming.has(portal.name) ? "\nwarming: its first pages are still compiling, so opening one now can take a minute. Say so rather than calling it ready." : ""}${portal.state === "failed" && portal.lastError ? `\nerror: ${portal.lastError}` : ""}${portal.state === "failed" ? `${oom ? `\n${oom}` : ""}\nlog: read_portal_log shows its output.` : ""}`;
               })
               .join("\n\n"),
           );
+        },
+      ),
+      tool(
+        "read_portal_log",
+        `Read the latest output (stdout and stderr) of one of this session's Portals, including one running in a Sandbox your shell cannot reach. Use it when a Portal fails, stops listening, or answers 502/503. In a Sandbox it also reports processes the kernel killed for running out of memory. lines defaults to 120 (max ${PORTAL_LOG_MAX_LINES}); match keeps only lines containing that text, case-insensitive.`,
+        {
+          name: z.string(),
+          lines: z.number().int().min(1).max(PORTAL_LOG_MAX_LINES).optional(),
+          match: z.string().min(1).max(200).optional(),
+        },
+        async ({
+          name,
+          lines,
+          match,
+        }: {
+          name: string;
+          lines?: number;
+          match?: string;
+        }) => {
+          const dir = workspace(ctx);
+          if (dir instanceof Error) return result(dir.message);
+          try {
+            if (ctx.runner()?.runner)
+              return result(
+                "Runner Portal logs stay on the Runner. Read them there with the Runner tools.",
+              );
+            const sandbox = await ctx.sandbox();
+            if (!sandbox && ctx.hasSandbox())
+              return result(
+                `Could not read the Portal log: ${noSandboxReason(ctx)}`,
+              );
+            const read = sandbox
+              ? await readSandboxPortalLog({
+                  sessionId: ctx.sessionId,
+                  sandbox,
+                  name,
+                  lines,
+                  match,
+                })
+              : await readHostPortalLog({
+                  sessionId: ctx.sessionId,
+                  name,
+                  lines,
+                  match,
+                });
+            return result(formatPortalLog(name, read, match));
+          } catch (error) {
+            return result(
+              `Could not read the Portal log: ${(error as Error).message}`,
+            );
+          }
         },
       ),
       tool(

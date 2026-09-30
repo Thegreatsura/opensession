@@ -13,8 +13,9 @@ listening in the workspace.
 
 The agent has the same surface through `opensession-portals`:
 `start_declared_portal` for a declared Portal, `start_portal` for any command,
-`list_portals`, `stop_portal`, `restart_portal`, and `set_portal_path` for the
-route a Portal should open on. Open Session allocates the port, runs the
+`list_portals`, `stop_portal`, `restart_portal`, `read_portal_log` for a
+Portal's latest output (in a Sandbox, also the kernel's out-of-memory kills),
+and `set_portal_path` for the route a Portal should open on. Open Session allocates the port, runs the
 process under a session-scoped supervisor with `PORT` and `PORTAL_URL`, waits
 for it to listen, and returns the URL. A host Portal's environment is minimal:
 `PATH`, `HOME`, those two, and the same short-lived AWS credential pointer the

@@ -52,7 +52,7 @@ touches an in-process tool:
 | [`opensession-repos`](#opensession-repos) | 6 | interactive | Needs a session id. |
 | [`opensession-memory`](#opensession-memory) | 9 | interactive | Needs a session id. |
 | [`opensession-web`](#opensession-web) | 3 | interactive, goal wake | Needs a session id. |
-| [`opensession-portals`](#opensession-portals) | 8 | interactive | Needs a session id. |
+| [`opensession-portals`](#opensession-portals) | 9 | interactive | Needs a session id. |
 | [`opensession-desktop`](#opensession-desktop) | 8 | interactive | Needs a sandboxed session. |
 | [`opensession-walkthrough`](#opensession-walkthrough) | 2 | interactive | Needs a session id. |
 | [`opensession-slack`](#opensession-slack) | 1 | interactive | Needs a session id. |
@@ -74,7 +74,7 @@ touches an in-process tool:
 | [`opensession-github`](#opensession-github) | 4 | Slack loop | – |
 | [`opensession-goal-self`](#opensession-goal-self) | 6 | goal wake | Only on a session that carries a goalId. |
 
-33 servers, 158 tools.
+33 servers, 159 tools.
 
 ## opensession-sessions
 
@@ -742,6 +742,12 @@ Start a repository-declared Portal by its ID. Use this instead of copying its co
 `mcp__opensession-portals__list_portals` · input: none
 
 List this session's registered Portals and their readiness. Use this after starting a service before telling the user it is ready.
+
+### `read_portal_log`
+
+`mcp__opensession-portals__read_portal_log` · input: `name` (string, required), `lines` (integer), `match` (string)
+
+Read the latest output (stdout and stderr) of one of this session's Portals, including one running in a Sandbox your shell cannot reach. Use it when a Portal fails, stops listening, or answers 502/503. In a Sandbox it also reports processes the kernel killed for running out of memory. lines defaults to 120 (max 400); match keeps only lines containing that text, case-insensitive.
 
 ### `stop_portal`
 

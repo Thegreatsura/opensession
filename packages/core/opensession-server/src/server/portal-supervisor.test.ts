@@ -853,6 +853,44 @@ describe("session Portal supervisor", () => {
     expect((await listSandboxPortalServices(sandbox))[0]?.state).toBe("failed");
   });
 
+  test("an inconclusive Sandbox probe keeps an awake Portal awake", async () => {
+    const sandbox = sandboxFor(worktree, 18_709);
+    const exec = sandbox.exec.bind(sandbox);
+    let probe = { exitCode: 124, stdout: "", stderr: "" };
+    sandbox.exec = async (command, options) => {
+      if (command[0] === "kill") return { exitCode: 0, stdout: "", stderr: "" };
+      if (command[0] === "timeout") return probe;
+      return exec(command, options);
+    };
+    writeFileSync(
+      join(worktree, ".ports.conf"),
+      PREFIX({
+        name: "compiling",
+        key: "WEBAPP_PORT",
+        port: 18_709,
+        command: "dev-server",
+        state: "awake",
+        pid: 987_654_321,
+      }) + "\nWEBAPP_PORT=18709\n",
+    );
+    // A Sandbox too busy to run the probe in time.
+    expect((await listSandboxPortalServices(sandbox))[0]?.state).toBe("awake");
+    // The provider's command API failed; the probe never ran.
+    probe = {
+      exitCode: 1,
+      stdout: "",
+      stderr: "box API POST /sandboxes/bx_x/commands failed: HTTP 502",
+    };
+    expect((await listSandboxPortalServices(sandbox))[0]?.state).toBe("awake");
+    // Refused: the app is really gone.
+    probe = {
+      exitCode: 1,
+      stdout: "",
+      stderr: "bash: connect: Connection refused",
+    };
+    expect((await listSandboxPortalServices(sandbox))[0]?.state).toBe("failed");
+  });
+
   test("reaps Sandbox children even when their leader exited and they ignore TERM", async () => {
     const pid = 987_654_321;
     writeFileSync(

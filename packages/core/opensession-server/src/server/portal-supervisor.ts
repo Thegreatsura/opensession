@@ -377,6 +377,27 @@ async function pidAlive(pid?: number): Promise<boolean> {
   return (await proc.exited) === 0;
 }
 
+export type PortProbeState = "listening" | "closed" | "unknown";
+
+/**
+ * Read a `timeout N bash -c 'exec 3<>/dev/tcp/127.0.0.1/PORT'` result. Only a
+ * connection that opened is listening, and only a connection the Sandbox
+ * refused is closed. A probe that timed out (a thrashing Sandbox cannot start
+ * bash within the limit while its dev server compiles) or never ran (the
+ * provider's command API failed) says nothing about the app: calling that
+ * "no longer listening" made agents restart a dev server mid-compile.
+ */
+export function sandboxPortProbeState(result: {
+  exitCode: number;
+  stderr: string;
+}): PortProbeState {
+  if (result.exitCode === 0) return "listening";
+  if (result.exitCode === 124 || result.exitCode === 137) return "unknown";
+  const stderr = result.stderr.trim();
+  if (stderr && !/connect|refused|\/dev\/tcp/i.test(stderr)) return "unknown";
+  return "closed";
+}
+
 /**
  * The primitives a Portal registry needs. Host and Sandbox supervise the same
  * persisted state machine and differ only in how they read and write
@@ -392,6 +413,9 @@ type PortalOps = {
   readRegistry: () => Promise<PortalRecord[]>;
   writeRegistry: (records: PortalRecord[]) => Promise<void>;
   probePort: (port: number) => Promise<boolean>;
+  /** Like probePort, but "unknown" when the probe itself could not run: a
+   *  Sandbox too busy to start it in time, or a provider API error. */
+  probePortState?: (port: number) => Promise<PortProbeState>;
   pidAlive: (pid?: number) => Promise<boolean>;
   groupAlive: (pid: number) => Promise<boolean>;
   signalGroup: (pid: number, signal: "SIGTERM" | "SIGKILL") => Promise<void>;
@@ -530,17 +554,18 @@ function upsert(records: PortalRecord[], next: PortalRecord): PortalRecord[] {
   return copy;
 }
 
-/** " See <log>" plus the last lines of the log when it is readable here. */
-function portalLogHint(logPath: string | undefined): string {
+/** The last lines of the log when it is readable here (host Portals), else
+ *  where to read it: a Sandbox Portal's log is not on this machine. */
+async function portalLogHint(logPath: string | undefined): Promise<string> {
   if (!logPath) return "";
   let tail = "";
   try {
-    if (existsSync(logPath)) {
-      const lines = readFileSync(logPath, "utf8").trimEnd().split("\n");
-      tail = lines.slice(-12).join("\n").slice(-1_500);
-    }
+    const lines = (await readFile(logPath, "utf8")).trimEnd().split("\n");
+    tail = lines.slice(-12).join("\n").slice(-1_500);
   } catch {}
-  return tail ? ` Log (${logPath}):\n${tail}` : ` Log: ${logPath}`;
+  return tail
+    ? ` Log (${logPath}):\n${tail}`
+    : " Read its output with read_portal_log.";
 }
 
 async function listPortals(ops: PortalOps): Promise<PortalRecord[]> {
@@ -555,7 +580,15 @@ async function listPortals(ops: PortalOps): Promise<PortalRecord[]> {
       // never adopt an unrelated listener after that process has exited.
       if (record.state === "failed" && !(await portalProcessAlive(ops, record)))
         return record;
-      const listening = await ops.probePort(record.port);
+      const probe = ops.probePortState
+        ? await ops.probePortState(record.port)
+        : (await ops.probePort(record.port))
+          ? "listening"
+          : "closed";
+      // Not knowing is not a crash: keep what the record says until a probe
+      // can actually tell.
+      if (probe === "unknown") return record;
+      const listening = probe === "listening";
       const alive = await portalProcessAlive(ops, record);
       // "pid alive but not listening" only means starting while the Portal has
       // never been awake. Once it WAS awake, losing the listener is a crash even
@@ -725,7 +758,7 @@ async function startPortal(
       (readiness === "exited"
         ? "The Portal process exited before it started listening."
         : `Nothing listened on port ${port} within ${Math.round(readyTimeoutMs / 1_000)} seconds.`) +
-      portalLogHint(input.logPath);
+      (await portalLogHint(input.logPath));
     // A timed-out process may still be compiling and can leave watchers or
     // lock files behind. Never lose its PID by overwriting the failed record
     // before the complete process group has been terminated.
@@ -1744,6 +1777,21 @@ async function writeSandboxPortalRegistry(
     );
 }
 
+async function probeSandboxPort(
+  sandbox: Sandbox,
+  port: number,
+): Promise<PortProbeState> {
+  return sandboxPortProbeState(
+    await sandbox.exec([
+      "timeout",
+      "5",
+      "bash",
+      "-c",
+      `exec 3<>/dev/tcp/127.0.0.1/${port}`,
+    ]),
+  );
+}
+
 function sandboxPortalOps(sandbox: Sandbox, sessionId?: string): PortalOps {
   return {
     readRegistry: async () =>
@@ -1753,15 +1801,8 @@ function sandboxPortalOps(sandbox: Sandbox, sessionId?: string): PortalOps {
       if (sessionId) cacheSandboxPortalRecords(sessionId, sandbox.id, records);
     },
     probePort: async (port) =>
-      (
-        await sandbox.exec([
-          "timeout",
-          "2",
-          "bash",
-          "-c",
-          `exec 3<>/dev/tcp/127.0.0.1/${port}`,
-        ])
-      ).exitCode === 0,
+      (await probeSandboxPort(sandbox, port)) === "listening",
+    probePortState: (port) => probeSandboxPort(sandbox, port),
     pidAlive: async (pid) => {
       if (!pid || pid < 2) return false;
       return (await sandbox.exec(["kill", "-0", String(pid)])).exitCode === 0;
@@ -1935,6 +1976,128 @@ export async function sandboxPortalsWarming(
   } catch {
     return new Set();
   }
+}
+
+/** The most lines read_portal_log returns in one call. */
+export const PORTAL_LOG_MAX_LINES = 400;
+/** How far back a `match` filter searches. */
+const PORTAL_LOG_SEARCH_LINES = 20_000;
+
+export type PortalLogRead = {
+  /** The tail of the Portal's stdout and stderr; null when it never wrote one. */
+  log: string | null;
+  /** Processes the Sandbox kernel killed for running out of memory since it booted. */
+  oomKills: PortalOomKill[];
+};
+
+export type PortalOomKill = { pid: number; process: string; rssMb: number };
+
+/** The kernel cuts a process name to 15 characters, so `next-server (v1)`
+ *  arrives as `next-server (v1`. */
+function balancedProcessName(name: string): string {
+  const open = name.split("(").length - name.split(")").length;
+  return open > 0 ? name + ")".repeat(open) : name;
+}
+
+/** `Out of memory: Killed process 29315 (next-server (v1) total-vm:…kB,
+ *  anon-rss:5810076kB, …` lines from the kernel log, global or cgroup. */
+export function parseOomKills(kernelLog: string): PortalOomKill[] {
+  const kills: PortalOomKill[] = [];
+  for (const match of kernelLog.matchAll(
+    /Killed process (\d+) \((.+?)\) total-vm:\d+kB, anon-rss:(\d+)kB/g,
+  ))
+    kills.push({
+      pid: Number(match[1]),
+      process: balancedProcessName(match[2]!),
+      rssMb: Math.round(Number(match[3]) / 1024),
+    });
+  return kills;
+}
+
+function portalLogTailScript(
+  path: string,
+  lines: number,
+  match: string | undefined,
+): string {
+  const file = shellQuoteWord(path);
+  return match
+    ? `tail -n ${PORTAL_LOG_SEARCH_LINES} ${file} | grep -i -F -- ${shellQuoteWord(match)} | tail -n ${lines}`
+    : `tail -n ${lines} ${file}`;
+}
+
+function portalLogLines(lines: number | undefined): number {
+  return Math.max(1, Math.min(PORTAL_LOG_MAX_LINES, Math.floor(lines ?? 120)));
+}
+
+/** A host Portal's output, read without blocking the caller's thread. */
+export async function readHostPortalLog(input: {
+  sessionId: string;
+  name: string;
+  lines?: number;
+  match?: string;
+}): Promise<PortalLogRead> {
+  const path = join(
+    sessionScratchRoot(),
+    input.sessionId,
+    "portals",
+    `${validateName(input.name)}.log`,
+  );
+  let text: string;
+  try {
+    text = await readFile(path, "utf8");
+  } catch {
+    return { log: null, oomKills: [] };
+  }
+  let lines = text.trimEnd().split("\n");
+  if (input.match) {
+    const needle = input.match.toLowerCase();
+    lines = lines
+      .slice(-PORTAL_LOG_SEARCH_LINES)
+      .filter((line) => line.toLowerCase().includes(needle));
+  }
+  return {
+    log: lines.slice(-portalLogLines(input.lines)).join("\n"),
+    oomKills: [],
+  };
+}
+
+const PORTAL_LOG_MISSING = "__OPENSESSION_PORTAL_LOG_MISSING__";
+const PORTAL_LOG_KERNEL = "__OPENSESSION_PORTAL_LOG_KERNEL__";
+
+/**
+ * A Sandbox Portal's output, plus the kernel's out-of-memory kills. The
+ * agent's shell usually runs on the host while the Portal runs in the
+ * Sandbox, so without this a dev server that died left nothing to read.
+ */
+export async function readSandboxPortalLog(input: {
+  sessionId: string;
+  sandbox: Sandbox;
+  name: string;
+  lines?: number;
+  match?: string;
+}): Promise<PortalLogRead> {
+  const path = `${join(
+    sandboxSessionScratchDir(input.sessionId, input.sandbox.provider),
+    "portals",
+  )}/${validateName(input.name)}.log`;
+  const script = [
+    `if [ -f ${shellQuoteWord(path)} ]; then ${portalLogTailScript(path, portalLogLines(input.lines), input.match)}; else echo ${PORTAL_LOG_MISSING}; fi`,
+    `echo ${PORTAL_LOG_KERNEL}`,
+    // Unprivileged dmesg is often refused; the Sandbox user has sudo on Box.
+    `{ sudo -n dmesg 2>/dev/null || dmesg 2>/dev/null; } | grep -F 'Killed process' | tail -n 5`,
+    "true",
+  ].join("\n");
+  const result = await input.sandbox.exec(["bash", "-c", script], {
+    timeoutMs: 30_000,
+  });
+  if (result.exitCode !== 0 && !result.stdout.includes(PORTAL_LOG_KERNEL))
+    throw new Error(
+      result.stderr.trim() || "Could not read the Portal log in the Sandbox.",
+    );
+  const [logPart = "", kernelPart = ""] =
+    result.stdout.split(PORTAL_LOG_KERNEL);
+  const log = logPart.trim() === PORTAL_LOG_MISSING ? null : logPart.trimEnd();
+  return { log, oomKills: parseOomKills(kernelPart) };
 }
 
 /** The registry as persisted, without the liveness probe. A sandbox that just
