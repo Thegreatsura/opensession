@@ -67,6 +67,11 @@ import { getWorkspace } from "./workspaces";
 import type { NativeSessionFile } from "./types";
 import { stateDir } from "./paths";
 import { linkThreadInIndex, createSlackPostScanner } from "./slack-links";
+import {
+  createIncidentDeclarationRecorder,
+  incidentsInEvent,
+} from "./incident-declarations";
+import { createIncidentMcpServer } from "./incident-mcp";
 import { createPapercutsMcpServer } from "../agents/slack/papercuts-tools";
 import { createReportMcpServer } from "../agents/slack/report-tools";
 import { createDatabasesMcpServer } from "../agents/slack/databases-tools";
@@ -307,6 +312,13 @@ export interface Automation {
    * human-only. See selfImproveMcpServers below.
    */
   selfImprove?: boolean;
+  /**
+   * Incident responder (human-set only). Runs, and thread-reply resumes, get
+   * `opensession-incident`: a read of the Open Session session that declared
+   * the incident their triggering event names, and nothing else. See
+   * incident-mcp.ts.
+   */
+  readIncidentDeclarer?: boolean;
   /**
    * If set, this automation is poll-triggered off a Grafana Loki signal by the
    * generic grafana-poller agent (one run per fresh failure). See GrafanaPollConfig.
@@ -838,6 +850,7 @@ const AUTOMATION_FIELDS: Record<string, AutomationFieldValidator> = {
   owner: (v) => sanitizeOwner(v),
   workspaceId: (v) => sanitizeAutomationWorkspace(v),
   selfImprove: (v) => v === true || undefined,
+  readIncidentDeclarer: (v) => v === true || undefined,
   workflows: (v) => v === true || undefined,
   workflowSessions: (v) => v === true || undefined,
   workflowSessionRepos: (v) => sanitizeMcpList(v),
@@ -1080,6 +1093,7 @@ export async function updateAutomation(
       | "owner"
       | "workspaceId"
       | "selfImprove"
+      | "readIncidentDeclarer"
       | "workflows"
       | "claudeCliEnv"
       | "codexCliEnv"
@@ -1289,7 +1303,11 @@ export function automationWorkflowSessionPolicy(
 }
 
 export async function automationRunMcpForSession(
-  session: { automation?: string; worktreeDir?: string | null },
+  session: {
+    automation?: string;
+    worktreeDir?: string | null;
+    automationEvent?: string;
+  },
   sessionId: string,
 ): Promise<Record<string, unknown> | undefined> {
   if (!session.automation) return undefined;
@@ -1297,7 +1315,10 @@ export async function automationRunMcpForSession(
     (x) => x.name === session.automation,
   );
   if (!a) return undefined;
-  const servers = automationBaselineMcpServers(a, sessionId);
+  const servers: Record<string, unknown> = {
+    ...automationBaselineMcpServers(a, sessionId),
+    ...incidentDeclarerMcp(a, session.automationEvent),
+  };
   if (a.workflows) {
     const cwd = session.worktreeDir || getRepo(a.repo).repo;
     servers["opensession-workflows"] = createWorkflowsMcpServer({
@@ -1325,6 +1346,19 @@ export async function automationRunMcpForSession(
  * is held to the automation bar: append-only, nothing sensitive readable, no
  * control surface — the admin/sessions siblings must never join this set.
  */
+/** opensession-incident for an opted-in automation, scoped to the incidents
+ *  its run's triggering event names; nothing otherwise. */
+function incidentDeclarerMcp(
+  a: Pick<Automation, "readIncidentDeclarer">,
+  eventContext: string | undefined,
+): Record<string, unknown> {
+  if (!a.readIncidentDeclarer) return {};
+  const incidents = incidentsInEvent(eventContext);
+  return incidents.length
+    ? { "opensession-incident": createIncidentMcpServer({ incidents }) }
+    : {};
+}
+
 function automationRunInProcessMcp(
   a: Automation,
   sessionId: string,
@@ -1335,10 +1369,13 @@ function automationRunInProcessMcp(
     cwd: string;
     /** Live view of the run's model — a mid-run fallback swaps it (papercuts defaults). */
     model: () => string | undefined;
+    /** The run's triggering event payload (scopes opensession-incident). */
+    eventContext?: string;
   },
 ): Record<string, unknown> {
   return {
     ...automationBaselineMcpServers(a, sessionId),
+    ...incidentDeclarerMcp(a, ctx.eventContext),
     ...(papercutsEnabledForRepo(ctx.repoId)
       ? {
           "opensession-papercuts": createPapercutsMcpServer({
@@ -1381,7 +1418,12 @@ function automationRunInProcessMcp(
  * resumed run then proceeds without in-process tools, as before).
  */
 export async function automationResumeMcpForSession(
-  session: { automation?: string; worktreeDir?: string | null; model?: string },
+  session: {
+    automation?: string;
+    worktreeDir?: string | null;
+    model?: string;
+    automationEvent?: string;
+  },
   sessionId: string,
 ): Promise<Record<string, unknown> | undefined> {
   if (!session.automation) return undefined;
@@ -1394,6 +1436,7 @@ export async function automationResumeMcpForSession(
     repoId: repo.id,
     cwd: session.worktreeDir || repo.repo,
     model: () => session.model,
+    eventContext: session.automationEvent,
   });
 }
 
@@ -2129,6 +2172,7 @@ export async function runAutomation(
     // after a restart-reattach are captured too.
     const slackThreads: Array<{ channel: string; threadTs: string }> = [];
     const slackPostScan = createSlackPostScanner();
+    const recordIncidentDeclarations = createIncidentDeclarationRecorder(bksId);
     const linkSlackThread = (
       engineSessionId: string,
       channel?: string,
@@ -2234,6 +2278,7 @@ export async function runAutomation(
       repoId: repo.id,
       cwd,
       model: () => effectiveModel,
+      eventContext: options?.eventContext,
     });
     registerSessionMcpServers(bksId, inProcessMcp);
 
@@ -2359,6 +2404,7 @@ export async function runAutomation(
       // Capture Slack posts (slack MCP calls + SLACK_MSG_POSTED markers from
       // bash-side posters like dispute_report_pdf.sh) — see
       // createSlackPostScanner in slack-links.ts.
+      recordIncidentDeclarations(event);
       const slackPost = slackPostScan(event);
       if (slackPost) {
         linkSlackThread(engineSessionId, slackPost.channel, slackPost.threadTs);

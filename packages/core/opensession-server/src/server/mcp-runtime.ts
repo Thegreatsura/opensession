@@ -299,6 +299,12 @@ export async function createMcpRuntime(opts: {
   callTimeoutMs?: number;
   /** Tool calls to Open Session's own in-process and proxied servers. */
   ownServerCallTimeoutMs?: number;
+  /** Adjust a call's arguments just before they are sent (e.g. stamping the
+   *  session link onto an incident.io incident_create). */
+  rewriteArgs?: (
+    tool: { server: string; name: string },
+    args: Record<string, unknown>,
+  ) => Record<string, unknown>;
 }): Promise<McpRuntime> {
   const timeoutMs = opts.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
   const ownTimeoutMs =
@@ -575,7 +581,9 @@ export async function createMcpRuntime(opts: {
         const result = (await conn.client.callTool(
           {
             name: tool.name,
-            arguments: args,
+            arguments: opts.rewriteArgs
+              ? opts.rewriteArgs({ server: tool.server, name: tool.name }, args)
+              : args,
             _meta: { opensessionToolCallId: options.toolCallId },
           },
           undefined,

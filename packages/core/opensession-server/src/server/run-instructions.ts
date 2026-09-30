@@ -294,6 +294,11 @@ export function buildRunInstructions(input: {
  * engine session carries it, and re-sending it each turn keeps it in reach
  * after compaction or a resume miss.
  */
+/** This instance's web link for a session. */
+export function sessionLink(osSessionId: string): string {
+  return `${UI_BASE}/session/${osSessionId}`;
+}
+
 export function buildSessionContext(input: {
   osSessionId?: string;
   cwd?: string;
