@@ -260,6 +260,14 @@ export interface CreateAskInput {
   mode: "block" | "async";
   deliver: DeliverWhen;
   domain?: { kind: string; ref: string };
+  /**
+   * Only the person asked may answer. Such an ask never goes up as a card in
+   * the session: anyone watching the session, or another agent through
+   * session control, could answer that card. It reaches the person through
+   * their Slack DM or an identity-checked surface of the owning domain (the
+   * keychain's Settings list).
+   */
+  personOnly?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -458,7 +466,7 @@ export function registerAsk(input: CreateAskInput): HumanAsk {
     options: input.options?.length ? input.options : undefined,
     mode: input.mode,
     deliver: input.deliver,
-    uiFirst: shouldAskInUiFirst(input) || undefined,
+    uiFirst: (!input.personOnly && shouldAskInUiFirst(input)) || undefined,
     domain: input.domain,
     state: "scheduled",
     createdAt: new Date().toISOString(),
@@ -942,11 +950,57 @@ export function resolveAskFromUI(
   return true;
 }
 
+/**
+ * Answer an ask on behalf of the person it was addressed to, from a surface
+ * that has already verified that identity (the caller's job). Unlike
+ * resolveAskFromUI it also accepts an ask whose Slack delivery has not gone
+ * out (Slack unavailable, or the person has no Slack account), so that
+ * surface is a real alternative to the DM.
+ */
+export function resolveAskAsPerson(
+  askId: string,
+  answer: string,
+  answeredBy: string,
+): boolean {
+  const a = asks.get(askId);
+  if (!a || isTerminal(a)) return false;
+  audit({
+    context: "human_ask",
+    action: "reply_accepted",
+    ask_id: a.id,
+    session_id: a.sessionId,
+    person: a.person.name,
+    via: "ui",
+    answered_by: answeredBy,
+  });
+  resolveAsk(a, answer, answeredBy, "ui");
+  markSlackAskAnswered(a, answer, answeredBy, productName());
+  return true;
+}
+
 /** Resolve an option-button / modal answer by ask id (from the Slack interactivity
- *  endpoint). Returns true if it was an outstanding ask. */
-export function resolveByOption(askId: string, label: string): boolean {
+ *  endpoint). Returns true if it was an outstanding ask. `slackUser` is the
+ *  clicking user's Slack id: when given, only the person the ask was sent to
+ *  can answer it, even if the message was forwarded or shared. */
+export function resolveByOption(
+  askId: string,
+  label: string,
+  slackUser?: string,
+): boolean {
   const a = asks.get(askId);
   if (!a || a.state !== "delivered") return false;
+  if (slackUser !== undefined && slackUser !== a.person.slackId) {
+    audit({
+      context: "human_ask",
+      action: "reply_rejected",
+      ask_id: a.id,
+      session_id: a.sessionId,
+      person: a.person.name,
+      via: "button",
+      reason: "not the person asked",
+    });
+    return false;
+  }
   audit({
     context: "human_ask",
     action: "reply_accepted",

@@ -174,6 +174,8 @@ export interface KeychainCredentialDto {
   allowedPathPrefixes?: string[];
   createdAt: string;
   updatedAt: string;
+  /** The signed-in person owns it, so they can delete it. */
+  mine?: boolean;
 }
 
 export interface KeychainGrantDto {
@@ -199,6 +201,8 @@ export interface KeychainAskDto {
   requestedMode: "once" | "standing";
   status: "pending" | "approved" | "declined" | "expired" | "cancelled";
   createdAt: string;
+  /** Pending, and the signed-in person owns the credential. */
+  canAnswer?: boolean;
 }
 
 export async function fetchKeychain(): Promise<{
@@ -226,6 +230,16 @@ export async function deleteKeychainCredential(
 ): Promise<{ ok: true }> {
   return request(`/keychain/credentials/${encodeURIComponent(id)}`, {
     method: "DELETE",
+  });
+}
+
+export async function answerKeychainAsk(
+  id: string,
+  decision: "once" | "standing" | "decline",
+): Promise<{ ok: true }> {
+  return request(`/keychain/asks/${encodeURIComponent(id)}/answer`, {
+    method: "POST",
+    body: { decision },
   });
 }
 

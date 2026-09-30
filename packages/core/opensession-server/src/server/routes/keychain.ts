@@ -23,12 +23,12 @@ import type { RouteContext } from "./context";
 import { requestUser } from "./context";
 import {
   addCredentialAsync,
+  answerKeychainAsk,
   brokerHeaders,
   consumeGrantForBroker,
   deleteCredential,
-  listCredentials,
-  listGrants,
-  listKeychainAsks,
+  ensureKeychainLoaded,
+  keychainViewFor,
   revokeGrant,
   scrubSecret,
 } from "../keychain";
@@ -50,6 +50,17 @@ const STRIPPED_REQUEST_HEADERS = new Set([
   "content-length",
   "accept-encoding",
 ]);
+
+/** The signed-in person making this request, or "" when the identity is only
+ *  claimed (no web auth) or belongs to an automation. */
+export function verifiedPerson(ctx: RouteContext): string {
+  const identity = ctx.authUser as
+    | { login?: string; automation?: boolean }
+    | null
+    | undefined;
+  if (!identity?.login || identity.automation === true) return "";
+  return requestUser(ctx);
+}
 
 const BROKER_TIMEOUT_MS = 30_000;
 /** Bound what we buffer to scrub. Larger bodies stream through unscrubbed —
@@ -159,11 +170,43 @@ export async function handleKeychainRoutes(
 
   // ── Management ────────────────────────────────────────────────────────────
   if (path === "/api/keychain" && req.method === "GET") {
-    return Response.json({
-      credentials: listCredentials(),
-      grants: listGrants(),
-      asks: listKeychainAsks(),
+    await ensureKeychainLoaded();
+    return Response.json(keychainViewFor(verifiedPerson(ctx)), {
+      headers: { "Cache-Control": "no-store" },
     });
+  }
+
+  // The owner answers a teammate's request from Settings. A verified sign-in
+  // is required: a claimed name (the no-auth picker) or an automation token
+  // must never approve access to someone's credential.
+  const askMatch = path.match(/^\/api\/keychain\/asks\/([^/]+)\/answer$/);
+  if (askMatch && req.method === "POST") {
+    const by = verifiedPerson(ctx);
+    if (!by)
+      return Response.json(
+        { error: "Sign in with GitHub to answer a keychain request" },
+        { status: 401 },
+      );
+    const body = await req.json().catch(() => null);
+    const decision = body?.decision;
+    if (
+      decision !== "once" &&
+      decision !== "standing" &&
+      decision !== "decline"
+    )
+      return Response.json(
+        { error: 'expected { decision: "once" | "standing" | "decline" }' },
+        { status: 400 },
+      );
+    await ensureKeychainLoaded();
+    const result = answerKeychainAsk(
+      decodeURIComponent(askMatch[1]!),
+      decision,
+      by,
+    );
+    return "error" in result
+      ? Response.json(result, { status: 403 })
+      : Response.json(result);
   }
 
   if (path === "/api/keychain/credentials" && req.method === "POST") {
