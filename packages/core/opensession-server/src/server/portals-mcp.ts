@@ -13,6 +13,7 @@ import {
 import {
   listPortalServices,
   listSandboxPortalServices,
+  pendingSandboxPortalNames,
   sandboxPortalsWarming,
   restartPortalService,
   restartSandboxPortalService,
@@ -560,9 +561,21 @@ export function createPortalsMcpServer(ctx: PortalsMcpContext) {
           const portals = sandbox
             ? await listSandboxPortalServices(sandbox)
             : await listPortalServices(dir);
+          const preparing = sandbox
+            ? pendingSandboxPortalNames(sandbox.id).filter(
+                (name) => !portals.some((portal) => portal.name === name),
+              )
+            : [];
+          const preparingText = preparing
+            .map(
+              (name) =>
+                `${name}\nstate: starting\nurl: not ready\nnote: the Sandbox is still getting ready to run it. Do not start it again.`,
+            )
+            .join("\n\n");
           if (!portals.length)
             return result(
-              "No Portals are registered. Use start_portal for a live app or service.",
+              preparingText ||
+                "No Portals are registered. Use start_portal for a live app or service.",
             );
           const failed = portals.filter((portal) => portal.state === "failed");
           const [status, warming, local, oom] = await Promise.all([
@@ -600,6 +613,7 @@ export function createPortalsMcpServer(ctx: PortalsMcpContext) {
                 );
                 return `${portal.name}\nstate: ${portal.state}\nport: ${portal.port}\nurl: ${service?.previewUrl ?? "not ready"}${portal.state === "awake" && local.has(portal.name) ? `\nlocal: ${local.get(portal.name)} (from this shell, no sign-in: use it for curl, scripts, and screenshots)` : ""}${portal.description ? `\ndescription: ${portal.description}` : ""}${warming.has(portal.name) ? "\nwarming: its first pages are still compiling, so opening one now can take a minute. Say so rather than calling it ready." : ""}${portal.state === "failed" && portal.lastError ? `\nerror: ${portal.lastError}` : ""}${portal.state === "failed" ? `${oom ? `\n${oom}` : ""}\nlog: read_portal_log shows its output.` : ""}`;
               })
+              .concat(preparingText ? [preparingText] : [])
               .join("\n\n"),
           );
         },

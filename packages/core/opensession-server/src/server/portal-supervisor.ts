@@ -2166,6 +2166,17 @@ export function sandboxPortalOperationPending(
   return sandboxPortalOperations().has(`${sandboxId}:${name}`);
 }
 
+/** The Sandbox Portals with a start, restart, or wake-restore running now.
+ *  A start waits for the Sandbox's disk before it writes a registry record,
+ *  and list_portals must not answer "no Portals" meanwhile: an agent then
+ *  starts the same Portal a second time. */
+export function pendingSandboxPortalNames(sandboxId: string): string[] {
+  const prefix = `${sandboxId}:`;
+  return [...sandboxPortalOperations().keys()]
+    .filter((key) => key.startsWith(prefix))
+    .map((key) => key.slice(prefix.length));
+}
+
 function withSandboxPortalOperation(
   input: Pick<SandboxPortalStartInput, "sandbox" | "name">,
   operation: () => Promise<PortalRecord>,

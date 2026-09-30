@@ -241,3 +241,45 @@ describe("read_portal_log tool", () => {
     expect(text).toContain("[NEXT] fatal error: deadlock");
   });
 });
+
+describe("list_portals while a Sandbox Portal start is pending", () => {
+  test("reports the start instead of no Portals", async () => {
+    const { sandbox } = await fakeSandbox(null, "");
+    const operations = ((
+      globalThis as typeof globalThis & {
+        __opensessionSandboxPortalOperations?: Map<string, Promise<unknown>>;
+      }
+    ).__opensessionSandboxPortalOperations ??= new Map());
+    operations.set(`${sandbox.id}:web`, new Promise(() => {}));
+    try {
+      const server = createPortalsMcpServer({
+        sessionId: "session-a",
+        worktreeDir: () => "/tmp",
+        verifyEditorFixture: async () => {
+          throw new Error("unused");
+        },
+        setDefaultPath: async () => ({}),
+        sandbox: async () => sandbox,
+        hasSandbox: () => true,
+        runner: () => undefined,
+      });
+      const runtime = await createMcpRuntime({
+        mcpServers: [],
+        deniedToolIds: new Set(),
+        inProcessMcp: { "opensession-portals": server },
+      });
+      runtimes.push(runtime);
+      const response = (await runtime.callExact(
+        "opensession-portals_list_portals",
+        {},
+        { toolCallId: "list-pending" },
+      )) as { content: Array<{ text: string }> };
+      const text = response.content.map((part) => part.text).join("\n");
+      expect(text).toContain("web\nstate: starting");
+      expect(text).toContain("Do not start it again.");
+      expect(text).not.toContain("No Portals are registered");
+    } finally {
+      operations.delete(`${sandbox.id}:web`);
+    }
+  });
+});
