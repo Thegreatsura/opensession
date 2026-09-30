@@ -96,6 +96,31 @@ const runRpc = await import("./run-rpc");
 const kc = await import("./keychain");
 const { createKeychainMcpServer } =
   await import("../agents/slack/keychain-tools");
+const { handleKeychainRoutes } = await import("./routes/keychain");
+
+function route(
+  path: string,
+  authUser: { login: string; name: string; automation?: boolean } | null,
+  body?: unknown,
+) {
+  const url = new URL(path, "https://os.example.test");
+  return handleKeychainRoutes({
+    path: url.pathname,
+    url,
+    publicPrefix: "",
+    authUser,
+    req: new Request(
+      url,
+      body === undefined
+        ? {}
+        : {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          },
+    ),
+  }) as Promise<Response>;
+}
 
 const SESSION = "os-test-session";
 
@@ -374,7 +399,10 @@ describe("a request_credential call that timed out on the client", () => {
 });
 
 describe("an ask to the owner who is driving the session", () => {
-  test("goes up as a card in the session first, not as a Slack DM", async () => {
+  test("never goes up as a session card: only the owner can answer it", async () => {
+    // Anyone watching the session, or another agent through session control,
+    // could answer a card, so a teammate prompting in the owner's session
+    // could approve their own request.
     const server = createKeychainMcpServer({ sessionId: DRIVEN, user: "Alex" });
     const [clientTransport, serverTransport] =
       InMemoryTransport.createLinkedPair();
@@ -389,23 +417,145 @@ describe("an ask to the owner who is driving the session", () => {
         purpose: "read the latest invoice",
       },
     });
-    for (let i = 0; i < 100 && !cards.length; i++) await Bun.sleep(5);
+    for (let i = 0; i < 100 && !kc.listKeychainAsks().length; i++)
+      await Bun.sleep(5);
     const ask = kc.listKeychainAsks({ sessionId: DRIVEN })[0]!;
-    const transport = humanAsks.getAsk(ask.humanAskId!)!;
-    expect(transport.uiFirst).toBe(true);
-    // The delivery effect runs the UI-first path: a card, no DM.
+    expect(humanAsks.getAsk(ask.humanAskId!)?.uiFirst).toBeUndefined();
     await deliver(ask.humanAskId!);
-    for (let i = 0; i < 100 && !cards.length; i++) await Bun.sleep(5);
-    expect(cards).toHaveLength(1);
-    expect(cards[0]!.sessionId).toBe(DRIVEN);
-    expect(slackPosts).toHaveLength(0);
+    await Bun.sleep(10);
+    expect(cards).toHaveLength(0);
+    expect(slackPosts).toHaveLength(1);
 
-    cards[0]!.answer({ q: "Approve once" });
+    // A button click from anyone but the person asked is refused.
+    expect(
+      humanAsks.resolveByOption(ask.humanAskId!, "Approve standing", "UBOB"),
+    ).toBe(false);
+    expect(kc.listGrants()).toHaveLength(0);
+
+    expect(
+      humanAsks.resolveByOption(ask.humanAskId!, "Approve once", "UALEX0001"),
+    ).toBe(true);
     const answer = textOf(await call);
     const grant = kc.listGrants({ sessionId: DRIVEN })[0]!;
     expect(grant.mode).toBe("once");
     expect(answer).toContain(grant.id);
-    expect(slackPosts).toHaveLength(0);
+  });
+});
+
+describe("the owner answering from Settings", () => {
+  test("only the owner can answer, and it works before any DM goes out", async () => {
+    const client = await connect();
+    const call = client.callTool({
+      name: "request_credential",
+      arguments: { credential: "acme-prod", purpose: "read the invoices" },
+    });
+    for (let i = 0; i < 100 && !kc.listKeychainAsks().length; i++)
+      await Bun.sleep(5);
+    const ask = pendingAsk();
+    // Not delivered: no Slack, or the owner has no Slack account.
+    expect(humanAsks.getAsk(ask.humanAskId!)?.state).toBe("scheduled");
+
+    expect(kc.answerKeychainAsk(ask.id, "standing", "Bob")).toEqual({
+      error: "Only the credential's owner can answer this request",
+    });
+    expect(kc.answerKeychainAsk(ask.id, "standing", "")).toHaveProperty(
+      "error",
+    );
+    expect(kc.listGrants()).toHaveLength(0);
+
+    expect(kc.answerKeychainAsk(ask.id, "standing", "alex")).toEqual({
+      ok: true,
+      status: "approved",
+    });
+    const grant = kc.listGrants({ sessionId: SESSION })[0]!;
+    expect(grant.mode).toBe("standing");
+    expect(textOf(await call)).toContain(grant.id);
+    // Settled: a second answer, or the delayed DM, changes nothing.
+    expect(kc.answerKeychainAsk(ask.id, "decline", "Alex")).toHaveProperty(
+      "error",
+    );
+    expect(await humanAsks.deliverAsk(ask.humanAskId!)).toBe(false);
+  });
+
+  test("a decline mints nothing and tells the session", async () => {
+    const client = await connect();
+    const call = client.callTool({
+      name: "request_credential",
+      arguments: { credential: "acme-prod", purpose: "read the invoices" },
+    });
+    for (let i = 0; i < 100 && !kc.listKeychainAsks().length; i++)
+      await Bun.sleep(5);
+    const ask = pendingAsk();
+    expect(kc.answerKeychainAsk(ask.id, "decline", "Alex")).toEqual({
+      ok: true,
+      status: "declined",
+    });
+    expect(textOf(await call)).toContain("declined");
+    expect(kc.listGrants()).toHaveLength(0);
+  });
+});
+
+describe("the keychain routes", () => {
+  test("answering needs the owner's own verified sign-in", async () => {
+    const client = await connect();
+    const call = client.callTool({
+      name: "request_credential",
+      arguments: { credential: "acme-prod", purpose: "read the invoices" },
+    });
+    for (let i = 0; i < 100 && !kc.listKeychainAsks().length; i++)
+      await Bun.sleep(5);
+    const ask = pendingAsk();
+    const path = `/api/keychain/asks/${ask.id}/answer`;
+    const alex = { login: "alex-gh", name: "Alex Example" };
+    const body = { decision: "standing", user: "Alex" };
+
+    // Signed out (a claimed name only) or an automation token: refused.
+    expect((await route(path, null, body)).status).toBe(401);
+    expect(
+      (await route(path, { ...alex, automation: true }, body)).status,
+    ).toBe(401);
+    expect(
+      (await route(path, { login: "bob-gh", name: "Bob Example" }, body))
+        .status,
+    ).toBe(403);
+    expect((await route(path, alex, { decision: "maybe" })).status).toBe(400);
+    expect(kc.listGrants()).toHaveLength(0);
+
+    // Everyone sees what exists; only the people involved see the request.
+    const bob = await (
+      await route("/api/keychain", { login: "bob-gh", name: "Bob Example" })
+    ).json();
+    expect(bob.credentials).toHaveLength(1);
+    expect(bob.asks).toHaveLength(0);
+    const mine = await (await route("/api/keychain", alex)).json();
+    expect(mine.asks[0].canAnswer).toBe(true);
+
+    expect((await route(path, alex, body)).status).toBe(200);
+    expect(textOf(await call)).toContain(kc.listGrants()[0]!.id);
+  });
+});
+
+describe("what each person sees of the keychain", () => {
+  test("grant tokens only reach the owner and the requester", () => {
+    const cred = kc.findCredential("acme-prod")!;
+    const grant = kc.__mintGrantForTest({
+      credentialId: cred.id,
+      sessionId: SESSION,
+      requestedBy: "Sam",
+      mode: "standing",
+    });
+    const owner = kc.keychainViewFor("Alex");
+    expect(owner.credentials[0]!.mine).toBe(true);
+    expect(owner.grants.map((g) => g.id)).toEqual([grant.id]);
+    expect(kc.keychainViewFor("Sam").grants.map((g) => g.id)).toEqual([
+      grant.id,
+    ]);
+    const bystander = kc.keychainViewFor("Bob");
+    expect(bystander.credentials).toHaveLength(1);
+    expect(bystander.credentials[0]!.mine).toBe(false);
+    expect(bystander.grants).toHaveLength(0);
+    expect(kc.keychainViewFor("").grants).toHaveLength(0);
+    expect(JSON.stringify(bystander)).not.toContain("sk-test-secret");
   });
 });
 

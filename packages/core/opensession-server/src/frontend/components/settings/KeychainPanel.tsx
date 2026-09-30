@@ -7,6 +7,7 @@ import {
 } from "react";
 import {
   addKeychainCredential,
+  answerKeychainAsk,
   deleteKeychainCredential,
   fetchKeychain,
   revokeKeychainGrant,
@@ -74,9 +75,9 @@ export function KeychainSection() {
   );
   const hint = (
     <SettingsHint>
-      A session can borrow a credential with your approval. The secret is
-      injected server-side, so the agent never sees it, and every grant is
-      scoped to one session and expires.
+      Any teammate's session can ask to borrow a credential. Its owner approves
+      or declines here or in Slack. The secret is injected server-side, so the
+      agent never sees it, and every grant expires.
     </SettingsHint>
   );
 
@@ -95,7 +96,16 @@ export function KeychainSection() {
 
   const byId = new Map(data.credentials.map((c) => [c.id, c]));
   const activeGrants = data.grants.filter((g) => g.status === "active");
-  const pendingAsks = data.asks.filter((a) => a.status === "pending");
+  const pending = data.asks.filter((a) => a.status === "pending");
+  const toAnswer = pending.filter((a) => a.canAnswer);
+  const waiting = pending.filter((a) => !a.canAnswer);
+  const answer = (
+    id: string,
+    decision: Parameters<typeof answerKeychainAsk>[1],
+  ) =>
+    answerKeychainAsk(id, decision)
+      .then(reload)
+      .catch((e) => setError(e.message));
 
   return (
     <>
@@ -147,17 +157,19 @@ export function KeychainSection() {
                 .filter(Boolean)
                 .join(" · ")}
               control={
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() =>
-                    deleteKeychainCredential(c.id)
-                      .then(reload)
-                      .catch((e) => setError(e.message))
-                  }
-                >
-                  Delete
-                </Button>
+                c.mine ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      deleteKeychainCredential(c.id)
+                        .then(reload)
+                        .catch((e) => setError(e.message))
+                    }
+                  >
+                    Delete
+                  </Button>
+                ) : null
               }
             />
           ))}
@@ -165,23 +177,67 @@ export function KeychainSection() {
       )}
       {hint}
 
-      {pendingAsks.length > 0 && (
+      {/* Teammates asking to borrow one of your credentials. Only the
+			    owner can answer, here or in the Slack DM; never as a card in
+			    the asking session, where anyone watching could click it. */}
+      {toAnswer.length > 0 && (
         <>
-          <SettingsGroupLabel>Awaiting your answer</SettingsGroupLabel>
+          <SettingsGroupLabel>Requests for your credentials</SettingsGroupLabel>
           <SettingCard>
-            {pendingAsks.map((a) => (
+            {toAnswer.map((a) => (
               <SettingRow
                 key={a.id}
-                title={`${byId.get(a.credentialId)?.service ?? a.credentialId} · ${a.requestedBy}`}
+                title={`${a.requestedBy} wants ${byId.get(a.credentialId)?.service ?? a.credentialId}`}
+                desc={`Asked for ${a.requestedMode === "once" ? "one call" : "7 days"} · ${a.purpose}`}
+                controlClassName="flex flex-wrap justify-end gap-1"
+                control={
+                  <>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => answer(a.id, "decline")}
+                    >
+                      Decline
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => answer(a.id, "standing")}
+                    >
+                      Allow 7 days
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      onClick={() => answer(a.id, "once")}
+                    >
+                      Allow once
+                    </Button>
+                  </>
+                }
+              />
+            ))}
+          </SettingCard>
+          <SettingsHint>
+            Allow once covers a single API call. Either way the session never
+            sees the secret, and you can revoke a grant below.
+          </SettingsHint>
+        </>
+      )}
+
+      {waiting.length > 0 && (
+        <>
+          <SettingsGroupLabel>Your pending requests</SettingsGroupLabel>
+          <SettingCard>
+            {waiting.map((a) => (
+              <SettingRow
+                key={a.id}
+                title={`${byId.get(a.credentialId)?.service ?? a.credentialId} · waiting on ${a.owner}`}
                 desc={`${a.requestedMode} · ${a.purpose}`}
                 control={null}
               />
             ))}
           </SettingCard>
-          <SettingsHint>
-            Answer these where they were asked: the Slack DM, or the card in the
-            session.
-          </SettingsHint>
         </>
       )}
 

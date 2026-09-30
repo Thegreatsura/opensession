@@ -328,7 +328,9 @@ export async function dispatchSlackInteractive(payload: any): Promise<void> {
     if (haOpt?.[1]) {
       const askId = haOpt[1];
       const label = action.value;
-      setImmediate(() => resolveHumanAsk(askId, label));
+      setImmediate(() =>
+        resolveHumanAsk(askId, label, String(payload.user?.id ?? "")),
+      );
       return;
     }
 
@@ -501,7 +503,9 @@ Please address this feedback:
       const answer: string =
         payload.view?.state?.values?.answer_block?.answer_input?.value || "";
       if (answer.trim())
-        setImmediate(() => resolveHumanAsk(askId, answer.trim()));
+        setImmediate(() =>
+          resolveHumanAsk(askId, answer.trim(), String(payload.user?.id ?? "")),
+        );
       return;
     }
 

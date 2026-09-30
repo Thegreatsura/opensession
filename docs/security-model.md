@@ -156,6 +156,27 @@ runs was tried and reverted: it blanked Stripe reads for no security gain. The
 money movers were unreachable either way, and Stripe enforces the restricted
 key's write ceiling.)
 
+## Keychain credentials
+
+A teammate registers a credential (host, header, optional method and path
+ceiling) over the signed-in HTTP route; it is stored 0600 on the server and no
+API or tool returns it. Any interactive session may ask to borrow any
+credential for a stated purpose. Only the owner answers: in their Slack DM,
+where a button counts only when the clicking Slack user is the one the ask was
+sent to, or in Settings, which requires the owner's verified GitHub sign-in
+(a claimed name or an automation token is refused). A keychain ask is never
+posed as a card in the asking session, because anyone watching that session,
+or another agent through session control, could answer a card.
+
+Approval mints a grant for the asking session: once (one call, one hour) or
+standing (seven days), revocable by the owner or requester. The grant id is
+the broker's bearer token, so the keychain listing shows grants and asks only
+to their owner and requester. The broker injects the secret, refuses
+redirects, and scrubs the literal secret from text responses. The grant id
+still lands in the asking session's transcript, so the method and path
+ceiling, short lifetimes, revocation, and the per-call audit line are what
+bound a replayed token.
+
 ## Mac Keychain requests
 
 The interactive-only `opensession-keychain` server can request one macOS Keychain

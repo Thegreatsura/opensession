@@ -10,9 +10,12 @@
  *   credential — owned by a PERSON (identity roster name). The secret lives
  *                here 0600 and is never returned by any API or tool.
  *   ask        — a session's request to borrow one: purpose + once/standing.
- *                Delivered to the owner through human-asks (Slack DM with
- *                Approve once / Approve standing / Decline buttons, UI-first
- *                card when the owner is driving a session). 24h TTL.
+ *                Any teammate's session may ask for any credential. It is
+ *                delivered to the owner through human-asks (Slack DM with
+ *                Approve once / Approve standing / Decline buttons) and
+ *                listed for them in Settings → Account, where they can
+ *                answer it too. Only the owner can answer: never as a card
+ *                in the session, which anyone watching could click.
  *   grant      — the approval: scoped to the REQUESTING SESSION only,
  *                once (single broker call, 1h) or standing (7d), revocable,
  *                audited.
@@ -68,6 +71,7 @@ import {
   getAsk,
   registerAsk,
   registerAskDomainHandler,
+  resolveAskAsPerson,
   type HumanAsk,
 } from "./human-asks";
 
@@ -822,6 +826,8 @@ export function requestCredential(
     mode: "block",
     deliver: "now",
     domain: { kind: KEYCHAIN_ASK_DOMAIN, ref: record.id },
+    // The requester may be driving the very session a card would appear in.
+    personOnly: true,
   });
 
   record.humanAskId = transport.id;
@@ -879,6 +885,65 @@ export function listKeychainAsks(opts?: {
   return [...keychainAsks.values()]
     .filter((a) => !opts?.sessionId || a.sessionId === opts.sessionId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export type OwnerDecision = "once" | "standing" | "decline";
+
+/**
+ * The owner answers an ask from Settings. `by` must be an identity the caller
+ * has verified (a signed-in person, never a claimed name or an automation).
+ * Goes through the same human-asks resolution as a Slack button, so the grant
+ * is minted, the session is told, and the DM is marked answered exactly once.
+ */
+export function answerKeychainAsk(
+  askId: string,
+  decision: OwnerDecision,
+  by: string,
+): { ok: true; status: KeychainAskRecord["status"] } | { error: string } {
+  load();
+  const record = keychainAsks.get(askId);
+  if (!record || record.status !== "pending" || !record.humanAskId)
+    return { error: "That request is no longer waiting for an answer" };
+  if (!by || !sameOwner(record.owner, by))
+    return { error: "Only the credential's owner can answer this request" };
+  const label =
+    decision === "once"
+      ? APPROVE_ONCE
+      : decision === "standing"
+        ? APPROVE_STANDING
+        : DECLINE;
+  if (!resolveAskAsPerson(record.humanAskId, label, ownerName(by)))
+    return { error: "That request is no longer waiting for an answer" };
+  return { ok: true, status: keychainAsks.get(askId)?.status ?? "pending" };
+}
+
+/**
+ * What one person may see of the keychain. Every credential's metadata, so a
+ * teammate knows what exists to ask for. Grants and asks only where they are
+ * the owner or the requester: a grant id is the broker's bearer token, so
+ * listing everyone's would let any member replay any grant.
+ */
+export function keychainViewFor(user: string): {
+  credentials: Array<KeychainCredentialMeta & { mine: boolean }>;
+  grants: KeychainGrant[];
+  asks: Array<KeychainAskRecord & { canAnswer: boolean }>;
+} {
+  load();
+  const involved = (owner: string, requestedBy: string) =>
+    !!user && (sameOwner(owner, user) || sameOwner(requestedBy, user));
+  return {
+    credentials: listCredentials().map((c) => ({
+      ...c,
+      mine: !!user && sameOwner(c.owner, user),
+    })),
+    grants: listGrants().filter((gr) => involved(gr.owner, gr.requestedBy)),
+    asks: listKeychainAsks()
+      .filter((a) => involved(a.owner, a.requestedBy))
+      .map((a) => ({
+        ...a,
+        canAnswer: a.status === "pending" && sameOwner(a.owner, user),
+      })),
+  };
 }
 
 /** Parse the owner's answer (button label or free text). Fail closed: only an
