@@ -1607,7 +1607,7 @@ export function SessionViewer({
           setPreviewStatus,
           portalTarget,
           openPortal: openPortalInPreferredPlacement,
-          startDeclaredPortal,
+          portalLaunch: previewController.portalLaunch,
           workflowRuns,
           workflowAction,
           subagents,
