@@ -536,6 +536,7 @@ export async function automationSessionMcp(
     worktreeDir?: string | null;
     automationDescendantPolicy?: unknown;
     plainDiscussionId?: string | null;
+    automationEvent?: string;
   },
   sessionId: string,
   opts: { humanPrompter?: string } = {},

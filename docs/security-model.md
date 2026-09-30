@@ -576,6 +576,17 @@ set:
   and `AUTOMATION_DENIED_TOOLS` policy.
 - The scoped `opensession-sessions`/`opensession-self` pair is mounted only when
   a human enables `automation.selfImprove`.
+- `opensession-incident` is mounted only when a human enables
+  `automation.readIncidentDeclarer`, and only when the run's triggering event
+  names an incident.io incident (`incident_id` or `reference`). Its one tool
+  reads the Open Session session that declared THAT incident: title, link,
+  server-computed evidence and its latest assistant messages. It refuses any
+  other incident. The incident-to-session link is the server's own record of
+  which session's `incident_create` succeeded (`incident-declarations.ts`,
+  scanned from the run's tool stream), never the incident summary, so editing
+  the summary cannot point a responder at another session. Separately, every
+  run's `incident_create` gets the declaring session's link appended to its
+  summary before it is sent.
 - `opensession-sessions` in its `humanResume` shape is mounted on a turn a
   person sends to an automation-owned session (a thread reply or a message in
   the web UI; `resolveSessionRunInputs` reports it as the
