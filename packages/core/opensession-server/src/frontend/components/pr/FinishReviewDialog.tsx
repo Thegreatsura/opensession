@@ -69,6 +69,18 @@ export function FinishReviewDialog({
         widthClassName="max-w-[30rem]"
         className="bottom-[max(1rem,env(safe-area-inset-bottom))] left-auto right-4 top-auto translate-x-0 translate-y-0 origin-bottom-right phone:left-1/2 phone:right-auto phone:-translate-x-1/2 phone:origin-bottom"
         initialFocus={summaryRef}
+        // ⌘/Ctrl+Enter submits from anywhere in the dialog, the summary
+        // included, matching the other review comment fields.
+        onKeyDown={(e) => {
+          if (
+            e.key !== "Enter" ||
+            !(e.metaKey || e.ctrlKey) ||
+            e.nativeEvent.isComposing
+          )
+            return;
+          e.preventDefault();
+          if (!submitting) onSubmit(summary);
+        }}
       >
         <Modal.Header
           title="Finish review"
