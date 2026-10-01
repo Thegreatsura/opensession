@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   readySandboxProviders,
   sandboxProviderLabel,
+  sandboxProviderNote,
 } from "./ready-sandbox-providers";
 
 describe("readySandboxProviders", () => {
@@ -39,5 +40,13 @@ describe("sandboxProviderLabel", () => {
     expect(sandboxProviderLabel("box")).toBe("Boat");
     expect(sandboxProviderLabel("daytona")).toBe("Daytona");
     expect(sandboxProviderLabel("orb")).toBe("orb");
+  });
+});
+
+describe("sandboxProviderNote", () => {
+  test("says whether the machine is this server, a Mac, or Linux", () => {
+    expect(sandboxProviderNote("")).toBe("A worktree on this server.");
+    expect(sandboxProviderNote("usecomputer")).toStartWith("Attached Mac");
+    expect(sandboxProviderNote("box")).toStartWith("Attached Linux");
   });
 });

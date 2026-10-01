@@ -60,6 +60,10 @@ import { getSendKeyPref, onSendKeyChanged } from "../lib/send-key-pref";
 import { effectiveSendKey, MOD_ENTER_GLYPH } from "../lib/send-key";
 import { NO_REPO } from "../lib/session-repo";
 import {
+  sandboxProviderLabel,
+  sandboxProviderNote,
+} from "../lib/ready-sandbox-providers";
+import {
   getSessionCheckoutPrefs,
   onSessionCheckoutPrefChanged,
   resolveSessionCheckoutPref,
@@ -537,7 +541,7 @@ export function NewSession({
   }, []);
   // A project can be set to always start in a Sandbox (Workspace >
   // Sandboxes > Projects). Follow it whenever the project changes until the
-  // person picks for themselves; the choice stays visible in "Run in".
+  // person picks for themselves; the choice stays visible in "Machine".
   const repoSandboxDefault = sandboxStatus?.defaults?.repos?.[repo];
   useEffect(() => {
     if (sandboxSelectionTouched.current || !sandboxStatus) return;
@@ -563,24 +567,22 @@ export function NewSession({
     : (sandboxStatus?.providers || [])
         .filter((p) => p.configured && p.certified)
         .map((p) => p.id);
-  // The provider "Sandbox" means here: the workspace default when it is
-  // ready, else the first ready connection.
-  const workspaceSandbox = (() => {
-    const preferred = sandboxStatus?.defaults?.effective;
-    if (
-      preferred &&
-      preferred !== "none" &&
-      readySandboxProviders.includes(preferred)
-    )
-      return preferred;
-    return readySandboxProviders[0] ?? "";
-  })();
-  const sandboxAvailable = workspaceSandbox !== "";
+  const sandboxAvailable = readySandboxProviders.length > 0;
   const selectedSandboxAvailable =
     !sandboxProvider || readySandboxProviders.includes(sandboxProvider);
   const showSandboxPicker =
     !!sandboxStatus && (sandboxAvailable || !!sandboxProvider);
-  const sandboxLabel = (id: string) => (id === "" ? "This machine" : "Sandbox");
+  const sandboxLabel = (id: string) =>
+    id === "" ? "This machine" : sandboxProviderLabel(id);
+  // The configured personal or workspace default, marked in the menu.
+  const workspaceDefault = sandboxStatus?.defaults?.effective;
+  // This machine, every ready provider by name, and a selected provider that
+  // is no longer ready (a project default), so the choice stays visible.
+  const sandboxChoices = [
+    "",
+    ...readySandboxProviders,
+    ...(sandboxProvider && !selectedSandboxAvailable ? [sandboxProvider] : []),
+  ];
   // The repo's first declared Portal, offered to start with the session.
   const repoPortal =
     mode === "code" ? repos.find((option) => option.id === repo)?.portal : null;
@@ -1775,7 +1777,7 @@ export function NewSession({
                       <Menu.SubmenuTrigger className="justify-between gap-3">
                         <span className="flex min-w-0 items-center gap-2">
                           <IconBox className="shrink-0 text-dim" size={20} />
-                          <span className="truncate">Run in</span>
+                          <span className="truncate">Machine</span>
                         </span>
                         <span className="flex flex-none items-center gap-1 text-dim">
                           {sandboxLabel(sandboxProvider)}
@@ -1789,21 +1791,15 @@ export function NewSession({
                         </span>
                       </Menu.SubmenuTrigger>
                       <Menu.Popup className="max-w-[min(340px,calc(100vw-1rem))]">
-                        {[
-                          {
-                            id: "",
-                            note: "Runs on this server, in a worktree.",
-                          },
-                          {
-                            id:
-                              sandboxProvider && !selectedSandboxAvailable
-                                ? sandboxProvider
-                                : workspaceSandbox,
-                            note: selectedSandboxAvailable
-                              ? "Its own machine that sleeps between turns and wakes with files and Portals intact."
-                              : "Unavailable. Choose This machine or connect a provider in Workspace > Sandboxes.",
-                          },
-                        ].map((opt) => {
+                        {sandboxChoices.map((id) => {
+                          const available =
+                            id === "" || readySandboxProviders.includes(id);
+                          const opt = {
+                            id,
+                            note: available
+                              ? sandboxProviderNote(id)
+                              : "Unavailable. Choose This machine or connect it in Workspace > Sandboxes.",
+                          };
                           const selected = sandboxProvider === opt.id;
                           return (
                             <Menu.Item
@@ -1819,7 +1815,16 @@ export function NewSession({
                                 className="mt-0.5 text-dim"
                               />
                               <span className="flex min-w-0 flex-col gap-0.5">
-                                <span>{sandboxLabel(opt.id)}</span>
+                                <span>
+                                  {sandboxLabel(opt.id)}
+                                  {opt.id !== "" &&
+                                    opt.id === workspaceDefault && (
+                                      <span className="text-faint">
+                                        {" "}
+                                        · default
+                                      </span>
+                                    )}
+                                </span>
                                 {opt.note && (
                                   <span className="whitespace-normal text-supporting leading-snug text-faint">
                                     {opt.note}

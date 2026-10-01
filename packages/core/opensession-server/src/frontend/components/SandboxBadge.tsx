@@ -11,6 +11,7 @@ import {
 import { IconBox, IconConnections } from "./icons";
 import { errorMessage } from "../lib/error-message";
 import { ApiError } from "../lib/api/request";
+import { sandboxProviderLabel } from "../lib/ready-sandbox-providers";
 
 type SandboxRef = {
   provider: string;
@@ -242,11 +243,11 @@ export function SandboxBadge({
       <Popover.Trigger
         className="flex h-8 flex-none items-center gap-1.5 rounded-md border border-line bg-surface px-2 text-meta font-medium text-dim outline-none transition-[color,background-color,border-color,scale] hover:border-line-strong hover:text-fg focus-visible:border-line-strong active:scale-[0.96]"
         data-testid="sandbox-badge"
-        aria-label={`Sandbox · ${lifecycleLabel[lifecycle]}`}
+        aria-label={`${sandboxProviderLabel(sandbox.provider)} Sandbox · ${lifecycleLabel[lifecycle]}`}
       >
         <span className={cn("size-2 rounded-full", dot)} aria-hidden="true" />
         <IconBox size={20} className="text-faint" />
-        <span>Sandbox</span>
+        <span>{sandboxProviderLabel(sandbox.provider)}</span>
       </Popover.Trigger>
       <Popover.Popup
         side="bottom"
@@ -261,7 +262,7 @@ export function SandboxBadge({
             <span className="ml-auto font-medium text-faint">Runtime</span>
           </div>
           <div className="mt-1 text-meta text-dim">
-            Its own machine · sleeps between turns
+            Attached Sandbox · sleeps between turns
           </div>
           {status?.cwd ? (
             <div

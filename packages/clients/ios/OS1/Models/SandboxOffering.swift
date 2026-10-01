@@ -63,6 +63,8 @@ enum SandboxOffering {
         case "daytona": "Daytona"
         case "e2b": "E2B"
         case "box": "Boat"
+        case "tart": "Mac VM"
+        case "usecomputer": "use.computer"
         case "modal": "Modal"
         case "lambda-microvm": "AWS Lambda MicroVM"
         default: id
