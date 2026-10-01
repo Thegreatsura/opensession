@@ -123,6 +123,9 @@ export function WorkspaceContextMenu({
     });
   }
 
+  // One sidebar-membership action, never two that contradict each other: a
+  // hidden row offers Restore, a row that is already yours (started by you or
+  // claimed) offers Hide, and a row that is only passing through offers Keep.
   const rowClaimed = sessions.some((session) => isClaimed(session));
   const rowNaturallyInSidebar = sessions.some(
     (session) =>
@@ -130,14 +133,6 @@ export function WorkspaceContextMenu({
       !session.automation &&
       ownedBy(session, currentUser),
   );
-  if (sessions.length > 0 && (!rowNaturallyInSidebar || rowClaimed)) {
-    entries.push({
-      kind: "item",
-      icon: <IconInbox size={20} />,
-      label: rowClaimed ? "Stop keeping in sidebar" : "Keep in sidebar",
-      onClick: () => onSetStatus(sessions, rowClaimed ? null : "mine"),
-    });
-  }
 
   entries.push({
     kind: "item",
@@ -207,12 +202,21 @@ export function WorkspaceContextMenu({
   if (row && sessions.length > 0) {
     entries.push({ kind: "sep" });
     const hidden = hiddenRowKeys.has(row.key);
-    entries.push({
-      kind: "item",
-      icon: hidden ? <IconEye size={20} /> : <IconEyeOff size={20} />,
-      label: hidden ? "Restore to my sidebar" : "Hide from my sidebar",
-      onClick: () => onHide(row, hidden),
-    });
+    if (hidden || rowNaturallyInSidebar || rowClaimed) {
+      entries.push({
+        kind: "item",
+        icon: hidden ? <IconEye size={20} /> : <IconEyeOff size={20} />,
+        label: hidden ? "Restore to my sidebar" : "Hide from my sidebar",
+        onClick: () => onHide(row, hidden),
+      });
+    } else {
+      entries.push({
+        kind: "item",
+        icon: <IconInbox size={20} />,
+        label: "Keep in sidebar",
+        onClick: () => onSetStatus(sessions, "mine"),
+      });
+    }
     entries.push({
       kind: "item",
       icon: <IconArchive size={20} />,

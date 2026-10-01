@@ -57,6 +57,7 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { readFileSync } from "fs";
 import { filterMcpServers, STRIPE_CONFIRM_TOOLS } from "./runner-shared";
 import { WORKFLOW_LIMITS } from "./workflow-types";
+import { workloadCommand } from "./workload-scope";
 
 const HOME = homeDir();
 
@@ -145,6 +146,8 @@ export const WORKFLOW_INPROCESS_EXCLUDED: Record<string, string> = {
   "opensession-self-deploy": "it deploys and restarts this instance",
   "opensession-publish": "it publishes long-lived code that outlives the run",
   "opensession-portals": "it starts supervised services that outlive the call",
+  "opensession-scripts":
+    "it starts supervised script runs that outlive the call",
   "opensession-runners": "it executes commands on trusted persistent machines",
   "opensession-repos":
     "attaching or switching repos changes the session the run is happening in",
@@ -417,8 +420,11 @@ export function createWorkflowMcpHost(
     }
     await client.connect(
       new StdioClientTransport({
-        command: String(cfg.command),
-        args: (cfg.args || []).map(String),
+        ...workloadCommand(
+          String(cfg.command),
+          (cfg.args || []).map(String),
+          "mcp",
+        ),
         // The SDK's default environment is already a minimal safe set
         // (PATH/HOME/…); the server's own credentials come from its config
         // entry — never the server process's full secret-bearing env.

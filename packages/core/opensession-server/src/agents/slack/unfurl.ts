@@ -98,8 +98,8 @@ function reviewLabel(decision?: string): string {
   }
 }
 
-/** Social cards are named after the linked session, not its parent workspace. */
-export function cardTitle(s: UnifiedSession): { title: string } {
+/** Social cards are named after the linked session's workspace. */
+export function cardTitle(s: UnifiedSession): Promise<{ title: string }> {
   return sessionCardTitle(s);
 }
 

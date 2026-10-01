@@ -56,6 +56,7 @@ touches an in-process tool:
 | [`opensession-desktop`](#opensession-desktop) | 8 | interactive | Needs a sandboxed session. |
 | [`opensession-walkthrough`](#opensession-walkthrough) | 2 | interactive | Needs a session id. |
 | [`opensession-slack`](#opensession-slack) | 1 | interactive | Needs a session id. |
+| [`opensession-scripts`](#opensession-scripts) | 3 | interactive | Needs a session id. |
 | [`opensession-local-files`](#opensession-local-files) | 1 | interactive | Needs a session id. |
 | [`opensession-plain-discussion`](#opensession-plain-discussion) | 2 | interactive | Only a session that answers a Plain discussion (plainDiscussionId): an Ask Sidekick session carries this server alone instead of the interactive set; an auto-triage session that reports into a discussion carries it beside the automation-bar set on its later turns. |
 | [`opensession-ask`](#opensession-ask) | 1 | interactive, Slack loop | Needs a session id. |
@@ -74,7 +75,7 @@ touches an in-process tool:
 | [`opensession-github`](#opensession-github) | 4 | Slack loop | – |
 | [`opensession-goal-self`](#opensession-goal-self) | 6 | goal wake | Only on a session that carries a goalId. |
 
-33 servers, 163 tools.
+34 servers, 166 tools.
 
 ## opensession-sessions
 
@@ -513,9 +514,9 @@ List the credentials teammates have registered in the keychain — service, owne
 
 ### `request_credential`
 
-`mcp__opensession-keychain__request_credential` · input: `credential` (string, required), `purpose` (string, required), `mode` ("once" | "standing"), `run` (object)
+`mcp__opensession-keychain__request_credential` · input: `credential` (string), `credentials` (string[]), `purpose` (string, required), `mode` ("once" | "standing"), `run` (object)
 
-Ask a credential's owner to lend it to THIS session for a stated purpose. They get a DM with Approve once / Approve standing / Decline, and this call blocks until they answer. On approval you receive instructions for call_credential, which injects the credential server-side; you never see the secret itself. For a login (a username and password for a sign-in page), the owner instead chooses Release password or Decline, and on approval you use use_login to get the password into this session's workspace. Ask only when you actually need the access now, state the real purpose (the owner is approving that sentence, and every call is audited against it), and prefer 'once' unless the task genuinely needs repeated calls. For bulk work by a script (hundreds or more calls), pass `run` instead: the owner approves that exact command and call cap, and you start it with run_with_credential. If they decline, don't re-ask. Calling again with the same purpose while your ask is pending reminds the owner and waits on that same ask; if they already approved it, you get the live grant back.
+Ask a credential's owner to lend it to THIS session for a stated purpose. They get a DM with Approve once / Approve standing / Decline, and this call blocks until they answer. On approval you receive instructions for call_credential, which injects the credential server-side; you never see the secret itself. For a login (a username and password for a sign-in page), the owner instead chooses Release password or Decline, and on approval you use use_login to get the password into this session's workspace. Ask only when you actually need the access now, state the real purpose (the owner is approving that sentence, and every call is audited against it), and prefer 'once' unless the task genuinely needs repeated calls. For bulk work by a script (hundreds or more calls), pass `run` instead: the owner approves that exact command and call cap, and you start it with run_with_credential. A script that needs several APIs in one process names them all in `credentials` with `run`: each credential's owner approves, and the run starts only once all of them did. If they decline, don't re-ask. Calling again with the same purpose while your ask is pending reminds the owner and waits on that same ask; if they already approved it, you get the live grant back.
 
 ### `call_credential`
 
@@ -531,21 +532,21 @@ Get the password of a login credential (a test account for a sign-in page) that 
 
 ### `run_with_credential`
 
-`mcp__opensession-keychain__run_with_credential` · input: `credential` (string, required), `command` (string, required), `cwd` (string), `timeoutMinutes` (number)
+`mcp__opensession-keychain__run_with_credential` · input: `credential` (string), `credentials` (string[]), `command` (string, required), `cwd` (string), `timeoutMinutes` (number), `title` (string)
 
-Start a scripted run the credential's owner approved (request_credential with `run`): one process running exactly the approved command, on this server, in the session's workspace. The process gets KEYCHAIN_PROXY_URL, a base URL standing in for https://<credential host>: a request to $KEYCHAIN_PROXY_URL/v1/items goes to https://<host>/v1/items with the credential injected. The URL works only for this run and stops working when the process exits, times out or is stopped. Calls are held to the credential's method/path limits and the approved cap, and every call is audited. The script gets a minimal environment (PATH, HOME, LANG, TMPDIR), so pass anything else on the command line, and never a secret. Returns at once with a run id; poll credential_run_status. A Sandbox or Runner session cannot start one.
+Start a scripted run the credential's owner approved (request_credential with `run`): one process running exactly the approved command, on this server, in the session's workspace. The process gets KEYCHAIN_PROXY_URL, a base URL standing in for https://<credential host>: a request to $KEYCHAIN_PROXY_URL/v1/items goes to https://<host>/v1/items with the credential injected. A run approved with several `credentials` starts once every owner approved, and gets one URL per credential instead, KEYCHAIN_PROXY_URL_<SLUG> (slug upper-cased, other characters as _), each reaching only its own credential's host. The URLs work only for this run and all stop working when the process exits, times out or is stopped. Calls are held to each credential's method/path limits and its approved cap, and every call is audited. The script gets a minimal environment (PATH, HOME, LANG, TMPDIR), so pass anything else on the command line, and never a secret. The run is a script run: it keeps going through Open Session restarts (the URLs hold requests while the server is back up), shows as a card in the session with its call counts, and this session is woken with how it ended, so start it and end your turn. Returns at once with a run id; credential_run_status shows progress. A Sandbox or Runner session cannot start one.
 
 ### `credential_run_status`
 
 `mcp__opensession-keychain__credential_run_status` · input: `runId` (string)
 
-Check a scripted run started with run_with_credential: running/exited/timed_out/stopped/revoked/failed, exit code, calls made, calls refused, the cap, and the last few KB of its output (the full log is at logPath). Without a run id, lists this session's runs.
+Check a scripted run started with run_with_credential: running/exited/timed_out/stopped/revoked/failed/lost, exit code, calls made, calls refused and the cap (in total, and per credential under `credentials`), and the last few KB of its output (the full log is at logPath). Without a run id, lists this session's runs.
 
 ### `stop_credential_run`
 
 `mcp__opensession-keychain__stop_credential_run` · input: `runId` (string, required)
 
-Stop a running scripted run: its proxy URL stops working at once and its process group is sent SIGTERM (SIGKILL after 10 seconds).
+Stop a running scripted run: its proxy URLs stop working at once and its process group is sent SIGTERM (SIGKILL after 10 seconds).
 
 ### `cancel_credential_ask`
 
@@ -889,6 +890,33 @@ Open an editable Slack composer. The human still presses Send.
 `mcp__opensession-slack__compose_message` · input: `message` (string), `channel` (string), `images` (string[])
 
 Open an editable Slack composer in this Open Session for the signed-in person to review, then return at once. The draft stays open until the person presses Send or Cancel, however long that takes, and the outcome (with the message link when sent) arrives later in this session as system context. Do not post the same update another way or open a second draft while waiting. Use this when a useful update is ready to share but the human should review the message, channel, and images first. This tool never posts by itself: the person must press Send in the UI. When the person has explicitly said to post without review, use the Slack server's slack_post_message instead: its images option attaches images (a chart PNG) to a direct post.
+
+## opensession-scripts
+
+Supervised script runs (migrations, backfills, long jobs) that survive restarts and show in the session.
+
+- **Source** `packages/core/opensession-server/src/server/scripts-mcp.ts`
+- **Wired in** `packages/core/opensession-server/src/server/interactive-mcp.ts`
+- **Runs** interactive
+- **Condition** Needs a session id.
+
+### `start_script`
+
+`mcp__opensession-scripts__start_script` · input: `command` (string, required), `title` (string), `cwd` (string), `timeoutMinutes` (number), `notify` (boolean)
+
+Run a long shell command (a migration, backfill, sync, data fix, long build) as a supervised script run instead of a background shell job. It keeps running through Open Session restarts and deploys, shows as a card in the session where people can follow and stop it, and when it ends this session is woken with how it ended and the end of its output, so start it and end your turn instead of polling or scheduling a check-back. It runs on this server, in the session's workspace, with a minimal environment (PATH, HOME, LANG, TMPDIR): pass anything else on the command line, e.g. 'set -a; . ./.env; set +a; bun scripts/migrate.ts'. Make long jobs resumable and print progress lines. Output is appended to the log at logPath. A Sandbox or Runner session cannot start one. For a script that needs a teammate's credential, use run_with_credential (opensession-keychain) instead.
+
+### `script_status`
+
+`mcp__opensession-scripts__script_status` · input: `id` (string)
+
+Check a script run started with start_script or run_with_credential: running/exited/failed/timed_out/stopped/revoked/lost, exit code, start and end times, credential call counts, and the last few KB of its output (the full log is at logPath). Without an id, lists this session's runs.
+
+### `stop_script`
+
+`mcp__opensession-scripts__stop_script` · input: `id` (string, required)
+
+Stop a running script run: its process group is sent SIGTERM, then SIGKILL after 10 seconds. The session is woken when it has ended, as for any other end.
 
 ## opensession-local-files
 

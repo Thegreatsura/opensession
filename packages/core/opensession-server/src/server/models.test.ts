@@ -328,7 +328,7 @@ describe("Pi-only model routing", () => {
           "xhigh",
           "max",
         ]);
-        expect(contextWindowFor(`${prefix}${current}`)).toBe(1_050_000);
+        expect(contextWindowFor(`${prefix}${current}`)).toBe(272_000);
       }
       const label = name === "sol" ? "Sol" : "Luna";
       expect(modelLabel(previous)).toBe(`GPT-5.6 ${label}`);

@@ -10,7 +10,9 @@
  *
  * Bulk work goes through a scripted run instead (keychain-runs.ts): the owner
  * approves one command and a call cap, and run_with_credential starts that
- * process with a proxy URL that works only while it runs.
+ * process with a proxy URL that works only while it runs. A run may use
+ * several credentials; it starts once every one's owner approved, and gets
+ * one proxy URL per credential.
  *
  * Interactive runs ONLY — same boundary as opensession-humans. An ask is a DM
  * to a teammate carrying a model-authored "purpose" string; letting untrusted
@@ -53,6 +55,9 @@ import {
   MAX_RUN_COMMAND_CHARS,
   claimLoginRelease,
   requestCredential,
+  requestCredentialRun,
+  runGroupAnswer,
+  MAX_RUN_CREDENTIALS,
 } from "../../server/keychain";
 import {
   writeReleasedLogin,
@@ -67,9 +72,11 @@ import {
   startCredentialRun,
   stopCredentialRun,
 } from "../../server/keychain-runs";
-import { hostSessionScratchDir } from "../../server/session-scratch";
-import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import {
+  scriptEnv,
+  scriptLogDir,
+  scriptWorkspace,
+} from "../../server/script-workspace";
 
 export interface KeychainToolContext {
   sessionId: string;
@@ -111,42 +118,16 @@ async function loginTarget(
   return { kind: "sandbox", provider: session.sandbox.provider, exec };
 }
 
-/** Where a scripted run may start, or why it can't. The proxy listens on this
- *  server's loopback, so the script must run on this machine too. */
+/** Where a scripted run may start, or why it can't. Its script host runs
+ *  on this server, so the workspace must be here too. */
 function runWorkspace(
   ctx: KeychainToolContext,
   cwd: string | undefined,
 ): { cwd: string } | { error: string } {
-  const session = (ctx.session ?? findSession)(ctx.sessionId);
-  if (session?.sandbox || session?.runner)
-    return {
-      error:
-        "scripted runs start on this server, and this session's workspace is in a Sandbox or on a Runner. Use call_credential instead",
-    };
-  const root = session?.worktreeDir;
-  if (cwd && isAbsolute(cwd)) return { cwd };
-  if (!root)
-    return {
-      error: "this session has no workspace here; pass an absolute cwd",
-    };
-  return { cwd: cwd ? resolve(root, cwd) : root };
-}
-
-/** The script's whole environment: no server tokens, only the basics and
- *  KEYCHAIN_PROXY_URL (added by the run). */
-function runEnv(sessionId: string): Record<string, string> {
-  const scratch = hostSessionScratchDir(sessionId);
-  const env: Record<string, string> = {
-    PATH: process.env.PATH || "/usr/local/bin:/usr/bin:/bin",
-    HOME: process.env.HOME || homedir(),
-    LANG: process.env.LANG || "C.UTF-8",
-    TERM: "dumb",
-    TMPDIR: scratch,
-    OPENSESSION_SCRATCH: scratch,
-  };
-  for (const name of ["USER", "LOGNAME", "SHELL"])
-    if (process.env[name]) env[name] = process.env[name]!;
-  return env;
+  const where = scriptWorkspace(ctx.sessionId, cwd, ctx.session ?? findSession);
+  return "error" in where && /Sandbox or on a Runner/.test(where.error)
+    ? { error: `${where.error}. Use call_credential instead` }
+    : where;
 }
 
 /**
@@ -168,11 +149,57 @@ function registrationRefusal(ctx: KeychainToolContext): string | null {
   return null;
 }
 
+function kcAsksStillPending(ids: string[]): string[] {
+  const pending = new Set(
+    listKeychainAsks()
+      .filter((a) => a.status === "pending")
+      .map((a) => a.id),
+  );
+  return ids.filter((id) => pending.has(id));
+}
+
 function text(s: string) {
   return { content: [{ type: "text" as const, text: s }] };
 }
 
 export function createKeychainMcpServer(ctx: KeychainToolContext) {
+  /** request_credential for one scripted run with several credentials:
+   *  waits on every owner's message at once. */
+  const requestRun = async (
+    credentials: string[],
+    purpose: string,
+    run: { command: string; maxCalls: number | Record<string, number> },
+    extra: any,
+  ) => {
+    const result = requestCredentialRun({
+      credentials,
+      sessionId: ctx.sessionId,
+      requestedBy: ctx.user,
+      purpose,
+      run,
+    });
+    if ("error" in result) return text(`Couldn't ask: ${result.error}`);
+    if ("grants" in result)
+      return text(
+        `This session already holds this run's approvals.\n\n${result.instructions}`,
+      );
+    const { awaitBlockingAnswer, remindAsk } =
+      await import("../../server/human-asks");
+    const waits = result.transports.map((t) =>
+      awaitBlockingAnswer(t.id, extra?.signal),
+    );
+    if (result.resurfaced)
+      await Promise.all(result.transports.map((t) => remindAsk(t.id)));
+    await Promise.all(waits);
+    const state = runGroupAnswer(ctx.sessionId, result.asks[0]!.run!.group!.id);
+    const open = kcAsksStillPending(result.asks.map((a) => a.id));
+    return text(
+      open.length
+        ? `${state}\nThe open asks (${open.join(", ")}) stay open; call request_credential again with the same arguments to remind the owners, or cancel_credential_ask to withdraw the run.`
+        : state,
+    );
+  };
+
   const tools = [
     tool(
       "request_mac_keychain",
@@ -260,11 +287,22 @@ export function createKeychainMcpServer(ctx: KeychainToolContext) {
     tool(
       "request_credential",
       "Ask a credential's owner to lend it to THIS session for a stated purpose. They get a DM with Approve once / Approve standing / Decline, and this call blocks until they answer. On approval you receive instructions for call_credential, which injects the credential server-side; you never see the secret itself. For a login (a username and password for a sign-in page), the owner instead chooses Release password or Decline, and on approval you use use_login to get the password into this session's workspace." +
-        " Ask only when you actually need the access now, state the real purpose (the owner is approving that sentence, and every call is audited against it), and prefer 'once' unless the task genuinely needs repeated calls. For bulk work by a script (hundreds or more calls), pass `run` instead: the owner approves that exact command and call cap, and you start it with run_with_credential. If they decline, don't re-ask. Calling again with the same purpose while your ask is pending reminds the owner and waits on that same ask; if they already approved it, you get the live grant back.",
+        " Ask only when you actually need the access now, state the real purpose (the owner is approving that sentence, and every call is audited against it), and prefer 'once' unless the task genuinely needs repeated calls. For bulk work by a script (hundreds or more calls), pass `run` instead: the owner approves that exact command and call cap, and you start it with run_with_credential. A script that needs several APIs in one process names them all in `credentials` with `run`: each credential's owner approves, and the run starts only once all of them did. If they decline, don't re-ask. Calling again with the same purpose while your ask is pending reminds the owner and waits on that same ask; if they already approved it, you get the live grant back.",
       {
         credential: z
           .string()
-          .describe("Service slug (from list_credentials) or a credential id."),
+          .optional()
+          .describe(
+            "Service slug (from list_credentials) or a credential id. Give this or `credentials`.",
+          ),
+        credentials: z
+          .array(z.string())
+          .min(1)
+          .max(MAX_RUN_CREDENTIALS)
+          .optional()
+          .describe(
+            "Only with `run`: every credential one script needs, e.g. ['payments-prod', 'billing-prod']. Each owner is asked once, sees every credential in the run, and the run starts only once all of them approved.",
+          ),
         purpose: z
           .string()
           .describe(
@@ -283,38 +321,65 @@ export function createKeychainMcpServer(ctx: KeychainToolContext) {
               .min(1)
               .max(MAX_RUN_COMMAND_CHARS)
               .describe(
-                "The exact shell command run_with_credential will start, e.g. 'bun scripts/sync.ts --base \"$KEYCHAIN_PROXY_URL\"'. It must read the API base URL from KEYCHAIN_PROXY_URL.",
+                "The exact shell command run_with_credential will start, e.g. 'bun scripts/sync.ts --base \"$KEYCHAIN_PROXY_URL\"'. With one credential it reads the API base URL from KEYCHAIN_PROXY_URL; with several, from KEYCHAIN_PROXY_URL_<SLUG> for each (the slug upper-cased, other characters as _, e.g. KEYCHAIN_PROXY_URL_PAYMENTS_PROD).",
               ),
             maxCalls: z
-              .number()
-              .int()
-              .min(1)
-              .max(MAX_RUN_CALLS)
+              .union([
+                z.number().int().min(1).max(MAX_RUN_CALLS),
+                z.record(
+                  z.string(),
+                  z.number().int().min(1).max(MAX_RUN_CALLS),
+                ),
+              ])
               .describe(
-                "Expected volume: the most API calls the run will make. Calls beyond it are refused. Shown to the owner.",
+                "Expected volume: the most API calls the run will make with each credential, as one number for every credential or { slug: number } per credential. Calls beyond it are refused. Shown to the owners.",
               ),
           })
           .optional()
           .describe(
-            "Ask for a scripted run: one process, given a proxy URL for this credential while it runs. The owner sees the command and the call cap.",
+            "Ask for a scripted run: one process, given a proxy URL per credential while it runs. The owners see the command and the call caps.",
           ),
       },
       async (
         args: {
-          credential: string;
+          credential?: string;
+          credentials?: string[];
           purpose: string;
           mode?: "once" | "standing";
-          run?: { command: string; maxCalls: number };
+          run?: {
+            command: string;
+            maxCalls: number | Record<string, number>;
+          };
         },
         extra: any,
       ) => {
+        const refs =
+          args.credentials ?? (args.credential ? [args.credential] : []);
+        if (!refs.length || (args.credential && args.credentials))
+          return text("Couldn't ask: give either credential or credentials.");
+        if (refs.length > 1) {
+          if (!args.run)
+            return text(
+              "Couldn't ask: several credentials are only for a scripted run; pass `run` too, or ask for each credential separately.",
+            );
+          return requestRun(refs, args.purpose, args.run, extra);
+        }
+        let run: { command: string; maxCalls: number } | undefined;
+        if (args.run) {
+          const caps = args.run.maxCalls;
+          const values =
+            typeof caps === "number" ? [caps] : Object.values(caps);
+          if (values.length !== 1)
+            return text("Couldn't ask: give maxCalls for the one credential.");
+          run = { command: args.run.command, maxCalls: values[0]! };
+        }
         const result = requestCredential({
-          credential: args.credential,
+          credential: refs[0]!,
           sessionId: ctx.sessionId,
           requestedBy: ctx.user,
           purpose: args.purpose,
           ...(args.mode ? { mode: args.mode } : {}),
-          ...(args.run ? { run: args.run } : {}),
+          ...(run ? { run } : {}),
         });
         if ("error" in result) return text(`Couldn't ask: ${result.error}`);
         if ("grant" in result)
@@ -435,11 +500,22 @@ export function createKeychainMcpServer(ctx: KeychainToolContext) {
     ),
     tool(
       "run_with_credential",
-      `Start a scripted run the credential's owner approved (request_credential with \`run\`): one process running exactly the approved command, on this server, in the session's workspace. The process gets KEYCHAIN_PROXY_URL, a base URL standing in for https://<credential host>: a request to $KEYCHAIN_PROXY_URL/v1/items goes to https://<host>/v1/items with the credential injected. The URL works only for this run and stops working when the process exits, times out or is stopped. Calls are held to the credential's method/path limits and the approved cap, and every call is audited. The script gets a minimal environment (PATH, HOME, LANG, TMPDIR), so pass anything else on the command line, and never a secret. Returns at once with a run id; poll credential_run_status. A Sandbox or Runner session cannot start one.`,
+      `Start a scripted run the credential's owner approved (request_credential with \`run\`): one process running exactly the approved command, on this server, in the session's workspace. The process gets KEYCHAIN_PROXY_URL, a base URL standing in for https://<credential host>: a request to $KEYCHAIN_PROXY_URL/v1/items goes to https://<host>/v1/items with the credential injected. A run approved with several \`credentials\` starts once every owner approved, and gets one URL per credential instead, KEYCHAIN_PROXY_URL_<SLUG> (slug upper-cased, other characters as _), each reaching only its own credential's host. The URLs work only for this run and all stop working when the process exits, times out or is stopped. Calls are held to each credential's method/path limits and its approved cap, and every call is audited. The script gets a minimal environment (PATH, HOME, LANG, TMPDIR), so pass anything else on the command line, and never a secret. The run is a script run: it keeps going through Open Session restarts (the URLs hold requests while the server is back up), shows as a card in the session with its call counts, and this session is woken with how it ended, so start it and end your turn. Returns at once with a run id; credential_run_status shows progress. A Sandbox or Runner session cannot start one.`,
       {
         credential: z
           .string()
-          .describe("Service slug (from list_credentials) or a credential id."),
+          .optional()
+          .describe(
+            "Service slug (from list_credentials) or a credential id. Give this or `credentials`.",
+          ),
+        credentials: z
+          .array(z.string())
+          .min(1)
+          .max(MAX_RUN_CREDENTIALS)
+          .optional()
+          .describe(
+            "Every credential of a run approved with several, as in request_credential.",
+          ),
         command: z
           .string()
           .min(1)
@@ -460,61 +536,73 @@ export function createKeychainMcpServer(ctx: KeychainToolContext) {
           .describe(
             `Stop the run after this long. Default ${DEFAULT_RUN_MINUTES}, at most ${MAX_RUN_MINUTES}.`,
           ),
+        title: z
+          .string()
+          .max(120)
+          .optional()
+          .describe(
+            "Short name people see on the run's card, e.g. 'Archive agent customers'.",
+          ),
       },
       async (args: {
-        credential: string;
+        credential?: string;
+        credentials?: string[];
         command: string;
         cwd?: string;
         timeoutMinutes?: number;
+        title?: string;
       }) => {
         const where = runWorkspace(ctx, args.cwd);
         if ("error" in where) return text(`Couldn't start: ${where.error}.`);
         const result = await startCredentialRun({
           sessionId: ctx.sessionId,
-          credential: args.credential,
+          ...(args.credential ? { credential: args.credential } : {}),
+          ...(args.credentials ? { credentials: args.credentials } : {}),
           command: args.command,
           cwd: where.cwd,
-          logDir: join(hostSessionScratchDir(ctx.sessionId), "keychain-runs"),
-          env: runEnv(ctx.sessionId),
+          logDir: scriptLogDir(ctx.sessionId),
+          env: scriptEnv(ctx.sessionId),
           ...(args.timeoutMinutes !== undefined
             ? { timeoutMinutes: args.timeoutMinutes }
             : {}),
+          ...(args.title ? { title: args.title } : {}),
+          ...(ctx.user ? { startedBy: ctx.user } : {}),
         });
         if ("error" in result) return text(`Couldn't start: ${result.error}.`);
         return text(
           JSON.stringify({
             run: result.run,
-            next: "Poll credential_run_status with this run id for progress, call counts and the output tail. stop_credential_run ends it early.",
+            next: "It's running. Tell the person it started, then end your turn: this session is woken when it ends. credential_run_status shows progress meanwhile, and stop_credential_run ends it early.",
           }),
         );
       },
     ),
     tool(
       "credential_run_status",
-      "Check a scripted run started with run_with_credential: running/exited/timed_out/stopped/revoked/failed, exit code, calls made, calls refused, the cap, and the last few KB of its output (the full log is at logPath). Without a run id, lists this session's runs.",
+      "Check a scripted run started with run_with_credential: running/exited/timed_out/stopped/revoked/failed/lost, exit code, calls made, calls refused and the cap (in total, and per credential under `credentials`), and the last few KB of its output (the full log is at logPath). Without a run id, lists this session's runs.",
       {
         runId: z
           .string()
           .optional()
-          .describe("The run's id, 'kr-…'. Omit to list runs."),
+          .describe("The run's id, 'sr-…'. Omit to list runs."),
       },
       async ({ runId }: { runId?: string }) => {
         if (!runId)
-          return text(JSON.stringify(listCredentialRuns(ctx.sessionId)));
+          return text(JSON.stringify(await listCredentialRuns(ctx.sessionId)));
         const status = await credentialRunStatus(runId, ctx.sessionId);
         return text(
           status
             ? JSON.stringify(status)
-            : "No run with that id in this session. Runs end with a server restart.",
+            : "No scripted run with that id in this session.",
         );
       },
     ),
     tool(
       "stop_credential_run",
-      "Stop a running scripted run: its proxy URL stops working at once and its process group is sent SIGTERM (SIGKILL after 10 seconds).",
-      { runId: z.string().describe("The run's id, 'kr-…'.") },
+      "Stop a running scripted run: its proxy URLs stop working at once and its process group is sent SIGTERM (SIGKILL after 10 seconds).",
+      { runId: z.string().describe("The run's id, 'sr-…'.") },
       async ({ runId }: { runId: string }) => {
-        const result = stopCredentialRun(runId, ctx.sessionId);
+        const result = await stopCredentialRun(runId, ctx.sessionId);
         if ("error" in result) return text(`Couldn't stop: ${result.error}.`);
         return text(JSON.stringify(result.run));
       },

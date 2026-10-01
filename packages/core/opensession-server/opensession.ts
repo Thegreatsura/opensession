@@ -101,6 +101,7 @@ import {
 import { startGoalTicker } from "./src/server/goal-runner";
 import { startSessionHistoryIndexing } from "./src/server/session-index";
 import { startEventLoopLagMonitor } from "./src/server/system-stats";
+import { startDerivedCatalogRepair } from "./src/server/catalog-documents";
 import { ensureWarmTemplateScheduler } from "./src/server/warm-template";
 import { handleRunnerWsUpgrade } from "./src/server/runner-ws";
 import { handleSandboxPortalRelayUpgrade } from "./src/server/sandbox-portal-relay";
@@ -384,7 +385,7 @@ const sessionSpaEntry = (() => {
     const session = id ? await findSessionAsync(id) : undefined;
     return new Response(
       session
-        ? sessionHtmlWithSocialMeta(bundle.indexHtml, session, pathname)
+        ? await sessionHtmlWithSocialMeta(bundle.indexHtml, session, pathname)
         : bundle.indexHtml,
       { headers: SPA_HEADERS },
     );
@@ -951,6 +952,10 @@ if (!g.__opensessionBooted) {
     // client; this is the server-side counterpart.
     startEventLoopLagMonitor();
 
+    // Catalog projections imported by this boot get a one-time repair once
+    // the previous gateway has drained (catalog-documents.ts).
+    startDerivedCatalogRepair();
+
     // Re-try sidebar titles whose one-shot died in flight (a restart, or an
     // engine-spawn outage) — without this they stay raw forever.
     startGeneratedTitleSweep(publishSessionChange);
@@ -961,6 +966,20 @@ if (!g.__opensessionBooted) {
       "[dev-mode] Dev instance: background agents, webhooks and schedulers are disabled",
     );
   }
+
+  // Script runs (script-runs.ts) live in their own scopes and outlive this
+  // process. Reattach to the ones recorded as running, settle the ones that
+  // ended while it was down, and wake their sessions. Every boot mode: the
+  // registry is in this instance's own state dir. Scripted keychain runs
+  // (keychain-runs.ts) are script runs with credential relays.
+  // Keychain hooks first: a credential run that ended while this process
+  // was down settles its grants as it is reattached.
+  void (async () => {
+    const keychainRuns = await import("./src/server/keychain-runs");
+    keychainRuns.hookKeychainRuns();
+    await (await import("./src/server/script-runs")).startScriptRuns();
+    await keychainRuns.startKeychainRuns();
+  })().catch((e) => console.error("[scripts] recovery failed:", e));
 
   // code.storage-hosted repos: make sure existing main checkouts have the
   // URL-scoped credential helper wired, so ambient git fetch/push mints fresh
@@ -1163,7 +1182,7 @@ if (!g.__opensessionBooted) {
         } catch (error) {
           throw error;
         }
-        markInterruptedWorkflows();
+        await markInterruptedWorkflows();
         const recoveredWorkflows = await recoverInterruptedWorkflows();
         if (recoveredWorkflows.length)
           console.log(
@@ -1302,6 +1321,11 @@ if (!g.__opensessionBooted) {
     // instances skip it (nothing resumes them, and a snapshot must never
     // make the production boot try to wake dev sessions).
     if (!devInstance) snapshotActiveSessions();
+    // Script runs keep going; save their latest credential call counts so
+    // the next boot reattaches them with nothing lost.
+    void import("./src/server/script-runs")
+      .then((m) => m.flushScriptRuns())
+      .catch(() => {});
     const pausedWorkflows = pauseWorkflowsForShutdown();
     if (pausedWorkflows)
       console.log(

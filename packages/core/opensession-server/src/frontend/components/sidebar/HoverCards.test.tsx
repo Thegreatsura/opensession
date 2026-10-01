@@ -307,7 +307,15 @@ describe("workspace PR status marks", () => {
     );
     expect(html).toContain('title="PR open"');
     expect(html).toContain("text-green");
-    expect(html).not.toContain("No pull request");
+    expect(html).not.toContain("no pull request");
+  });
+
+  test("uses a branch glyph, not a PR glyph, for a branch without a PR", () => {
+    const html = renderToStaticMarkup(
+      <WsPrStatusMark sessions={[session({ branch: "feature" })]} size={18} />,
+    );
+    expect(html).toContain('title="Branch, no pull request"');
+    expect(html).toContain("text-faint");
   });
 
   test("uses an idle dot when the repo ships directly to main", () => {
@@ -319,7 +327,7 @@ describe("workspace PR status marks", () => {
       />,
     );
     expect(html).toContain("bg-faint");
-    expect(html).not.toContain("No pull request");
+    expect(html).not.toContain("no pull request");
   });
 });
 
