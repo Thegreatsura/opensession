@@ -43,8 +43,10 @@
  * secret into a card that posts straight to that HTTP path.
  *
  * Stated limitation: the store is a 0600 file owned by the service user,
- * which agent shells also run as on this box, so the file protects the
- * secret from other Unix users, not from a local agent that goes looking.
+ * which agent shells also run as (and which may have root on the host), so
+ * nothing here stops a local agent that deliberately reads the store or the
+ * process. The keychain prevents accidental exposure and audits use; see
+ * "Keychain credentials" in docs/security-model.md.
  */
 
 import { stateDir } from "./paths";

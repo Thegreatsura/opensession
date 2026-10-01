@@ -207,9 +207,19 @@ its environment; the exposure is limited to that run's lifetime and cap.
 The old broker URL (`/api/keychain/broker/...`) answers every caller with
 410 and names these two paths, rather than a sign-in error.
 
-The store is a 0600 file owned by the service user. Agent shells run as the
-same Unix user today, so the file does not protect secrets from a local agent
-that reads it directly. This is a known gap.
+**Limit: the keychain does not protect secrets from a local agent that goes
+looking for them.** The store is a 0600 file owned by the service user, and
+agent shells run as that same Unix user. On a host where that user also has
+root (passwordless `sudo`, or membership in the `docker` group), anything a
+separate keychain user or process held would be readable too, including the
+server's memory. So treat everyone who can run an agent on the host as able
+to read every stored secret. What the keychain does guarantee is narrower:
+no tool, API, transcript, or prompt ever hands an agent a secret, every use
+needs the owner's approval for one session, and every call is audited. It
+prevents accidental exposure and makes use visible; it is not a barrier
+against a deliberately hostile agent. Closing that gap needs agent runs under
+a separate unprivileged user that can reach neither the store nor the
+process that injects the secret.
 
 ## Mac Keychain requests
 
