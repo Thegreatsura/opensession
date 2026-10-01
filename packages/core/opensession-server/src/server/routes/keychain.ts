@@ -101,12 +101,13 @@ export async function handleKeychainRoutes(
       decision !== "once" &&
       decision !== "standing" &&
       decision !== "run" &&
+      decision !== "release" &&
       decision !== "decline"
     )
       return Response.json(
         {
           error:
-            'expected { decision: "once" | "standing" | "run" | "decline" }',
+            'expected { decision: "once" | "standing" | "run" | "release" | "decline" }',
         },
         { status: 400 },
       );
@@ -129,7 +130,10 @@ export async function handleKeychainRoutes(
       typeof body.secret !== "string"
     ) {
       return Response.json(
-        { error: "expected { service, host, secret, ... }" },
+        {
+          error:
+            'expected { service, host, secret, ... } or { service, kind: "login", loginUrl, username, secret }',
+        },
         { status: 400 },
       );
     }
@@ -150,6 +154,14 @@ export async function handleKeychainRoutes(
           service: body.service,
           host: String(body.host || ""),
           secret: body.secret,
+          // Anything but "api" or "login" is refused by the spec check.
+          ...(typeof body.kind === "string" ? { kind: body.kind } : {}),
+          ...(typeof body.loginUrl === "string"
+            ? { loginUrl: body.loginUrl }
+            : {}),
+          ...(typeof body.username === "string"
+            ? { username: body.username }
+            : {}),
           description:
             typeof body.description === "string" ? body.description : undefined,
           injection: body.injection,

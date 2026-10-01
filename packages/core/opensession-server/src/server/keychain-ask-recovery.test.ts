@@ -615,6 +615,237 @@ describe("a scripted-run ask", () => {
   });
 });
 
+describe("a login", () => {
+  const PASSWORD = " correct horse battery staple ";
+
+  function addLogin() {
+    kc.addCredential({
+      owner: "Alex",
+      service: "acme-staging",
+      kind: "login",
+      loginUrl: "https://app.example.test/login#top",
+      username: "qa@example.test",
+      secret: PASSWORD,
+    });
+  }
+
+  /** use_login writes into a temp dir, standing in for the session's
+   *  workspace, through the same Sandbox-shaped exec a remote session uses. */
+  async function connectWithWorkspace() {
+    const written: Array<{ path: string; password: string }> = [];
+    const removed: string[] = [];
+    const exec = Object.assign(
+      async (cmd: string[], opts?: { env?: Record<string, string> }) => {
+        if (cmd[0] === "rm") removed.push(cmd[2]!);
+        else
+          written.push({
+            path: opts!.env!.KEYCHAIN_LOGIN_FILE!,
+            password: opts!.env!.KEYCHAIN_LOGIN_PASSWORD!,
+          });
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      { sandboxed: true, remote: true } as const,
+    );
+    const server = createKeychainMcpServer({
+      sessionId: SESSION,
+      user: "Alex",
+      loginTarget: async () => ({ kind: "sandbox", exec }),
+    });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "1.0.0" });
+    await server.instance.connect(serverTransport);
+    await client.connect(clientTransport);
+    return { client, written, removed };
+  }
+
+  async function askForLogin(client: Client) {
+    const call = client.callTool({
+      name: "request_credential",
+      arguments: {
+        credential: "acme-staging",
+        purpose: "sign in to check the editor on staging",
+      },
+    });
+    for (let i = 0; i < 100 && !kc.listKeychainAsks().length; i++)
+      await Bun.sleep(5);
+    return { call, ask: pendingAsk() };
+  }
+
+  test("stores the sign-in page and username as metadata, never the password", () => {
+    addLogin();
+    const meta = kc.findCredential("acme-staging")!;
+    expect(meta).toMatchObject({
+      kind: "login",
+      host: "app.example.test",
+      loginUrl: "https://app.example.test/login",
+      username: "qa@example.test",
+    });
+    expect(JSON.stringify(kc.listCredentials())).not.toContain("horse");
+    expect(() =>
+      kc.addCredential({
+        owner: "Alex",
+        service: "plain-http",
+        kind: "login",
+        loginUrl: "http://app.example.test/login",
+        username: "qa",
+        secret: "pw",
+      }),
+    ).toThrow(/https/);
+    expect(() =>
+      kc.addCredential({
+        owner: "Alex",
+        service: "with-limits",
+        kind: "login",
+        loginUrl: "https://app.example.test/login",
+        username: "qa",
+        secret: "pw",
+        allowedMethods: ["GET"],
+      }),
+    ).toThrow(/sign-in page/);
+    expect(() =>
+      kc.addCredential({
+        owner: "Alex",
+        service: "no-user",
+        kind: "login",
+        loginUrl: "https://app.example.test/login",
+        secret: "pw",
+      }),
+    ).toThrow(/username/);
+  });
+
+  test("tells the owner the agent will see the password, and offers only release or decline", async () => {
+    addLogin();
+    const { client } = await connectWithWorkspace();
+    const { call, ask } = await askForLogin(client);
+    expect(ask.requestedMode).toBe("release");
+    await deliver(ask.humanAskId!);
+    const transport = humanAsks.getAsk(ask.humanAskId!)!;
+    expect(transport.options).toEqual(["Release password", "Decline"]);
+    const dm = slackPosts.map((p) => p.text).join("\n");
+    expect(dm).toContain("will see the password");
+    expect(dm).toContain("qa@example.test");
+    expect(dm).not.toContain("horse");
+
+    for (const mode of ["once", "standing", "run"] as const)
+      expect(kc.answerKeychainAsk(ask.id, mode, "Alex")).toHaveProperty(
+        "error",
+      );
+    kc.answerKeychainAsk(ask.id, "decline", "Alex");
+    await call;
+    expect(kc.listGrants()).toHaveLength(0);
+  });
+
+  test("a release puts the password in a workspace file once, and never in the transcript", async () => {
+    addLogin();
+    const { client, written } = await connectWithWorkspace();
+    const { call, ask } = await askForLogin(client);
+    expect(kc.answerKeychainAsk(ask.id, "release", "Alex")).toEqual({
+      ok: true,
+      status: "approved",
+    });
+    const instructions = textOf(await call);
+    expect(instructions).toContain("use_login");
+    expect(instructions).not.toContain("horse");
+
+    const released = textOf(
+      await client.callTool({
+        name: "use_login",
+        arguments: { credential: "acme-staging" },
+      }),
+    );
+    expect(released).not.toContain("horse");
+    const body = JSON.parse(released);
+    expect(body).toMatchObject({
+      loginUrl: "https://app.example.test/login",
+      username: "qa@example.test",
+    });
+    expect(written).toEqual([{ path: body.passwordFile, password: PASSWORD }]);
+    expect(body.passwordFile).toContain("/logins/");
+
+    const again = textOf(
+      await client.callTool({
+        name: "use_login",
+        arguments: { credential: "acme-staging" },
+      }),
+    );
+    expect(again).toContain("no approved release");
+    expect(written).toHaveLength(1);
+  });
+
+  test("a login is never usable through call_credential, and an API key is never released", async () => {
+    addLogin();
+    const { client, written } = await connectWithWorkspace();
+    const { call, ask } = await askForLogin(client);
+    kc.answerKeychainAsk(ask.id, "release", "Alex");
+    await call;
+    const viaBroker = textOf(
+      await client.callTool({
+        name: "call_credential",
+        arguments: { credential: "acme-staging", method: "GET", path: "/" },
+      }),
+    );
+    expect(viaBroker).not.toContain("horse");
+    expect(viaBroker).toContain("no live grant");
+
+    const apiKey = textOf(
+      await client.callTool({
+        name: "use_login",
+        arguments: { credential: "acme-prod" },
+      }),
+    );
+    expect(apiKey).toContain("never released");
+    expect(apiKey).not.toContain("sk-test-secret");
+    expect(written).toHaveLength(0);
+  });
+
+  test("a login can't be asked for as a scripted run", async () => {
+    addLogin();
+    const { client } = await connectWithWorkspace();
+    const result = textOf(
+      await client.callTool({
+        name: "request_credential",
+        arguments: {
+          credential: "acme-staging",
+          purpose: "sign in from a script",
+          run: { command: "bun sign-in.ts", maxCalls: 1 },
+        },
+      }),
+    );
+    expect(result).toContain("can't be used by a scripted run");
+    expect(kc.listKeychainAsks()).toHaveLength(0);
+  });
+
+  test("a failed write leaves the approval unused", async () => {
+    addLogin();
+    const failing = Object.assign(
+      async () => ({ exitCode: 1, stdout: "", stderr: "disk full" }),
+      { sandboxed: true, remote: true } as const,
+    );
+    const server = createKeychainMcpServer({
+      sessionId: SESSION,
+      user: "Alex",
+      loginTarget: async () => ({ kind: "sandbox", exec: failing }),
+    });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "1.0.0" });
+    await server.instance.connect(serverTransport);
+    await client.connect(clientTransport);
+    const { call, ask } = await askForLogin(client);
+    kc.answerKeychainAsk(ask.id, "release", "Alex");
+    await call;
+    const result = textOf(
+      await client.callTool({
+        name: "use_login",
+        arguments: { credential: "acme-staging" },
+      }),
+    );
+    expect(result).toContain("still unused");
+    expect(kc.listGrants({ sessionId: SESSION })[0]!.status).toBe("active");
+  });
+});
+
 describe("the retired broker URL", () => {
   test("explains the supported paths to any caller instead of asking for sign-in", async () => {
     const res = await route("/api/keychain/broker/kg-123/v1/items", null);

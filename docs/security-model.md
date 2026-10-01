@@ -207,6 +207,41 @@ its environment; the exposure is limited to that run's lifetime and cap.
 The old broker URL (`/api/keychain/broker/...`) answers every caller with
 410 and names these two paths, rather than a sign-in error.
 
+### Logins
+
+A login is the one keychain secret an agent is given. It holds a sign-in
+page (`https://` only), a username and a password, for a test account a
+session signs in with in its own browser. A password has to be typed into a
+page the agent drives, and the agent can read back any field it typed into,
+so no relay could keep it hidden. The design makes that disclosure explicit
+and bounded instead.
+
+The owner registers it in Settings → Account (Add login) or through
+`register_credential` with `kind: "login"`, where they paste the password
+into the session's card as with any secret. The username and sign-in page
+are metadata and are shown to teammates and agents. An ask for a login says
+that the agent will see the password, names the account and page, and
+offers only Release password or Decline. Once, standing and run approvals
+do not apply to it, and a release approval does not apply to an API
+credential.
+
+Approval mints a single-use `release` grant for the asking session, valid
+for one hour. `use_login` spends it and writes the password to a fresh 0700
+directory as a 0600 file in the session's scratch dir, inside the Sandbox
+for a Sandbox session, where the command receives it through its
+environment rather than its arguments. The tool result carries the sign-in
+page, the username and the file path, never the password, so it stays out
+of the transcript. The file is removed after 30 minutes; a server restart
+before then leaves it until the scratch dir is swept. If the write fails,
+the grant is put back. A Runner session cannot receive a login. A login is
+never usable through `call_credential` or a scripted run. Each release is
+audited (`keychain_login_released`).
+
+Nothing stops the agent from reading the file, copying the password, or
+putting it in a transcript, commit or log despite its instructions. Treat
+every release as disclosing the password to that session, and register only
+dedicated test accounts as logins, never a person's own sign-in.
+
 **Limit: the keychain does not protect secrets from a local agent that goes
 looking for them.** The store is a 0600 file owned by the service user, and
 agent shells run as that same Unix user. On a host where that user also has
@@ -214,7 +249,8 @@ root (passwordless `sudo`, or membership in the `docker` group), anything a
 separate keychain user or process held would be readable too, including the
 server's memory. So treat everyone who can run an agent on the host as able
 to read every stored secret. What the keychain does guarantee is narrower:
-no tool, API, transcript, or prompt ever hands an agent a secret, every use
+no tool, API, transcript, or prompt ever hands an agent a secret (except a
+login's password, released to a file when its owner approves), every use
 needs the owner's approval for one session, and every call is audited. It
 prevents accidental exposure and makes use visible; it is not a barrier
 against a deliberately hostile agent. Closing that gap needs agent runs under
