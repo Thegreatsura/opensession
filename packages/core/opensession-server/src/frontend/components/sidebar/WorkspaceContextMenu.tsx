@@ -1,5 +1,6 @@
 import type { UnifiedSession, Workspace } from "../../lib/types";
-import { pinnedLane } from "../../lib/sidebar-lanes";
+import { isClaimed, ownedBy, pinnedLane } from "../../lib/sidebar-lanes";
+import { rowHasCollaborator } from "../../lib/sidebar-derived";
 import { togglePin } from "../../lib/pins";
 import { markRead, markUnread } from "../../lib/reads";
 import {
@@ -13,6 +14,7 @@ import {
   IconArchive,
   IconEye,
   IconEyeOff,
+  IconInbox,
   IconLink,
   IconMail,
   IconPencil,
@@ -33,6 +35,7 @@ interface WorkspaceContextMenuProps {
   workspace?: Workspace;
   row?: WsRow;
   pins: string[];
+  currentUser: string;
   activeSnoozeKeys: Set<string>;
   snoozes: Record<string, string>;
   hiddenRowKeys: Set<string>;
@@ -54,6 +57,7 @@ export function WorkspaceContextMenu({
   workspace,
   row,
   pins,
+  currentUser,
   activeSnoozeKeys,
   snoozes,
   hiddenRowKeys,
@@ -188,15 +192,35 @@ export function WorkspaceContextMenu({
   if (row && sessions.length > 0) {
     entries.push({ kind: "sep" });
     const hidden = hiddenRowKeys.has(row.key);
-    // One sidebar-membership action: any row you can see can be hidden, and a
-    // hidden row can be restored. Claiming a teammate's or an automation's row
-    // goes through Set status, which keeps it in your lanes.
-    entries.push({
-      kind: "item",
-      icon: hidden ? <IconEye size={20} /> : <IconEyeOff size={20} />,
-      label: hidden ? "Restore to my sidebar" : "Hide from my sidebar",
-      onClick: () => onHide(row, hidden),
-    });
+    // One sidebar-membership action, chosen by why the row is visible. A row
+    // already in your own sidebar (yours, kept, shared with you, or mentioning
+    // you) offers Hide; a row you only see through another view (Everyone, a
+    // teammate's lens) offers Keep. A hidden row offers Restore.
+    const inMySidebar =
+      sessions.some(isClaimed) ||
+      sessions.some(
+        (session) =>
+          !session.spawnedBy &&
+          !session.automation &&
+          ownedBy(session, currentUser),
+      ) ||
+      rowHasCollaborator(row, currentUser) ||
+      !!row.mention;
+    if (hidden || inMySidebar) {
+      entries.push({
+        kind: "item",
+        icon: hidden ? <IconEye size={20} /> : <IconEyeOff size={20} />,
+        label: hidden ? "Restore to my sidebar" : "Hide from my sidebar",
+        onClick: () => onHide(row, hidden),
+      });
+    } else {
+      entries.push({
+        kind: "item",
+        icon: <IconInbox size={20} />,
+        label: "Keep in sidebar",
+        onClick: () => onSetStatus(sessions, "mine"),
+      });
+    }
     entries.push({
       kind: "item",
       icon: <IconArchive size={20} />,

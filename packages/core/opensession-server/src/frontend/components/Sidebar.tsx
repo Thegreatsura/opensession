@@ -1480,6 +1480,7 @@ export const Sidebar = React.forwardRef<SidebarHandle, Props>(function Sidebar(
                 workspace={workspaceMenuWorkspace}
                 row={workspaceMenuRow}
                 pins={pins}
+                currentUser={currentUser}
                 activeSnoozeKeys={activeSnoozeKeys}
                 snoozes={snoozes}
                 hiddenRowKeys={hiddenRowKeys}
