@@ -211,55 +211,32 @@ describe("createPiRuntimeBinding", () => {
   });
 
   for (const account of [oauth, apiKey]) {
-    for (const [modelID, rates] of [
-      [
-        "gpt-6.1-sol",
-        { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
-      ],
-      [
-        "gpt-6-luna",
-        { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
-      ],
-    ] as const) {
-      test(`registers ${modelID} metadata for ${account.kind} accounts`, async () => {
-        const h = harness({ account });
-        const binding = await createPiRuntimeBinding(
-          input("openai", modelID, h),
-        );
-        const provider = account.kind === "home" ? "openai-codex" : "openai";
-        expect(binding.model.provider).toBe(provider);
-        expect(binding.usesOpenaiOAuth).toBe(account.kind === "home");
-        const registration = h.calls.find(
-          ([name]) => name === "registerProvider",
-        );
-        expect(registration?.[1]).toBe(provider);
-        expect(registration?.[2].models).toEqual([
-          expect.objectContaining({
-            id: modelID,
-            reasoning: true,
-            input: ["text", "image"],
-            contextWindow: 1_050_000,
-            maxTokens: 128_000,
-            thinkingLevelMap: { xhigh: "xhigh", max: "max", minimal: "low" },
-            cost: {
-              ...rates,
-              tiers: [
-                {
-                  inputTokensAbove: 272_000,
-                  input: rates.input * 2,
-                  output: rates.output * 1.5,
-                  cacheRead: rates.cacheRead * 2,
-                  cacheWrite: rates.cacheWrite * 2,
-                },
-              ],
-            },
-          }),
-        ]);
-      });
-    }
+    test(`registers fallback metadata for an uncatalogued model on ${account.kind} accounts`, async () => {
+      const h = harness({ account });
+      const binding = await createPiRuntimeBinding(
+        input("openai", "gpt-future", h),
+      );
+      const provider = account.kind === "home" ? "openai-codex" : "openai";
+      expect(binding.model.provider).toBe(provider);
+      expect(binding.usesOpenaiOAuth).toBe(account.kind === "home");
+      const registration = h.calls.find(
+        ([name]) => name === "registerProvider",
+      );
+      expect(registration?.[1]).toBe(provider);
+      expect(registration?.[2].models).toEqual([
+        expect.objectContaining({
+          id: "gpt-future",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 272_000,
+          maxTokens: 128_000,
+          thinkingLevelMap: { xhigh: "xhigh", max: "max", minimal: "low" },
+        }),
+      ]);
+    });
   }
 
-  test("the bundled Pi runtime resolves GPT-6.1 Sol and Luna for both account types", async () => {
+  test("the bundled Pi catalog prices GPT-6.1 Sol and Luna for both account types", async () => {
     for (const account of [oauth, apiKey]) {
       for (const modelID of ["gpt-6.1-sol", "gpt-6-luna"]) {
         const h = harness({ account });
@@ -273,7 +250,7 @@ describe("createPiRuntimeBinding", () => {
             ? "openai-codex-responses"
             : "openai-responses",
         );
-        expect(binding.model.contextWindow).toBe(1_050_000);
+        expect(binding.model.contextWindow).toBe(272_000);
         expect(binding.model.maxTokens).toBe(128_000);
         expect(binding.model.thinkingLevelMap?.max).toBe("max");
         expect(binding.model.cost.input).toBe(

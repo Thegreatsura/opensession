@@ -1494,9 +1494,11 @@ const CONTEXT_WINDOWS: Record<string, number> = {
   "claude-sonnet-5": 1_000_000,
   "claude-sonnet-4-6": 1_000_000,
   "claude-haiku-4-5": 200_000,
-  "gpt-6.1-sol": 1_050_000,
-  "gpt-6-sol": 1_050_000,
-  "gpt-6-luna": 1_050_000,
+  // Pi's catalog caps GPT-6 at 272K (the long-context price tier starts
+  // there), so the engine compacts at that ceiling.
+  "gpt-6.1-sol": 272_000,
+  "gpt-6-sol": 272_000,
+  "gpt-6-luna": 272_000,
   // Older Codex/GPT — approximate.
   "gpt-5.5": 400_000,
   "gpt-5.4": 400_000,

@@ -500,7 +500,9 @@ describe("buildPiThirdPartyProviderPlan", () => {
       api: "openai-completions",
       baseUrl: "https://pass.wafer.ai/v1",
     });
-    const models = plan.config.models as Array<Record<string, unknown>>;
+    const models = plan.config.models as unknown as Array<
+      Record<string, unknown>
+    >;
     const ids = models.map((m) => m.id);
     expect(ids).toContain("deepseek-v4-flash-0731-fast");
     expect(ids).toContain("kimi-k3");
@@ -580,7 +582,9 @@ describe("buildPiThirdPartyProviderPlan", () => {
       builtinModelIds: ["gpt-oss-120b"],
     });
     if ("error" in plan) throw new Error(plan.error);
-    const models = plan.config.models as Array<Record<string, unknown>>;
+    const models = plan.config.models as unknown as Array<
+      Record<string, unknown>
+    >;
     expect(models).toHaveLength(1);
     expect(models[0]).toMatchObject({
       id: "brand-new-model",
@@ -1410,7 +1414,10 @@ describe("runPi pi/openai account wiring (fake engine, no network)", () => {
         // Subscription traffic skips the experimental ChatGPT WebSocket, whose
         // mid-stream 1006 failures otherwise force a visible whole-step retry.
         // The API-key rotation still uses Pi's ordinary provider defaults.
-        expect(transportSettings).toEqual([{ transport: "sse" }, {}]);
+        expect(transportSettings).toEqual([
+          { cacheWarming: "off", transport: "sse" },
+          { cacheWarming: "off" },
+        ]);
         expect(events.filter((event) => event.type === "init")).toHaveLength(2);
         expect(events.filter((event) => event.type === "error")).toHaveLength(
           0,

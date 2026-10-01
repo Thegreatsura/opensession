@@ -304,7 +304,9 @@ describe("buildPiThirdPartyProviderPlan with configured providers", () => {
       builtinModelIds: [],
     });
     if ("error" in plan) throw new Error(plan.error);
-    const models = plan.config.models as Array<Record<string, unknown>>;
+    const models = plan.config.models as unknown as Array<
+      Record<string, unknown>
+    >;
     expect(models.filter((m) => m.id === "glm-5.2")).toHaveLength(1);
     expect(models.find((m) => m.id === "glm-5.2")?.maxTokens).toBe(4096);
     expect(plan.config.baseUrl).toBe("https://pass.wafer.ai/v1");

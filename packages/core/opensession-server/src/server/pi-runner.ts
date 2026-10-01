@@ -2877,9 +2877,15 @@ async function* runPiAttempt(
     // it keeps the same session prompt-cache key without the fragile persistent
     // socket. Raw OpenAI API keys use Pi's ordinary provider and retain its
     // default transport selection.
-    const settingsManager = sdk.SettingsManager.inMemory(
-      binding.usesOpenaiOAuth ? { transport: "sse" } : {},
-    );
+    //
+    // Pi's prompt-cache warming (on by default since 0.86) replays the last
+    // request with a one-token cap during long tool runs. Keep it off: the
+    // in-process Anthropic provider would run each replay as a full Claude
+    // Agent SDK turn, and subscription accounts would spend quota on it.
+    const settingsManager = sdk.SettingsManager.inMemory({
+      cacheWarming: "off",
+      ...(binding.usesOpenaiOAuth ? { transport: "sse" as const } : {}),
+    });
     const workspaceRoot = resolve(context.dir);
     const loader = new sdk.DefaultResourceLoader({
       cwd: context.dir,
