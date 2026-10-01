@@ -56,6 +56,7 @@ final class SandboxOfferingTests: XCTestCase {
         XCTAssertEqual(SandboxOffering.label(SandboxOffering.host), "This machine")
         XCTAssertEqual(SandboxOffering.label("daytona"), "Daytona")
         XCTAssertEqual(SandboxOffering.label("e2b"), "E2B")
+        XCTAssertEqual(SandboxOffering.label("usecomputer"), "use.computer")
         XCTAssertEqual(SandboxOffering.label("lambda-microvm"), "AWS Lambda MicroVM")
         // An id this build has never heard of still reads as something.
         XCTAssertEqual(SandboxOffering.label("nitro"), "nitro")

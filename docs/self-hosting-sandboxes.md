@@ -9,13 +9,14 @@ Portals, and the conversation intact. Companion to
 [`deploy/sandbox/README.md`](../deploy/sandbox/README.md) (the base runtime) and
 [repo-lifecycle.md](repo-lifecycle.md) (what a repository commits).
 
-**Default = This machine.** The new-session menu offers one choice, **Run in:
-This machine or Sandbox**. Which provider backs "Sandbox" is the workspace's
-decision (Workspace → Sandboxes), never the person creating the session. A
-workspace or personal default can make Sandbox the norm, and a project can be
-pinned under **Workspace → Sandboxes → Projects** so every new session on it
-starts in a Sandbox whatever the workspace or person chose; that is how a
-repository's app always runs in a Sandbox Portal rather than on this server.
+**Default = This machine.** The new-session menu's **Machine** row offers
+This machine plus every Ready Sandbox provider by name (Boat, Daytona,
+use.computer, Mac VM), each with a line saying whether it is Linux or a Mac.
+The workspace or personal default is marked there and can make a Sandbox the
+norm, and a project can be pinned under **Workspace → Sandboxes → Projects** so
+every new session on it starts in a Sandbox whatever the workspace or person
+chose; that is how a repository's app always runs in a Sandbox Portal rather
+than on this server.
 Precedence is project, then personal, then workspace; a per-session choice
 always wins.
 
