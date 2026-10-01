@@ -318,6 +318,16 @@ await new Promise(() => {});`,
     });
   });
 
+  test("two concurrent starts cannot both claim one grant", async () => {
+    const cred = credential();
+    const command = script("twice.ts", "console.log(1)");
+    grantRun(cred.id, command);
+    const [a, b] = await Promise.all([start(command), start(command)]);
+    expect(["error" in a, "error" in b].sort()).toEqual([false, true]);
+    const run = "run" in a ? a.run : "run" in b ? b.run : undefined;
+    await runs.waitForCredentialRun(run!.id, 30_000);
+  });
+
   test("a run times out", async () => {
     const cred = credential();
     const command = script("slow.ts", "await new Promise(() => {});");

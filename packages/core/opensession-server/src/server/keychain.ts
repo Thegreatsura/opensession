@@ -51,7 +51,7 @@ import { stateDir } from "./paths";
 import { existsSync, readFileSync, chmodSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { writeJsonAtomic, writeJsonAtomicAsync } from "./shared/atomic-write";
-import { audit } from "./audit";
+import { audit, auditAsync } from "./audit";
 import { resolveTeammate } from "./shared/user-mappings";
 import {
   cancelAsk,
@@ -715,31 +715,46 @@ function ceilingRefusal(
   return null;
 }
 
+/** Active and not past its expiry, without settling (and so persisting)
+ *  anything. The scripted-run paths run on the gateway thread. */
+function liveNow(gr: KeychainGrant): boolean {
+  return (
+    gr.status === "active" && Date.now() <= new Date(gr.expiresAt).getTime()
+  );
+}
+
 /**
  * Claim this session's approved run grant for a credential to start one run
  * of `command`. The command must be the one the owner approved, character
  * for character. The grant then lives until the run's deadline and cannot
- * start a second run.
+ * start a second run. The claim is made in memory before the store is
+ * written, so two concurrent starts cannot both take one grant; if the
+ * write fails, the claim is undone. Never blocks on the filesystem.
  */
-export function claimRunGrant(input: {
+export async function claimRunGrant(input: {
   sessionId: string;
   credential: string;
   command: string;
   runId: string;
   deadline: number;
-}):
+}): Promise<
   | { grant: KeychainGrant; credential: KeychainCredentialMeta }
-  | { error: string } {
+  | { error: string }
+> {
+  await ensureKeychainLoaded();
   const credMeta = findCredential(input.credential);
   if (!credMeta)
     return { error: `no credential matches "${input.credential}"` };
-  const runGrants = listGrants({ sessionId: input.sessionId }).filter(
-    (gr) =>
-      gr.credentialId === credMeta.id &&
-      gr.mode === "run" &&
-      gr.status === "active" &&
-      !gr.runId,
-  );
+  const runGrants = [...grants.values()]
+    .filter(
+      (gr) =>
+        gr.sessionId === input.sessionId &&
+        gr.credentialId === credMeta.id &&
+        gr.mode === "run" &&
+        liveNow(gr) &&
+        !gr.runId,
+    )
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   if (!runGrants.length)
     return {
       error: `this session holds no approved scripted run for ${credMeta.service}. Ask its owner with request_credential({ credential, purpose, run: { command, maxCalls } }) first`,
@@ -749,11 +764,21 @@ export function claimRunGrant(input: {
     return {
       error: `the owner approved a different command (${runGrants.map((g) => JSON.stringify(g.run?.command)).join(", ")}). Run exactly that, or ask again for this one`,
     };
+  const startExpiry = gr.expiresAt;
   gr.runId = input.runId;
   gr.expiresAt = new Date(input.deadline).toISOString();
   grants.set(gr.id, gr);
-  persist();
-  audit({
+  try {
+    await persistAsync();
+  } catch (error) {
+    if (gr.runId === input.runId) {
+      delete gr.runId;
+      gr.expiresAt = startExpiry;
+    }
+    console.error("[keychain] failed to save a run claim:", error);
+    return { error: "couldn't write the keychain store" };
+  }
+  auditAsync({
     kind: "keychain_run_started",
     grant_id: gr.id,
     run_id: input.runId,
@@ -780,24 +805,31 @@ export function useRunGrant(
   const gr = grants.get(grantId);
   if (!gr || gr.mode !== "run" || gr.runId !== runId)
     return { error: "unknown run", status: 403 };
-  settleExpiry(gr);
-  if (gr.status !== "active")
-    return { error: `the run's grant is ${gr.status}`, status: 403 };
+  // Checked, not settled: settling persists, and this runs per call on the
+  // gateway thread. The run's own deadline timer ends it and settles the
+  // grant asynchronously.
+  if (!liveNow(gr))
+    return {
+      error: `the run's grant is ${gr.status === "active" ? "expired" : gr.status}`,
+      status: 403,
+    };
   const cred = credentials.get(gr.credentialId);
   if (!cred) return { error: "credential no longer exists", status: 403 };
   const refusal = ceilingRefusal(cred, method, path);
   return refusal ? { error: refusal, status: 403 } : { credential: cred };
 }
 
-/** Close a run's grant when the run ends. */
-export function settleRunGrant(grantId: string, runId: string): void {
-  load();
+/** Close a run's grant when the run ends, without blocking on the store. */
+export async function settleRunGrant(
+  grantId: string,
+  runId: string,
+): Promise<void> {
   const gr = grants.get(grantId);
   if (!gr || gr.runId !== runId || gr.status !== "active") return;
   gr.status = "used";
   gr.usedAt = new Date().toISOString();
   grants.set(gr.id, gr);
-  persist();
+  await persistAsync();
 }
 
 /**

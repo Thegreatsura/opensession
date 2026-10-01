@@ -120,6 +120,8 @@ interface Run extends CredentialRunSummary {
   child?: ChildProcess;
   log?: FileHandle;
   timer?: ReturnType<typeof setTimeout>;
+  /** Set when finish() starts, since it awaits before setting endedAt. */
+  finishing?: boolean;
   deps: Required<RunDeps>;
 }
 
@@ -174,7 +176,7 @@ export async function startCredentialRun(
 
   const id = `kr-${crypto.randomUUID()}`;
   const deadline = Date.now() + minutes * 60_000;
-  const claim = claimRunGrant({
+  const claim = await claimRunGrant({
     sessionId: input.sessionId,
     credential: input.credential,
     command: input.command,
@@ -308,6 +310,7 @@ function summary(run: Run): CredentialRunSummary {
     child: _child,
     log: _log,
     timer: _timer,
+    finishing: _finishing,
     deps: _deps,
     ...rest
   } = run;
@@ -325,14 +328,17 @@ function end(run: Run, state: Exclude<RunState, "running" | "exited">): void {
 }
 
 async function finish(run: Run, state: RunState): Promise<void> {
-  if (run.endedAt) return;
+  if (run.finishing) return;
+  run.finishing = true;
   run.state = state;
   if (run.timer) clearTimeout(run.timer);
   closeProxy(run);
   // The script is done. Anything it left running in the background has lost
   // the proxy with it, and is told to stop.
   signalGroup(run, "SIGTERM");
-  settleRunGrant(run.grantId, run.id);
+  await settleRunGrant(run.grantId, run.id).catch((error) =>
+    console.error("[keychain] failed to settle a run's grant:", error),
+  );
   run.deps.audit({
     kind: "keychain_run_ended",
     run_id: run.id,
