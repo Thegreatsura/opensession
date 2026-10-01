@@ -17,6 +17,7 @@ import { configuredIntegration, configuredServer, productName } from "./config";
 import { teamDirectory, type DirectoryPerson } from "./people";
 import { stateDir } from "./paths";
 import { findSessionAsync } from "./session-cache";
+import { getWorkspace } from "./workspaces";
 import { transcript } from "./actor-transcript";
 import { isWithinUploads, stagedImageRef } from "./uploads";
 import type { TranscriptEntry, UnifiedSession } from "./types";
@@ -91,15 +92,27 @@ function samePerson(person: DirectoryPerson, ref: string): boolean {
     .some((value) => value!.toLowerCase() === key);
 }
 
-export function sessionCardTitle(session: UnifiedSession): { title: string } {
-  const sessionTitle = clean(session.title) || session.id;
-  return { title: sessionTitle };
+/**
+ * A shared link is titled after the workspace it opens into, which is the
+ * name people know the work by. A standalone session, or one whose workspace
+ * no longer resolves, keeps its own title.
+ */
+export async function sessionCardTitle(
+  session: UnifiedSession,
+): Promise<{ title: string }> {
+  if (session.workspaceId) {
+    const workspace = await getWorkspace(session.workspaceId).catch(() => null);
+    const workspaceTitle =
+      clean(workspace?.name) || clean(session.workspaceName);
+    if (workspaceTitle) return { title: workspaceTitle };
+  }
+  return { title: clean(session.title) || session.id };
 }
 
-function sessionSocialCardBaseData(
+async function sessionSocialCardBaseData(
   session: UnifiedSession,
-): SessionSocialCardData {
-  const heading = sessionCardTitle(session);
+): Promise<SessionSocialCardData> {
+  const heading = await sessionCardTitle(session);
   const ownerRef =
     clean(session.createdBy || session.startedBy) || productName();
   const person = teamDirectory().find((candidate) =>
@@ -116,7 +129,7 @@ export async function sessionSocialCardData(
   session: UnifiedSession,
   options: { includeShot?: boolean } = {},
 ): Promise<SessionSocialCardData> {
-  const base = sessionSocialCardBaseData(session);
+  const base = await sessionSocialCardBaseData(session);
   const shots = options.includeShot ? await sessionShotPaths(session) : [];
   return { ...base, ...(shots.length ? { shots } : {}) };
 }
@@ -617,12 +630,12 @@ function replaceMeta(htmlSource: string, key: string, value: string): string {
   return htmlSource.replace(pattern, `$1${html(value)}$2`);
 }
 
-export function sessionHtmlWithSocialMeta(
+export async function sessionHtmlWithSocialMeta(
   htmlSource: string,
   session: UnifiedSession,
   pathname: string,
-): string {
-  const data = sessionSocialCardBaseData(session);
+): Promise<string> {
+  const data = await sessionSocialCardBaseData(session);
   const image = sessionSocialCardUrl(session.id);
   const page = `${configuredServer().publicBaseUrl.replace(/\/+$/, "")}${pathname}`;
   const documentTitle = `${data.title} · ${productName()}`;
