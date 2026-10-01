@@ -385,7 +385,7 @@ const sessionSpaEntry = (() => {
     const session = id ? await findSessionAsync(id) : undefined;
     return new Response(
       session
-        ? sessionHtmlWithSocialMeta(bundle.indexHtml, session, pathname)
+        ? await sessionHtmlWithSocialMeta(bundle.indexHtml, session, pathname)
         : bundle.indexHtml,
       { headers: SPA_HEADERS },
     );

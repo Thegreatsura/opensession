@@ -377,7 +377,7 @@ describe("session social card", () => {
 <meta name="twitter:title" content="Open Session" />
 <meta name="twitter:image" content="/icon.png" />
 </head>`;
-    const output = sessionHtmlWithSocialMeta(
+    const output = await sessionHtmlWithSocialMeta(
       source,
       session(),
       "/session/sess-social-1",

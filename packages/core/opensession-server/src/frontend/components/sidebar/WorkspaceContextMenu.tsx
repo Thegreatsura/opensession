@@ -1,5 +1,6 @@
 import type { UnifiedSession, Workspace } from "../../lib/types";
-import { isClaimed, ownedBy, pinnedLane } from "../../lib/sidebar-lanes";
+import { isClaimed, pinnedLane } from "../../lib/sidebar-lanes";
+import { rowBelongsToPerson } from "../../lib/sidebar-derived";
 import { togglePin } from "../../lib/pins";
 import { markRead, markUnread } from "../../lib/reads";
 import {
@@ -123,17 +124,6 @@ export function WorkspaceContextMenu({
     });
   }
 
-  // One sidebar-membership action, never two that contradict each other: a
-  // hidden row offers Restore, a row that is already yours (started by you or
-  // claimed) offers Hide, and a row that is only passing through offers Keep.
-  const rowClaimed = sessions.some((session) => isClaimed(session));
-  const rowNaturallyInSidebar = sessions.some(
-    (session) =>
-      !session.spawnedBy &&
-      !session.automation &&
-      ownedBy(session, currentUser),
-  );
-
   entries.push({
     kind: "item",
     icon: <IconPin size={20} fill={pinned ? "currentColor" : "none"} />,
@@ -202,7 +192,15 @@ export function WorkspaceContextMenu({
   if (row && sessions.length > 0) {
     entries.push({ kind: "sep" });
     const hidden = hiddenRowKeys.has(row.key);
-    if (hidden || rowNaturallyInSidebar || rowClaimed) {
+    // One sidebar-membership action. A row your own sidebar already holds
+    // (the same test the "me" lens uses) offers Hide; a row you only see
+    // because it is open or through another view offers Keep. A hidden row
+    // offers Restore.
+    const inMySidebar = rowBelongsToPerson(row, currentUser, {
+      currentUser,
+      isClaimed,
+    });
+    if (hidden || inMySidebar) {
       entries.push({
         kind: "item",
         icon: hidden ? <IconEye size={20} /> : <IconEyeOff size={20} />,

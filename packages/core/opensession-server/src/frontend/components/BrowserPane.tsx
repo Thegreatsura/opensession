@@ -23,6 +23,7 @@ import {
   freshFrameHistory,
 } from "../lib/frame-history";
 import { useFrameFocus } from "../hooks/useFrameFocus";
+import { useFrameLocation } from "../hooks/useFrameLocation";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { PageLoader } from "../ui/page-loader";
@@ -98,9 +99,11 @@ function OwnedBrowserPane({
   sandbox,
 }: BrowserPaneProps) {
   // The frame's own navigation is cross-origin and invisible to us, so the
-  // address bar tracks what this pane loaded: the given URL, or one typed in.
+  // address bar tracks what this pane loaded (the given URL, or one typed in)
+  // until the page reports where it went (frame-location.ts).
   const [base, setBase] = useState(url);
   const [address, setAddress] = useState(url);
+  const [reported, setReported] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [loading, setLoading] = useState(true);
   const [history, setHistory] = useState(() => freshFrameHistory(0));
@@ -110,15 +113,18 @@ function OwnedBrowserPane({
     () => setHistory(frameEntered),
     () => setHistory((h) => frameReturned(h, window.history.length)),
   );
+  useFrameLocation(frameRef, setReported);
   if (base !== url) {
     setBase(url);
     setAddress(url);
+    setReported(null);
     setLoading(true);
     setHistory((h) => freshFrameHistory(h.length));
   }
 
   function load(next: string) {
     setAddress(next);
+    setReported(null);
     setLoading(true);
     setHistory((h) => freshFrameHistory(h.length));
     setReloadNonce((nonce) => nonce + 1);
@@ -136,7 +142,7 @@ function OwnedBrowserPane({
     <div className={BROWSER_PANE}>
       <BrowserToolbar
         name={name}
-        address={address}
+        address={reported ?? address}
         history={history}
         onLoad={load}
         onStep={(delta, length) =>
@@ -194,7 +200,7 @@ function KeptBrowserPane({
     <div className={BROWSER_PANE}>
       <BrowserToolbar
         name={name}
-        address={frame?.url === url ? frame.address : url}
+        address={frame?.url === url ? (frame.location ?? frame.address) : url}
         history={frame?.url === url ? frame.history : undefined}
         onLoad={(next) => loadKeptFrame(key, next)}
         onStep={(delta, length) => keptFrameStepped(key, delta, length)}

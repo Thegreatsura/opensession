@@ -46,7 +46,8 @@ import type { Subprocess } from "bun";
 import { writeJsonAtomic } from "./shared/atomic-write";
 import { audit } from "./audit";
 import { stateDir } from "./paths";
-import { workloadArgv } from "./workload-scope";
+import { workloadArgv, workloadScopingActive } from "./workload-scope";
+import { stopUserScopeAndWait } from "./systemd-scopes";
 
 const DEPLOYS_DIR = stateDir("deploys");
 const REGISTRY = join(DEPLOYS_DIR, "registry.json");
@@ -201,9 +202,21 @@ function noteCrash(id: string): void {
  * SIGKILL after a grace period is what makes "stopped" mean stopped for an app
  * that ignores SIGTERM.
  */
+/** Each app runs in a stable, per-app workload scope. A scope outlives the
+ *  gateway that started it, so after a handoff the new gateway holds no pid
+ *  for the app; stopping the scope by name still reaches it. Without this the
+ *  boot relaunch died on EADDRINUSE while the old process kept serving. */
+function appScopeUnit(id: string): string {
+  return `opensession-app-${id.replace(/[^A-Za-z0-9-]/g, "-")}`;
+}
+
+async function stopAppScope(id: string): Promise<void> {
+  if (workloadScopingActive()) await stopUserScopeAndWait(appScopeUnit(id));
+}
+
 async function killProcess(id: string, graceMs = 3_000): Promise<void> {
   const proc = procs.get(id);
-  if (!proc) return;
+  if (!proc) return stopAppScope(id);
   procs.delete(id);
   intentionalKills.add(proc);
   try {
@@ -215,13 +228,14 @@ async function killProcess(id: string, graceMs = 3_000): Promise<void> {
     proc.exited.then(() => true),
     new Promise<false>((r) => setTimeout(() => r(false), graceMs).unref?.()),
   ]);
-  if (exited) return;
+  if (exited) return stopAppScope(id);
   try {
     proc.kill("SIGKILL");
     await proc.exited;
   } catch {
     // nothing left to signal
   }
+  await stopAppScope(id);
 }
 
 /**
@@ -262,7 +276,9 @@ export async function launchDeploy(
     // is exactly how "stopped" apps stayed up. publishDeploy rejects compound
     // entrypoints so exec always applies.
     proc = Bun.spawn(
-      workloadArgv(["/bin/sh", "-c", `exec ${version.entrypoint}`], "app"),
+      workloadArgv(["/bin/sh", "-c", `exec ${version.entrypoint}`], "app", {
+        unit: appScopeUnit(id),
+      }),
       {
         cwd,
         env: {
