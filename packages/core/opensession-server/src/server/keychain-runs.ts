@@ -45,6 +45,7 @@ import {
   settleRunGrant,
   useRunGrant,
 } from "./keychain";
+import { workloadCommand } from "./workload-scope";
 
 export const DEFAULT_RUN_MINUTES = 60;
 export const MAX_RUN_MINUTES = 12 * 60;
@@ -238,7 +239,12 @@ export async function startCredentialRun(
       ...input.env,
       KEYCHAIN_PROXY_URL: run.proxyUrl,
     };
-    const child = spawn(Bun.which("bash") ?? "/bin/sh", ["-c", input.command], {
+    const shell = workloadCommand(
+      Bun.which("bash") ?? "/bin/sh",
+      ["-c", input.command],
+      "keychain-run",
+    );
+    const child = spawn(shell.command, shell.args, {
       cwd: input.cwd,
       env: env as unknown as NodeJS.ProcessEnv,
       // Its own process group, so a stop or timeout reaches what it spawned.
