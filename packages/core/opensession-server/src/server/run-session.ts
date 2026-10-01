@@ -14,6 +14,10 @@ import {
   mirrorSlackSessionReply,
   SLACK_SESSION_NOTE,
 } from "../agents/slack/session-reply";
+import {
+  startSlackTurnProgress,
+  type SlackTurnProgress,
+} from "../agents/slack/turn-progress";
 
 import { deskTextNavigation } from "./desk-text-navigation";
 import type { McpScope } from "./runner-shared";
@@ -159,7 +163,12 @@ import {
   type ImageInput,
   type TurnUsage,
 } from "./run-events";
-import type { SessionUsage, TranscriptEntry, UnifiedSession } from "./types";
+import type {
+  SessionUsage,
+  SlackReplyTarget,
+  TranscriptEntry,
+  UnifiedSession,
+} from "./types";
 import {
   findSession,
   getCachedSessions,
@@ -1605,7 +1614,7 @@ export async function runSessionPromptAndDrain(
   images?: ImageInput[],
   rawFiles?: unknown,
   contextSessions?: string[],
-  slackReplyTo?: { channel: string; threadTs: string },
+  slackReplyTo?: SlackReplyTarget,
   promptEntryId?: string,
   sourceMessageIds?: string[],
 ): Promise<void> {
@@ -2546,7 +2555,7 @@ export async function runSessionPrompt(
   images?: ImageInput[],
   rawFiles?: unknown,
   contextSessions?: string[],
-  slackReplyTo?: { channel: string; threadTs: string },
+  slackReplyTo?: SlackReplyTarget,
   promptEntryId?: string,
   sourceMessageIds?: string[],
 ): Promise<void> {
@@ -2623,7 +2632,16 @@ export async function runSessionPrompt(
     durablePromptEntryId,
     sourceMessageIds,
   );
+  // A turn answering a Slack thread shows its progress there from admission,
+  // workspace revival included, until the reply lands under it.
+  let slackProgress: SlackTurnProgress | undefined;
   try {
+    slackProgress = await startSlackTurnProgress(slackReplyTo, {
+      sessionId,
+      prompt: content,
+      linkText: findSession(sessionId)?.title,
+      continuedBy: user,
+    });
     await runSessionPromptInner(
       sessionId,
       content,
@@ -2635,6 +2653,7 @@ export async function runSessionPrompt(
       startToken,
       durablePromptEntryId,
       sourceMessageIds,
+      slackProgress,
     );
     // Sandboxes and non-standard runners may not create an active-run journal.
     // A completed turn is nevertheless a safe acknowledgement of its dispatch.
@@ -2670,6 +2689,11 @@ export async function runSessionPrompt(
     );
     throw e;
   } finally {
+    // The reply mirror already closed it on every normal path; this only
+    // settles a card whose turn threw first.
+    await slackProgress?.finish(
+      isAgentSessionCancelled(sessionId, startToken) ? "stopped" : "failed",
+    );
     forgetPlainDiscussionRun(startToken);
     finishDeskNavigation();
     unmarkSessionStarting(sessionId, startToken);
@@ -2683,10 +2707,11 @@ async function runSessionPromptInner(
   images?: ImageInput[],
   rawFiles?: unknown,
   contextSessions?: string[],
-  slackReplyTo?: { channel: string; threadTs: string },
+  slackReplyTo?: SlackReplyTarget,
   startToken?: string,
   promptEntryId?: string,
   sourceMessageIds?: string[],
+  slackProgress?: SlackTurnProgress,
 ): Promise<void> {
   const autoRetry = await retryAutoFallbackModel(sessionId);
   const session = findSession(sessionId);
@@ -3472,6 +3497,7 @@ async function runSessionPromptInner(
     })) {
     firstEventMs ??= Date.now() - turnMetricStartedAt;
     recordIncidentDeclarations(event);
+    slackProgress?.event(event);
     switch (event.type) {
       case "init":
         if (event.provider) effectiveProvider = event.provider;
@@ -3884,6 +3910,10 @@ async function runSessionPromptInner(
   // answers in that thread.
   await mirrorSlackSessionReply(slackReplyTo, {
     sessionId,
+    progress: slackProgress,
+    cancelled:
+      !!startToken &&
+      (await sessionTurnSnapshot(sessionId)).cancel?.runId === startToken,
     localMedia:
       !isAutomationSession &&
       !session.plainDiscussionId &&

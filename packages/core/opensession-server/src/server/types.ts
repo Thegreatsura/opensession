@@ -381,6 +381,15 @@ export interface SlackSessionOrigin {
   channel: string;
   threadTs: string;
   messageTs: string;
+  /** The person's own Slack text, the title of the turn's progress card. */
+  cardTitle?: string;
+}
+
+/** The Slack thread a turn answers in. `title` names its progress card. */
+export interface SlackReplyTarget {
+  channel: string;
+  threadTs: string;
+  title?: string;
 }
 
 export interface SlackSessionFile {

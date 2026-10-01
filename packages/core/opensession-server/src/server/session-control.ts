@@ -18,6 +18,7 @@ import type { SessionSpeed } from "@tellahq/opensession-protocol/session";
 import type { ImageInput } from "./run-events";
 import type {
   AutomationDescendantPolicy,
+  SlackReplyTarget,
   UnifiedSession,
   TranscriptEntry,
 } from "./types";
@@ -240,7 +241,7 @@ export interface SessionControl {
     user?: string,
     opts?: {
       busy?: "steer" | "queue";
-      slackReplyTo?: { channel: string; threadTs: string };
+      slackReplyTo?: SlackReplyTarget;
       /** Decoded images for the run/steer path. */
       images?: ImageInput[];
       /** The same images as `data:` URLs, for the queue's stored copy. */

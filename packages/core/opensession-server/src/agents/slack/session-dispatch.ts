@@ -57,7 +57,11 @@ export async function dispatchSlackSessionMessage(
       {
         busy: "queue",
         deliveryId: `slack:${message.channel}:${message.messageTs}`,
-        slackReplyTo: { channel: message.channel, threadTs: message.threadTs },
+        slackReplyTo: {
+          channel: message.channel,
+          threadTs: message.threadTs,
+          title: message.cardTitle,
+        },
         images: attachments?.images,
         imageUrls: attachments?.images.map(
           (image) => `data:${image.mediaType};base64,${image.data}`,
@@ -139,6 +143,7 @@ export async function dispatchSlackSessionMessage(
         channel: message.channel,
         threadTs: message.threadTs,
         messageTs: message.messageTs,
+        ...(message.cardTitle ? { cardTitle: message.cardTitle } : {}),
       },
     };
     // Freeze the create identity before native admission. Recovery must not

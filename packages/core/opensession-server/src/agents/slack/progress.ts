@@ -33,7 +33,8 @@ export interface ProgressTodo {
 
 export interface SlackProgressOpts {
   channel: string;
-  sessionKey: string;
+  /** The Open Session id the card reports on; its Stop button cancels it. */
+  sessionId: string;
   /** Open Session URL for this session — the header link target. */
   sessionUrl: string;
   /** Plain-text work title for the card (from the opening ask). */
@@ -43,6 +44,9 @@ export interface SlackProgressOpts {
   /** Teammate whose follow-up comment is continuing an existing session. */
   continuedBy?: string;
 }
+
+/** Action id prefix of the card's Stop button; the rest is the session id. */
+export const SESSION_STOP_ACTION = "session-stop:";
 
 /** Slack soft-limits chat.update to ~1/sec/channel. Stay just above that. */
 const MIN_EDIT_INTERVAL_MS = 1100;
@@ -187,7 +191,7 @@ export class SlackProgress {
   private stopRow(): any {
     return {
       type: "actions",
-      block_id: `stop-${this.o.sessionKey}-${this.iter}`,
+      block_id: `stop-${this.o.sessionId}-${this.iter}`,
       elements: [
         {
           type: "button",
@@ -197,8 +201,8 @@ export class SlackProgress {
             emoji: true,
           },
           style: "danger",
-          action_id: `stop:${this.o.sessionKey}`,
-          value: this.o.sessionKey,
+          action_id: `${SESSION_STOP_ACTION}${this.o.sessionId}`,
+          value: this.o.sessionId,
         },
       ],
     };
@@ -301,8 +305,8 @@ export class SlackProgress {
   private taskCard(status: "in_progress" | "complete" | "error"): any {
     const card: any = {
       type: "task_card",
-      task_id: `task-${this.o.sessionKey}`,
-      block_id: `task-${this.o.sessionKey}-${this.iter}`,
+      task_id: `task-${this.o.sessionId}`,
+      block_id: `task-${this.o.sessionId}-${this.iter}`,
       title: this.o.title,
       status,
     };

@@ -64,3 +64,34 @@ test("non-Slack turns have no Slack side effect", async () => {
   expect(localReads).toBe(0);
   expect(replies).toEqual([]);
 });
+
+test("the turn's progress card closes before the reply, with its outcome", async () => {
+  const outcomes: string[] = [];
+  const progress = {
+    event() {},
+    async finish(outcome: string) {
+      outcomes.push(outcome);
+      replies.push(`card:${outcome}`);
+    },
+  };
+  await mirrorSlackSessionReply(target, {
+    sessionId: "os-done",
+    assistantText: "Answer",
+    progress: progress as any,
+  });
+  await mirrorSlackSessionReply(target, {
+    sessionId: "os-failed",
+    assistantText: "",
+    error: "boom",
+    progress: progress as any,
+  });
+  await mirrorSlackSessionReply(target, {
+    sessionId: "os-stopped",
+    assistantText: "",
+    cancelled: true,
+    progress: progress as any,
+  });
+  expect(outcomes).toEqual(["done", "failed", "stopped"]);
+  expect(replies[0]).toBe("card:done");
+  expect(replies[1]).toBe("Answer");
+});

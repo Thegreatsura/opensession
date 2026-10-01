@@ -56,6 +56,8 @@ import {
 import { enqueueMessage, getOrCreateQueue } from "./queue";
 import { cancelSession } from "./cancel";
 import { cancelAgentRun } from "../../server/agent-runner";
+import { tryGetSessionControl } from "../../server/session-control";
+import { SESSION_STOP_ACTION } from "./progress";
 import { worktreePathFor } from "../../server/worktree";
 import { handleReportFixAction } from "./report-actions";
 import {
@@ -371,7 +373,46 @@ export async function dispatchSlackInteractive(payload: any): Promise<void> {
       return;
     }
 
-    // Stop button — cancel the running session
+    // Stop on a session turn's progress card. A cancelled turn closes its
+    // own card; only a card no run owns any more is settled here.
+    if (actionId.startsWith(SESSION_STOP_ACTION)) {
+      const sessionId = actionId.slice(SESSION_STOP_ACTION.length);
+      const control = tryGetSessionControl();
+      const didCancel = control
+        ? await control.cancelSession(sessionId)
+        : false;
+      const msgChannel = payload.channel?.id;
+      const msgTs = payload.message?.ts;
+      if (!didCancel && msgTs && msgChannel) {
+        // No turn left to close it (a restart ended it): collapse the card.
+        const keptBlocks = (payload.message?.blocks || [])
+          .filter((b: any) => b.type !== "actions")
+          .map((b: any) =>
+            b.type === "task_card"
+              ? {
+                  type: "task_card",
+                  task_id: b.task_id,
+                  block_id: `${b.block_id}-x`,
+                  title: b.title,
+                  status: "error",
+                }
+              : b,
+          );
+        keptBlocks.push({
+          type: "context",
+          elements: [{ type: "mrkdwn", text: "_Nothing to stop_" }],
+        });
+        await updateSlackBlocks(
+          msgChannel,
+          msgTs,
+          "Nothing to stop",
+          keptBlocks,
+        );
+      }
+      return;
+    }
+
+    // Stop button on a legacy Slack card — cancel the running session
     if (actionId.startsWith("stop:")) {
       const sessionKey = actionId.slice("stop:".length);
       const didCancel = cancelSession(sessionKey);

@@ -6,6 +6,7 @@ import {
 import { configuredServer } from "../../server/config";
 import { splitSlackMedia } from "./media";
 import { SlackStreamer } from "./streamer";
+import type { SlackTurnProgress } from "./turn-progress";
 
 /** Transport instructions only. Workspace/publication policy comes from the
  * ordinary session, never a second Slack-specific coding prompt. */
@@ -21,8 +22,16 @@ export async function mirrorSlackSessionReply(
     error?: string | null;
     sessionId: string;
     localMedia?: boolean;
+    /** The turn's live card, closed before the reply lands under it. */
+    progress?: SlackTurnProgress;
+    cancelled?: boolean;
   },
 ): Promise<void> {
+  await result.progress
+    ?.finish(result.cancelled ? "stopped" : result.error ? "failed" : "done")
+    .catch((error) =>
+      console.warn("[slack] Could not close progress card:", error),
+    );
   if (!target) return;
   const text = result.error
     ? `Run failed: ${result.error}`

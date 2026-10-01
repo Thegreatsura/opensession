@@ -62,43 +62,6 @@ async function pinSlackSession(
   await pinForUser(user, sessionId);
 }
 
-async function postOpenSessionCard(
-  channel: string,
-  threadTs: string,
-  sessionId: string,
-): Promise<void> {
-  const result = await postSlackBlocks(
-    channel,
-    `Continuing in ${productName()}.`,
-    [
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: "*Open Session*",
-        },
-      },
-      {
-        type: "actions",
-        elements: [
-          {
-            type: "button",
-            text: {
-              type: "plain_text",
-              text: `:desktop_computer: Open in ${productName()}`,
-              emoji: true,
-            },
-            url: `${UI_BASE}/session/${encodeURIComponent(sessionId)}`,
-            action_id: `opensession:${sessionId}`,
-          },
-        ],
-      },
-    ],
-    threadTs,
-  );
-  if (!result?.ok) throw new Error(result?.error || "chat.postMessage failed");
-}
-
 async function activateLinkedSession(
   sessionId: string,
   text: string,
@@ -136,20 +99,15 @@ async function activateLinkedSession(
       imageUrls: attachments?.images.map(
         (image) => `data:${image.mediaType};base64,${image.data}`,
       ),
-      slackReplyTo: { channel, threadTs },
+      slackReplyTo: { channel, threadTs, title: text },
       deliveryId: `slack:${channel}:${messageTs}`,
     },
   );
   if (res.status === "handled") {
     await sendSlackMessage(channel, res.message, threadTs);
   } else if (res.status !== "error") {
+    // The turn posts its own progress card, session link included.
     await pinSlackSession(sessionId, slackUserId);
-    await postOpenSessionCard(channel, threadTs, sessionId).catch((e) =>
-      console.warn(
-        `[slack] Failed to post linked-session card for ${sessionId}:`,
-        e,
-      ),
-    );
   }
   return res;
 }
@@ -288,10 +246,8 @@ export async function processMessage(
       () => controller.signal.aborted && !isRestartAbort(controller.signal),
     );
     if (controller.signal.aborted) return;
+    // The turn posts its own progress card, session link included.
     await pinSlackSession(sessionId, msg.userId);
-    await postOpenSessionCard(msg.channel, msg.threadTs, sessionId).catch(
-      (error) => console.warn("[slack] Could not post session link:", error),
-    );
   } catch (error) {
     if (!controller.signal.aborted) throw error;
   } finally {

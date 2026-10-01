@@ -29,6 +29,10 @@ import {
   mirrorSlackSessionReply,
   SLACK_SESSION_NOTE,
 } from "../agents/slack/session-reply";
+import {
+  startSlackTurnProgress,
+  type SlackTurnProgress,
+} from "../agents/slack/turn-progress";
 
 import type { ServerWebSocket } from "bun";
 import { randomUUIDv7 } from "bun";
@@ -1564,6 +1568,9 @@ export async function openCreatedSession(
   // close out the stream instead of leaving the just-opened viewer spinning.
   let announced = false;
   let creationSettled = false;
+  // A session opened from Slack shows its opening turn's progress there, from
+  // workspace setup until the reply lands under it.
+  let slackProgress: SlackTurnProgress | undefined;
   let engineSessionId = "";
   let effectiveModel = spec.model;
   let selectedModel = spec.model;
@@ -1713,6 +1720,14 @@ export async function openCreatedSession(
         createdAt: spec.createdAt,
       });
       announced = true;
+      slackProgress = await startSlackTurnProgress(
+        spec.slackOrigin && {
+          channel: spec.slackOrigin.channel,
+          threadTs: spec.slackOrigin.threadTs,
+          title: spec.slackOrigin.cardTitle,
+        },
+        { sessionId: bksId, prompt: spec.titlePrompt },
+      );
       // A teammate tagged in the opening message is tagged like one in
       // any other message: the session exists now, so the badge has a row
       // to land on. Scanned from the raw prompt, never the assembled one,
@@ -2039,6 +2054,7 @@ export async function openCreatedSession(
         if (event.type === "steer_delivered" && event.steerId) {
           await acknowledgeSteerDelivery(bksId, event.steerId);
         }
+        slackProgress?.event(event);
         if (event.type === "init") {
           engineSessionId = event.sessionId || "";
           if (event.provider) effectiveProvider = event.provider;
@@ -2201,6 +2217,8 @@ export async function openCreatedSession(
     io.emit({ type: "session_status", isRunning: false });
     await mirrorSlackSessionReply(spec.slackOrigin, {
       sessionId: bksId,
+      progress: slackProgress,
+      cancelled: await openingTurnWasCancelled(),
       localMedia:
         !spec.remoteSandbox &&
         !spec.runnerTarget &&
@@ -2240,6 +2258,7 @@ export async function openCreatedSession(
     releasePendingOpening(bksId);
     if (creationSettled) {
       console.error(`[create] Post-opening follow-up failed for ${bksId}:`, e);
+      await slackProgress?.finish("failed");
       return;
     }
     if (await openingTurnWasCancelled()) {
@@ -2250,6 +2269,7 @@ export async function openCreatedSession(
         endedWithError: false,
         runFailure: null,
       });
+      await slackProgress?.finish("stopped");
       await settleCreationCancelled(
         bksId,
         creationIdentity,
@@ -2265,6 +2285,7 @@ export async function openCreatedSession(
     }
     await mirrorSlackSessionReply(spec.slackOrigin, {
       sessionId: bksId,
+      progress: slackProgress,
       assistantText: "",
       error: e instanceof Error ? e.message : String(e),
     });

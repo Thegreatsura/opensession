@@ -19,7 +19,7 @@ import { stripContext } from "./prompt-context";
 import { SESSIONS_DIR } from "./session-cache";
 import { setAppendHook } from "./transcript-store";
 import { stageFileAttachments, stageInlineImages } from "./uploads";
-import type { TranscriptEntry } from "./types";
+import type { SlackReplyTarget, TranscriptEntry } from "./types";
 import { broadcastToSession } from "./ws-hub";
 import { AUTO_CONTINUE_USER } from "./auto-continue";
 import { delegatedActorParent, isWorkerActor } from "./session-actors";
@@ -63,7 +63,7 @@ export type QueueItem = {
   contextSessions?: string[];
   /** Slack thread this message came from — the turn's reply is mirrored back
    *  there (rides the queue + persistence so a busy run can't drop it). */
-  slackReplyTo?: { channel: string; threadTs: string };
+  slackReplyTo?: SlackReplyTarget;
   /** Human composer send made while the agent was busy: held until the agent
    *  FULLY finishes (no run and no running child workers), not just until the
    *  next turn boundary. Orchestration items (worker reports, auto-continues,
