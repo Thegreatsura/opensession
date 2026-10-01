@@ -41,6 +41,8 @@ import { syncAgentSessionEngine } from "./agent-session-sync";
 import { cancelAgentWait } from "./agent-waits";
 import { runAgentHosted } from "./host-client";
 import { getRunState, transitionRunState } from "./run-state";
+import { settlePromptThrowRunState } from "./prompt-throw-settlement";
+import { retryOnKernelSaturation } from "./session-projection-executor";
 import { resolveSessionRunInputs, runAccountSpec } from "./session-run-inputs";
 import { defaultRepo } from "./config";
 import { agentAwsCredsForUntrustedRuns } from "./aws-creds";
@@ -2659,15 +2661,19 @@ export async function runSessionPrompt(
     // A completed turn is nevertheless a safe acknowledgement of its dispatch.
     await acknowledgePromptDispatch(sessionId, durablePromptEntryId);
   } catch (e) {
-    // A throw before the run registered (workspace revive, session-note
-    // build, …) would strand the FSM in "starting" forever — the wedge the
-    // run-state watchdog flags. Settle it; later throws have their own
-    // terminal transitions and are left alone.
-    if (getRunState(sessionId) === "starting")
-      await transitionRunState(sessionId, "start_failed", {
-        source: "prompt_throw",
-        error: String(e),
-      });
+    // A throw can land before registration (workspace revive, session-note
+    // build, …) or after a detached host registered but failed before its
+    // first terminal event. Settle either exact run; otherwise the owner is
+    // removed in finally while the FSM stays running until quarantine.
+    await retryOnKernelSaturation("prompt throw run-state settlement", () =>
+      settlePromptThrowRunState({
+        sessionId,
+        runKey: startToken,
+        state: getRunState(sessionId),
+        error: e,
+        transition: transitionRunState,
+      }),
+    );
     // A direct sandbox send owns the dispatch it created above, so a normal
     // start failure retires that recovery record. A queue drain passes its own
     // dispatch in and must retain it for the caller to restore atomically.
