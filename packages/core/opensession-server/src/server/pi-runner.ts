@@ -32,6 +32,7 @@ import { basename, dirname, join, resolve, sep } from "path";
 import type {
   AgentSession,
   AgentSessionEvent,
+  ExtensionFactory,
   ModelRuntime,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -157,6 +158,7 @@ import { buildPiAnthropicProvider } from "./pi-anthropic-provider";
 import {
   createPiRuntimeBinding,
   prewarmPiSdk as prewarmPiSdkBinding,
+  type PiSdk,
 } from "./pi-runtime-binding";
 import { createPiMcpBridge, type PiMcpBridge } from "./pi-mcp-bridge";
 import { controlPlaneWorkloadCommand, stopUserScope } from "./systemd-scopes";
@@ -846,6 +848,9 @@ export function piSteeringBoundaryTools(
     executionMode: "sequential",
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       if (steeringPending()) {
+        // A codemode script's call (pi ids those `<parent>/<n>`) rejects
+        // instead, so the script stops rather than reading the notice as data.
+        if (isPiNestedToolCall(toolCallId)) throw new Error(PI_STEER_TOOL_SKIP);
         return {
           content: [{ type: "text", text: PI_STEER_TOOL_SKIP }],
           details: {},
@@ -854,6 +859,46 @@ export function piSteeringBoundaryTools(
       return tool.execute(toolCallId, params, signal, onUpdate, ctx);
     },
   }));
+}
+
+/** Pi assigns `<parent id>/<n>` to calls a tool makes through
+ *  `ctx.executeTool()`, which is how codemode scripts call tools. */
+export function isPiNestedToolCall(toolCallId: string): boolean {
+  return toolCallId.includes("/");
+}
+
+export const PI_CODEMODE_TOOL = "codemode";
+
+/**
+ * Pi's codemode tool: the model writes one JavaScript script that calls the
+ * run's other tools, in parallel if it likes, and only the script's output
+ * reaches the context. Scripts run in a QuickJS sandbox with no file system
+ * or network, and can call only the run's active tools, so every call still
+ * goes through our guarded definitions and their audit. Pi registers it
+ * through an extension; intercept that registration to give it the same
+ * steering boundary as every other tool. `models: false` keeps pi's model
+ * catalog and classifier calls out of scripts.
+ */
+export function piCodemodeExtension(
+  sdk: Pick<PiSdk, "createCodemodeExtension">,
+  steeringPending: () => boolean,
+): ExtensionFactory {
+  const register = sdk.createCodemodeExtension({ mode: "on", models: false });
+  return (pi) =>
+    register(
+      new Proxy(pi, {
+        get(target, key) {
+          if (key === "registerTool") {
+            return (tool: ToolDefinition<any, any, any>) =>
+              target.registerTool(
+                piSteeringBoundaryTools([tool], steeringPending)[0]!,
+              );
+          }
+          const value = Reflect.get(target, key);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      }),
+    );
 }
 
 export function cancelPiRun(id: string): boolean {
@@ -2756,6 +2801,9 @@ async function* runPiAttempt(
       baseCustomTools,
       () => steeringBoundaryPending,
     );
+    // Codemode only orchestrates the tools above, so a run without any has
+    // nothing for a script to call.
+    const codemode = customTools.length > 0;
 
     // What the loop reads from the checkout itself (AGENTS.md, local
     // instructions, the checkout's skills). A Sandbox checkout is mirrored
@@ -2891,7 +2939,12 @@ async function* runPiAttempt(
       cwd: context.dir,
       agentDir,
       settingsManager,
+      // No discovered or built-in extensions. The one inline factory is pi's
+      // codemode tool (piCodemodeExtension).
       noExtensions: true,
+      extensionFactories: codemode
+        ? [piCodemodeExtension(sdk, () => steeringBoundaryPending)]
+        : [],
       // Pi's own skill resolution stays off, like extensions and themes. A
       // turn loads the allowlist in skill-paths.ts: what this server ships,
       // plus the session checkout's own skills, never whatever the host
@@ -3026,7 +3079,10 @@ async function* runPiAttempt(
       modelRuntime: runtime,
       model: piModel,
       ...(thinkingLevel ? { thinkingLevel } : {}),
-      tools: piToolNames(customTools),
+      tools: [
+        ...piToolNames(customTools),
+        ...(codemode ? [PI_CODEMODE_TOOL] : []),
+      ],
       customTools,
       resourceLoader: loader,
       sessionManager,
@@ -3076,21 +3132,20 @@ async function* runPiAttempt(
     // tool guidance. Record it once for the collapsed transcript-start audit
     // row. Later turns can change ambient memory, but this row deliberately
     // answers what preceded the session's initial message.
+    // The agent's tools are the declarations as sent, after codemode adds
+    // itself and appends each tool's script signature to its description.
     if (!opts.sessionId && !walk.continuation) {
-      const activeToolNames = new Set(session.getActiveToolNames());
       await logStandingContext({
         sessionId: unifiedSessionId,
         turnId: opts.promptEntryId || opts.startToken,
         source: "session-start",
         content: sessionStartContext(
           session.systemPrompt,
-          customTools
-            .filter((tool) => activeToolNames.has(tool.name))
-            .map((tool) => ({
-              name: tool.name,
-              description: tool.description,
-              parameters: tool.parameters,
-            })),
+          session.state.tools.map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters,
+          })),
         ),
       });
     }
@@ -3319,11 +3374,11 @@ async function* runPiAttempt(
     let lastAssistantRenderableBlocks = -1;
 
     // Content persistence rides message_end/compaction_end. entry_appended is
-    // deliberately unhandled: in 0.83.0 it fires ONLY for extension custom
-    // entries (dist agent-session.js emits it solely from the extension
-    // runtime's appendEntry helper) — never for messages or compactions — and
-    // this runner disables extensions, so a handler would be dead code that
-    // could double-persist against these paths if a future SDK widened it.
+    // deliberately unhandled: it fires ONLY for extension custom entries
+    // (dist agent-session.js emits it solely from the extension runtime's
+    // appendEntry helper), never for messages or compactions. The one
+    // extension here is codemode, whose `codemode-store` entries are script
+    // state for pi's own session file, not transcript content.
     const unsubscribe = session.subscribe((ev: AgentSessionEvent) => {
       try {
         switch (ev.type) {
@@ -3342,6 +3397,10 @@ async function* runPiAttempt(
           }
           case "tool_execution_start": {
             const t = ev as any;
+            // A codemode script's own calls never reach pi's transcript, so
+            // a live card for one would vanish on reload. The codemode
+            // call's card stands for them.
+            if (t.parentToolCallId) break;
             push({
               type: "tool_use",
               toolName: String(t.toolName || "tool"),
@@ -3352,6 +3411,7 @@ async function* runPiAttempt(
           }
           case "tool_execution_end": {
             const t = ev as any;
+            if (t.parentToolCallId) break;
             const { text, images } = contentToTextAndImages(t.result?.content);
             // `content`, not `result`: stream consumers read event.content
             // (run-session's stream_tool_result). 500-char preview like

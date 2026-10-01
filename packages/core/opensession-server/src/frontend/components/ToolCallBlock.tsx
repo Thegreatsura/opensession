@@ -32,6 +32,7 @@ import { tidyPath, type PathRoot } from "../lib/tidy-path";
 import {
   assetToolPath,
   canonicalToolName,
+  codemodeScript,
   formatToolDetail,
   isHiddenToolInputKey,
   mcpLabelParts,
@@ -869,8 +870,9 @@ function ToolInputDetail({
 
 /**
  * The call's input, rendered by what it is rather than as raw JSON where we
- * can: Bash as a highlighted script, Edit as a unified diff, Write as the file
- * content in the file's language. Everything else falls back to pretty JSON.
+ * can: Bash and Codemode as highlighted scripts, Edit as a unified diff,
+ * Write as the file content in the file's language. Everything else falls
+ * back to pretty JSON.
  * All variants sit on a code well (its own surface in both themes).
  */
 function toolInputNode(
@@ -886,6 +888,17 @@ function toolInputNode(
         <CodeHighlight code={command} lang="bash" />
       </div>
     );
+  }
+
+  if (toolName === "Codemode") {
+    const script = codemodeScript(inp);
+    if (script) {
+      return (
+        <div className={TOOL_CODE_WELL}>
+          <ExpandableCode code={script} lang="javascript" />
+        </div>
+      );
+    }
   }
 
   if (toolName === "Edit" || toolName === "Write") {
