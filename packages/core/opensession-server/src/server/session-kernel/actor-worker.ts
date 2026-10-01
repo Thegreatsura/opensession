@@ -123,10 +123,14 @@ export function startSessionKernelActorWorker(): void {
             command.kind === "transcript" ? false : !isReadReducer(command),
             reducerMutatesSparseProjection(command),
           );
+        // A wake acknowledgement only advances the monotonic publication
+        // cursor, so it may settle a wake left behind on a tombstoned
+        // session. Rejecting it logged the same error on every boot drain.
         if (
           command.kind === "transcript" &&
           !isReadReducer(command) &&
           command.request.op !== "delete" &&
+          command.request.op !== "ack_wake" &&
           store.isTombstoned(command.request.sessionId)
         )
           throw new Error(`Session ${command.request.sessionId} is tombstoned`);
