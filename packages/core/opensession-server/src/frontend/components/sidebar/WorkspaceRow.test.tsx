@@ -87,6 +87,7 @@ test("renders workspace row state and wires row and swipe actions", () => {
       timePreference: "off",
       shipsDirectlyToMain: false,
       pinned: true,
+      tint: null,
     },
     context: {
       editing: null,
@@ -191,6 +192,7 @@ test("a snoozed row's leading swipe wakes it instead of pinning", () => {
       timePreference: "off",
       shipsDirectlyToMain: false,
       pinned: false,
+      tint: null,
     },
     context: {
       editing: null,

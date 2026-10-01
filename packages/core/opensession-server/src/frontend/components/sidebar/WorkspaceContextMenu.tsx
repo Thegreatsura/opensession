@@ -22,6 +22,7 @@ import {
   IconTrash,
 } from "../icons";
 import { SidebarCtxMenu } from "./SidebarCtxMenu";
+import { rowColorKey, setRowColor } from "../../lib/row-colors";
 
 export interface WorkspaceMenuTarget {
   id: string;
@@ -39,6 +40,7 @@ interface WorkspaceContextMenuProps {
   activeSnoozeKeys: Set<string>;
   snoozes: Record<string, string>;
   hiddenRowKeys: Set<string>;
+  rowColors: Record<string, string>;
   onPinsChange: (pins: string[]) => void;
   onSetStatus: Props["onSetStatus"];
   onSnooze: (row: WsRow, until: string | null) => void;
@@ -61,6 +63,7 @@ export function WorkspaceContextMenu({
   activeSnoozeKeys,
   snoozes,
   hiddenRowKeys,
+  rowColors,
   onPinsChange,
   onSetStatus,
   onSnooze,
@@ -142,6 +145,14 @@ export function WorkspaceContextMenu({
       kind: "snooze",
       until: activeSnoozeKeys.has(row.key) ? (snoozes[row.key] ?? null) : null,
       onPick: (until) => onSnooze(row, until),
+    });
+  }
+
+  if (row) {
+    entries.push({
+      kind: "color",
+      current: rowColorKey(rowColors, row.key),
+      onPick: (color) => setRowColor(row.key, color),
     });
   }
 

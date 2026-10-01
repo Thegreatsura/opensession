@@ -73,7 +73,8 @@ import {
   setFilter,
   useSidebarFilter,
 } from "../lib/sidebar-filter";
-import { sortInboxByCreation } from "../lib/sidebar-inbox";
+import { sortActiveRows } from "../lib/active-order";
+import { useActiveRowDrag } from "../hooks/useActiveRowDrag";
 import { useSidebarInventory } from "../lib/sidebar-inventory";
 import { isClaimed } from "../lib/sidebar-lanes";
 import { nextRenderedSidebarItem } from "../lib/sidebar-next";
@@ -220,6 +221,7 @@ export const Sidebar = React.forwardRef<SidebarHandle, Props>(function Sidebar(
     togglePinnedKeys,
     createPinnedDrag,
   } = useSidebarDnd({ onSetStatus });
+  const activeDrag = useActiveRowDrag(isPhone);
   // Per-user workspace snoozes (row key → ISO until). An overlay like pins:
   // actively-snoozed rows park in the Snoozed section; the wake sweep below
   // prunes lapsed entries and marks their rows unread.
@@ -643,9 +645,10 @@ export const Sidebar = React.forwardRef<SidebarHandle, Props>(function Sidebar(
 
   // ── Inbox rows ──────────────────────────────────────────────────────────
   // Snoozed rows already left `focusWsRows` through placement. The remaining
-  // inbox stays stable by creation time. Pinned is an orthogonal quick-access
-  // facet, so a pinned row still keeps its primary Active/status placement.
-  const activeFocusWsRows = sortInboxByCreation(focusWsRows);
+  // inbox stays stable: creation time, newest first, until you drag rows into
+  // your own order. Pinned is an orthogonal quick-access facet, so a pinned
+  // row still keeps its primary Active/status placement.
+  const activeFocusWsRows = sortActiveRows(focusWsRows, activeDrag.order);
   // ── PR rows in the project lanes ────────────────────────────────────────
   // The retired standalone Pull-requests band dissolved into the project
   // groups: every open PR classifies into a lane (ready → Ready to merge,
@@ -961,6 +964,7 @@ export const Sidebar = React.forwardRef<SidebarHandle, Props>(function Sidebar(
     renderWsRow,
     renderWsRowImpl,
     rowIsSnoozed,
+    rowColors,
     toggleWorkspaceSnooze,
     workspaceOverlays,
   } = useSidebarWorkspaceController({
@@ -1009,6 +1013,8 @@ export const Sidebar = React.forwardRef<SidebarHandle, Props>(function Sidebar(
       workspacePinState,
       togglePinnedKeys,
       togglePinKey,
+      liftActiveRow: activeDrag.liftActiveRow,
+      endActiveLift: activeDrag.endActiveLift,
     },
     actions: {
       confirmDeleteDraft,
@@ -1053,6 +1059,7 @@ export const Sidebar = React.forwardRef<SidebarHandle, Props>(function Sidebar(
       groupBy: filter.groupBy,
       pinDragMeta,
       laneDropHover,
+      activeDrag,
       isOpen,
       onToggleGroup: toggleGroup,
       ownsSelection: rowOwnsSelection,
@@ -1484,6 +1491,7 @@ export const Sidebar = React.forwardRef<SidebarHandle, Props>(function Sidebar(
                 activeSnoozeKeys={activeSnoozeKeys}
                 snoozes={snoozes}
                 hiddenRowKeys={hiddenRowKeys}
+                rowColors={rowColors}
                 onPinsChange={replacePins}
                 onSetStatus={onSetStatus}
                 onSnooze={(row, until) =>

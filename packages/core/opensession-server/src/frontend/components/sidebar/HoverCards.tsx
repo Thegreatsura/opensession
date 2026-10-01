@@ -33,6 +33,7 @@ import {
   snoozePresets,
 } from "../../lib/snoozes";
 import { elapsedSince, fullTime } from "../../lib/time";
+import { ROW_COLORS } from "../../lib/row-colors";
 import type { UnifiedSession } from "../../lib/types";
 import { Button } from "../../ui/button";
 import { cn } from "../../ui/cn";
@@ -68,6 +69,7 @@ import {
   IconMail,
   IconMoon,
   IconPencil,
+  IconPalette,
   IconPeople,
   IconPin,
   IconPullRequest,
@@ -703,9 +705,15 @@ export function WsMobileSheet({
   onToggleRead,
   onCopyLink,
   onDelete,
+  color,
+  onSetColor,
 }: {
   row: WsCardRow;
   pinned: boolean;
+  /** The row's color swatch key, or null for none. */
+  color: string | null;
+  /** Set the row's color, or clear it with `null`. */
+  onSetColor: (color: string | null) => void;
   onTogglePin: () => void;
   onClose: () => void;
   onArchive: () => void;
@@ -731,7 +739,7 @@ export function WsMobileSheet({
   const ov = useWsOverview(row);
   const { prSession, prReady, prStatusBits } = wsPrInfo(row);
   const [page, setPage] = useState<
-    "actions" | "status" | "snooze" | "collaborators"
+    "actions" | "status" | "snooze" | "collaborators" | "color"
   >("actions");
   const anyManual = row.sessions.some((session) => pinnedLane(session));
   const firstLane = pinnedLane(row.sessions[0]) ?? null;
@@ -789,6 +797,48 @@ export function WsMobileSheet({
               sessionId={row.sessions[0]?.id}
               onBack={() => setPage("actions")}
             />
+          );
+        }
+        if (page === "color") {
+          return (
+            <>
+              <SheetPageHeader
+                title="Color"
+                onBack={() => setPage("actions")}
+              />
+              <SheetBody>
+                {ROW_COLORS.map((swatch) => (
+                  <SheetItem
+                    key={swatch.key}
+                    onClick={closing(() => onSetColor(swatch.key))}
+                  >
+                    <span className="flex size-[22px] shrink-0 items-center justify-center">
+                      <span
+                        className="size-3.5 rounded-full"
+                        style={{ background: swatch.hex }}
+                      />
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">
+                      {swatch.label}
+                    </span>
+                    <MenuCheck
+                      on={color === swatch.key}
+                      size={22}
+                      className="text-dim"
+                    />
+                  </SheetItem>
+                ))}
+                <SheetItem onClick={closing(() => onSetColor(null))}>
+                  <span className="size-[22px] shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">None</span>
+                  <MenuCheck
+                    on={color === null}
+                    size={22}
+                    className="text-dim"
+                  />
+                </SheetItem>
+              </SheetBody>
+            </>
           );
         }
         if (page === "snooze") {
@@ -942,6 +992,12 @@ export function WsMobileSheet({
                 )}
               </>
             )}
+            <SheetDrillInItem
+              icon={<IconPalette size={22} />}
+              label="Color"
+              value={ROW_COLORS.find((swatch) => swatch.key === color)?.label}
+              onClick={() => setPage("color")}
+            />
             {row.workspace && (
               <SheetDrillInItem
                 icon={<IconPeople size={22} />}
