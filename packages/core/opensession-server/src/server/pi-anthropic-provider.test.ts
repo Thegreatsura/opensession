@@ -1229,6 +1229,55 @@ describe("buildPiAnthropicProvider", () => {
     expect(piSdkSessionStore().size).toBe(0);
   });
 
+  test("reads the system prompt and tools from pi's transcript system messages", async () => {
+    designate(["transcript-account"]);
+    seedAccounts(["transcript-account"]);
+    accounts.__setUsageCacheForTest("transcript-account", freshUsage);
+    const query = spyOn(sdk, "query").mockImplementation(() => {
+      throw new Error("test SDK reached");
+    });
+    const tool = (name: string) => ({
+      name,
+      description: `${name} tool`,
+      parameters: { type: "object", properties: {} },
+    });
+    try {
+      const provider = buildPiAnthropicProvider({
+        unifiedSessionId: "os-transcript",
+        builtinModels: [model],
+      }) as any;
+      for await (const _ of provider.streamSimple(model, {
+        messages: [
+          {
+            role: "system",
+            content: "Base prompt",
+            toolsAdded: [tool("read"), tool("bash")],
+            timestamp: 0,
+          },
+          { role: "user", content: "hi" },
+          {
+            role: "system",
+            content: "Later instruction",
+            toolsAdded: [tool("codemode")],
+            toolsRemoved: [{ name: "bash" }],
+            timestamp: 1,
+          },
+        ],
+      })) {
+        // drain
+      }
+      expect(query).toHaveBeenCalledTimes(1);
+      const options = (query.mock.calls[0] as any)[0].options;
+      expect(options.systemPrompt).toBe("Base prompt\n\nLater instruction");
+      expect(options.allowedTools).toEqual([
+        expect.stringMatching(/read$/),
+        expect.stringMatching(/codemode$/),
+      ]);
+    } finally {
+      query.mockRestore();
+    }
+  });
+
   test("more than 300 requests on one account still reach the SDK", async () => {
     designate(["busy-account"]);
     seedAccounts(["busy-account"]);

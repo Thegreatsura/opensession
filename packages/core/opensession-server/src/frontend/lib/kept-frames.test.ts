@@ -6,6 +6,7 @@ import {
   getKeptFrames,
   hideKeptFrame,
   keptFrameLoaded,
+  keptFrameNavigated,
   keptFrameStepped,
   loadKeptFrame,
   resetKeptFrames,
@@ -91,4 +92,14 @@ test("closing the tab unloads its page", () => {
   showKeptFrame("staging:a", spec("https://a.example.test/"), slot());
   dropKeptFrame("staging:a");
   expect(getKeptFrame("staging:a")).toBeUndefined();
+});
+
+test("a reported location shows until the frame loads something else", () => {
+  showKeptFrame("staging:a", spec("https://a.example.test/"), slot());
+  keptFrameNavigated("staging:a", "https://a.example.test/settings");
+  expect(getKeptFrame("staging:a")!.location).toBe(
+    "https://a.example.test/settings",
+  );
+  loadKeptFrame("staging:a", "https://a.example.test/settings");
+  expect(getKeptFrame("staging:a")!.location).toBeNull();
 });

@@ -66,7 +66,12 @@ configuration for the run.
   filesystem and environment access contained. `opensession-admin`, the
   unrestricted `opensession-sessions`, and per-user (`allowedUsers`) servers
   stay out of automation runs. The scoped automation-safe set is documented
-  below. Both engine run gates are
+  below. Pi's `codemode` tool adds no authority: its scripts run in a QuickJS
+  sandbox with no file system, network, or timers, and can call only the
+  run's active tools, through the same guarded definitions, deny-sets, and
+  audit as direct calls. Pi's other built-in extensions (its own MCP client,
+  tool search, and model catalog access from scripts) stay off. Both engine
+  run gates are
   deny-by-default on journal kind: interactive kinds
   (prompt/goal/create/linear/slack), unattended kinds
   (automation/plain/action/security-scan/github-*), everything else refused.
@@ -189,10 +194,13 @@ it is a scripted run and shows the exact command and the call cap, and offers
 only Approve run or Decline. An ordinary once or standing grant cannot start
 a run, and a run grant cannot be used through `call_credential`.
 `run_with_credential` starts that command, character for character, as one
-process on the server, in the session's workspace, with a minimal environment
-and `KEYCHAIN_PROXY_URL`. That URL points at a proxy opened for this run only,
-on a loopback port, with a 32-byte random secret in its path that is compared
-in constant time. Every proxied call is checked against the grant and the
+script run (see Script runs below) on the server, in the session's workspace,
+with a minimal environment and `KEYCHAIN_PROXY_URL`. That URL points at a
+loopback port the run's script host opens for this run only, with a 32-byte
+random secret in its path. The host relays each request over the run's
+`0600` unix socket to the server, which compares the secret's SHA-256 with
+the one it stored, in constant time, and injects the credential; the host
+never holds a credential, and the secret is never written to disk. Every proxied call is checked against the grant and the
 credential's method and path ceiling, counted against the cap, and audited
 (`keychain_run_call`, `keychain_run_denied`, `keychain_run_ended`). The
 injected header, cookies and routing headers cannot be set by the script,
@@ -203,6 +211,31 @@ another run's secret, is refused. A grant starts one run. Sessions in a
 Sandbox or on a Runner cannot start one, because the proxy listens on the
 server. While a run is live, another process of the same Unix user could read
 its environment; the exposure is limited to that run's lifetime and cap.
+
+One run may use several credentials (`request_credential` with `credentials`
+and `run`), for a script that needs more than one API in the same process.
+Each credential's owner gets one message listing every credential in the
+run, its owner and its cap, and the command; an owner of several approves
+them together. The asks and grants share a group id, and
+`run_with_credential` starts the run only when a live grant from that one
+request exists for every credential: a missing approval, or approvals from
+two different requests, start nothing. A decline withdraws the other
+owners' asks. The script gets one URL per credential,
+`KEYCHAIN_PROXY_URL_<SLUG>`, each on its own port with its own secret and
+forwarding only to its own credential's host, so one credential's URL can
+never reach another's host. Method and path limits, caps and audit entries
+are per credential. All of a run's URLs close together, and revoking any of
+its grants ends the whole run.
+
+A server restart does not end a run: its script host keeps the command
+running, holds the script's requests until the server is back (a request
+cut off mid-flight is retried only for GET and HEAD), and the run's grants
+stay claimed until it ends, then settle with its call counts. A run whose
+host is gone without recording an end, or a claimed grant whose run is not
+live at boot, is marked interrupted. Such grants cannot be reused; asking
+again for the same command tells each owner that the earlier run was cut off
+and roughly how many calls it had made, and approving starts the command
+again from its beginning.
 
 The old broker URL (`/api/keychain/broker/...`) answers every caller with
 410 and names these two paths, rather than a sign-in error.

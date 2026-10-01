@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { isFlowchart, quoteFlowchartLabels } from "./mermaid-repair";
+import {
+  isFlowchart,
+  quoteErAttributes,
+  quoteFlowchartLabels,
+  repairMermaidSource,
+} from "./mermaid-repair";
 
 describe("isFlowchart", () => {
   test("flowchart and graph headers, past a leading init directive", () => {
@@ -111,5 +116,63 @@ describe("quoteFlowchartLabels", () => {
     expect(quoteFlowchartLabels("sequenceDiagram\n  A->>B: hi (there)")).toBe(
       null,
     );
+  });
+});
+
+describe("quoteErAttributes", () => {
+  test("an attribute named like a key marker, in any case", () => {
+    const src = [
+      "erDiagram",
+      "  ITEM {",
+      '    string pk "ORG#orgID"',
+      "    string sk",
+      "    string Uk PK",
+      "  }",
+    ].join("\n");
+    expect(quoteErAttributes(src)).toBe(
+      [
+        "erDiagram",
+        "  ITEM {",
+        '    string `pk` "ORG#orgID"',
+        "    string sk",
+        "    string `Uk` PK",
+        "  }",
+      ].join("\n"),
+    );
+  });
+
+  test("a type with punctuation the attribute grammar rejects", () => {
+    expect(
+      quoteErAttributes("erDiagram\n  T {\n    Vec<Track> tracks\n  }"),
+    ).toBe("erDiagram\n  T {\n    `Vec<Track>` tracks\n  }");
+  });
+
+  test("relationships and valid attributes are left alone", () => {
+    const src = [
+      "erDiagram",
+      '  A ||--o{ B : "pk to fk"',
+      "  B {",
+      "    int id PK",
+      "    string[] tags",
+      "    string `fk`",
+      "  }",
+    ].join("\n");
+    expect(quoteErAttributes(src)).toBe(null);
+  });
+
+  test("other diagram types are not ER diagrams", () => {
+    expect(quoteErAttributes("flowchart LR\n  A {\n  pk\n  }")).toBe(null);
+  });
+});
+
+describe("repairMermaidSource", () => {
+  test("routes each diagram type to its own repair", () => {
+    expect(repairMermaidSource("graph TD\n  A[f (x)]")).toBe(
+      'graph TD\n  A["f (x)"]',
+    );
+    expect(repairMermaidSource("erDiagram\n  A {\n    string fk\n  }")).toBe(
+      "erDiagram\n  A {\n    string `fk`\n  }",
+    );
+    expect(repairMermaidSource("sequenceDiagram\n  A->>B: pk")).toBe(null);
   });
 });

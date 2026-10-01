@@ -60,6 +60,7 @@ import {
 } from "../SidebarRowCards";
 import {
   IconArrowUpRight,
+  IconBranches,
   IconClock,
   IconGitMerge,
   IconInbox,
@@ -333,9 +334,11 @@ export function WsPrStatusMark({
           />
         </span>
       );
+    // A branch with no PR yet shows a branch glyph. A grey PR glyph read as
+    // a PR that exists or is missing; the PR glyph now always means a real PR.
     return (
-      <span className="flex items-center" title="No pull request">
-        <IconPullRequest size={size} className="text-faint" />
+      <span className="flex items-center" title="Branch, no pull request">
+        <IconBranches size={size} className="text-faint" />
       </span>
     );
   }
