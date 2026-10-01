@@ -66,7 +66,12 @@ configuration for the run.
   filesystem and environment access contained. `opensession-admin`, the
   unrestricted `opensession-sessions`, and per-user (`allowedUsers`) servers
   stay out of automation runs. The scoped automation-safe set is documented
-  below. Both engine run gates are
+  below. Pi's `codemode` tool adds no authority: its scripts run in a QuickJS
+  sandbox with no file system, network, or timers, and can call only the
+  run's active tools, through the same guarded definitions, deny-sets, and
+  audit as direct calls. Pi's other built-in extensions (its own MCP client,
+  tool search, and model catalog access from scripts) stay off. Both engine
+  run gates are
   deny-by-default on journal kind: interactive kinds
   (prompt/goal/create/linear/slack), unattended kinds
   (automation/plain/action/security-scan/github-*), everything else refused.

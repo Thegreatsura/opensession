@@ -156,39 +156,17 @@ class MemoryCredentialStore {
 }
 
 function openaiFallbackModel(modelID: string) {
-  // Release metadata for models not yet in the bundled Pi catalog.
-  // https://developers.openai.com/api/docs/models/gpt-6.1-sol
-  // https://developers.openai.com/api/docs/models/gpt-6-sol
-  // https://developers.openai.com/api/docs/models/gpt-6-luna
-  const rates =
-    modelID === "gpt-6.1-sol"
-      ? { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 }
-      : modelID === "gpt-6-sol"
-        ? { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 }
-        : modelID === "gpt-6-luna"
-          ? { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 }
-          : undefined;
+  // Placeholder metadata for an OpenAI model newer than the bundled Pi
+  // catalog. Catalogued models (GPT-6 Astra, Sol, 6.1 Sol, Luna) never reach
+  // this; their pricing and limits come from pi-ai.
   return {
     id: modelID,
     name: modelID,
     reasoning: true,
     thinkingLevelMap: { xhigh: "xhigh", max: "max", minimal: "low" },
     input: ["text", "image"] as Array<"text" | "image">,
-    cost: rates
-      ? {
-          ...rates,
-          tiers: [
-            {
-              inputTokensAbove: 272_000,
-              input: rates.input * 2,
-              output: rates.output * 1.5,
-              cacheRead: rates.cacheRead * 2,
-              cacheWrite: rates.cacheWrite * 2,
-            },
-          ],
-        }
-      : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: rates ? 1_050_000 : 272_000,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 272_000,
     maxTokens: 128_000,
   };
 }

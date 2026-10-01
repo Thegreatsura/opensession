@@ -187,6 +187,21 @@ test("bash, grep, find and glob summaries drop their plumbing", () => {
   );
 });
 
+test("codemode calls read as a script on one line", () => {
+  expect(canonicalToolName("codemode")).toBe("Codemode");
+  expect(toolFamily("codemode")).toBe("run");
+  expect(
+    toolSummary(
+      "codemode",
+      {
+        code: '// @options: {"timeout_ms": 60000}\nconst a = await tools.read({ path: "a.ts" });\n\nreturn a.length;',
+      },
+      "",
+      roots,
+    ),
+  ).toBe('const a = await tools.read({ path: "a.ts" }); ⏎ return a.length;');
+});
+
 test("codex patch bodies name the files they touch", () => {
   const patchText =
     "*** Begin Patch\n*** Update File: src/a.ts\n+x\n*** Add File: src/b.ts\n+y\n";

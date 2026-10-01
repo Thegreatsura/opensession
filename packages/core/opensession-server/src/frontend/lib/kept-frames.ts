@@ -33,6 +33,8 @@ export interface KeptFrame extends KeptFrameSpec {
   key: string;
   /** What the frame loaded: the pane's URL, or one typed in its address bar. */
   address: string;
+  /** Where the page says it navigated since; see frame-location.ts. */
+  location: string | null;
   /** How far Back and Forward can go; see frame-history.ts. */
   history: FrameHistory;
   /** Bumped by Reload so the frame remounts on the same address. */
@@ -114,6 +116,7 @@ export function showKeptFrame(
           ...spec,
           key,
           address: spec.url,
+          location: null,
           history: freshFrameHistory(0),
           nonce: 0,
           loading: true,
@@ -131,6 +134,7 @@ export function showKeptFrame(
       ? null
       : {
           address: spec.url,
+          location: null,
           history: freshFrameHistory(frame.history.length),
           nonce: frame.nonce + 1,
           loading: true,
@@ -152,6 +156,7 @@ export function loadKeptFrame(key: string, address: string) {
   update(key, (frame) => ({
     ...frame,
     address,
+    location: null,
     history: freshFrameHistory(frame.history.length),
     nonce: frame.nonce + 1,
     loading: true,
@@ -167,6 +172,13 @@ export function keptFrameLoaded(key: string, length: number) {
     frame.loading
       ? { ...frame, loading: false, history: freshFrameHistory(length) }
       : { ...frame, history: frameLoaded(frame.history, length) },
+  );
+}
+
+/** The page reported where it navigated. */
+export function keptFrameNavigated(key: string, location: string) {
+  update(key, (frame) =>
+    frame.location === location ? frame : { ...frame, location },
   );
 }
 
