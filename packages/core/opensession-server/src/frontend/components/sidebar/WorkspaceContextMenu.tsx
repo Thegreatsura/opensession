@@ -1,6 +1,6 @@
 import type { UnifiedSession, Workspace } from "../../lib/types";
-import { isClaimed, ownedBy, pinnedLane } from "../../lib/sidebar-lanes";
-import { rowHasCollaborator } from "../../lib/sidebar-derived";
+import { isClaimed, pinnedLane } from "../../lib/sidebar-lanes";
+import { rowBelongsToPerson } from "../../lib/sidebar-derived";
 import { togglePin } from "../../lib/pins";
 import { markRead, markUnread } from "../../lib/reads";
 import {
@@ -192,20 +192,14 @@ export function WorkspaceContextMenu({
   if (row && sessions.length > 0) {
     entries.push({ kind: "sep" });
     const hidden = hiddenRowKeys.has(row.key);
-    // One sidebar-membership action, chosen by why the row is visible. A row
-    // already in your own sidebar (yours, kept, shared with you, or mentioning
-    // you) offers Hide; a row you only see through another view (Everyone, a
-    // teammate's lens) offers Keep. A hidden row offers Restore.
-    const inMySidebar =
-      sessions.some(isClaimed) ||
-      sessions.some(
-        (session) =>
-          !session.spawnedBy &&
-          !session.automation &&
-          ownedBy(session, currentUser),
-      ) ||
-      rowHasCollaborator(row, currentUser) ||
-      !!row.mention;
+    // One sidebar-membership action. A row your own sidebar already holds
+    // (the same test the "me" lens uses) offers Hide; a row you only see
+    // because it is open or through another view offers Keep. A hidden row
+    // offers Restore.
+    const inMySidebar = rowBelongsToPerson(row, currentUser, {
+      currentUser,
+      isClaimed,
+    });
     if (hidden || inMySidebar) {
       entries.push({
         kind: "item",
