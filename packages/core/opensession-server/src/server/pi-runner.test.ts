@@ -35,7 +35,9 @@ import {
   piBashHomeEnv,
   piAssistantTranscriptEntries,
   PI_STATE_DIR,
+  PI_CODEMODE_TOOL,
   PI_STEER_TOOL_SKIP,
+  piCodemodeExtension,
   piDialOracleAgent,
   piGateReason,
   piStreamEventRequiresAccountContinuation,
@@ -128,6 +130,65 @@ describe("piSteeringBoundaryTools", () => {
     );
 
     expect(executed).toEqual(["first"]);
+    expect(skipped.content).toEqual([
+      { type: "text", text: PI_STEER_TOOL_SKIP },
+    ]);
+  });
+
+  test("rejects a codemode script's call once a steer is waiting", async () => {
+    let executed = 0;
+    const [tool] = piSteeringBoundaryTools(
+      [
+        {
+          name: "read",
+          label: "read",
+          description: "read",
+          parameters: {} as any,
+          async execute() {
+            executed++;
+            return { content: [{ type: "text", text: "ok" }], details: {} };
+          },
+        },
+      ],
+      () => true,
+    );
+    await expect(
+      tool!.execute("call-1/2", {}, undefined, undefined, {} as any),
+    ).rejects.toThrow(PI_STEER_TOOL_SKIP);
+    expect(executed).toBe(0);
+  });
+});
+
+describe("piCodemodeExtension", () => {
+  test("registers pi's codemode tool behind the steering boundary", async () => {
+    const sdk = await import("@earendil-works/pi-coding-agent");
+    let steeringPending = false;
+    const registered: any[] = [];
+    // Methods read `this`, as pi's extension API does.
+    class FakePi {
+      tools = registered;
+      registerTool(tool: any) {
+        this.tools.push(tool);
+      }
+      getSettings() {
+        return {};
+      }
+    }
+    await piCodemodeExtension(sdk, () => steeringPending)(new FakePi() as any);
+
+    expect(registered).toHaveLength(1);
+    const tool = registered[0];
+    expect(tool.name).toBe(PI_CODEMODE_TOOL);
+    expect(tool.executionMode).toBe("sequential");
+    expect(typeof tool.prepareLoadout).toBe("function");
+    steeringPending = true;
+    const skipped = await tool.execute(
+      "call-1",
+      { code: "return 1" },
+      undefined,
+      undefined,
+      {} as any,
+    );
     expect(skipped.content).toEqual([
       { type: "text", text: PI_STEER_TOOL_SKIP },
     ]);
@@ -500,7 +561,9 @@ describe("buildPiThirdPartyProviderPlan", () => {
       api: "openai-completions",
       baseUrl: "https://pass.wafer.ai/v1",
     });
-    const models = plan.config.models as Array<Record<string, unknown>>;
+    const models = plan.config.models as unknown as Array<
+      Record<string, unknown>
+    >;
     const ids = models.map((m) => m.id);
     expect(ids).toContain("deepseek-v4-flash-0731-fast");
     expect(ids).toContain("kimi-k3");
@@ -580,7 +643,9 @@ describe("buildPiThirdPartyProviderPlan", () => {
       builtinModelIds: ["gpt-oss-120b"],
     });
     if ("error" in plan) throw new Error(plan.error);
-    const models = plan.config.models as Array<Record<string, unknown>>;
+    const models = plan.config.models as unknown as Array<
+      Record<string, unknown>
+    >;
     expect(models).toHaveLength(1);
     expect(models[0]).toMatchObject({
       id: "brand-new-model",
@@ -897,7 +962,7 @@ describe("runPi pi/openai account wiring (fake engine, no network)", () => {
           sessionId: "fake-api-key",
           pendingMessageCount: 0,
           agent: { continue: async () => {} },
-          getActiveToolNames: () => [],
+          state: { tools: [] },
           setSteeringMode: () => {},
           subscribe: (fn: (event: any) => void) => {
             listener = fn;
@@ -1037,7 +1102,7 @@ describe("runPi pi/openai account wiring (fake engine, no network)", () => {
               listener({ type: "agent_settled" });
             },
           },
-          getActiveToolNames: () => [],
+          state: { tools: [] },
           getLastAssistantText: () => "done with the icon",
           setSteeringMode: () => {},
           subscribe: (fn: (event: any) => void) => {
@@ -1320,6 +1385,23 @@ describe("runPi pi/openai account wiring (fake engine, no network)", () => {
                   toolName: "bash",
                   args: { command: "do-once" },
                 });
+                // A codemode script's own call: pi never persists it, so
+                // it must not become a live card either.
+                listener({
+                  type: "tool_execution_start",
+                  toolCallId: "completed-action/1",
+                  parentToolCallId: "completed-action",
+                  toolName: "read",
+                  args: { path: "a.txt" },
+                });
+                listener({
+                  type: "tool_execution_end",
+                  toolCallId: "completed-action/1",
+                  parentToolCallId: "completed-action",
+                  toolName: "read",
+                  result: { content: [{ type: "text", text: "nested" }] },
+                  isError: false,
+                });
                 listener({
                   type: "tool_execution_end",
                   toolCallId: "completed-action",
@@ -1410,7 +1492,10 @@ describe("runPi pi/openai account wiring (fake engine, no network)", () => {
         // Subscription traffic skips the experimental ChatGPT WebSocket, whose
         // mid-stream 1006 failures otherwise force a visible whole-step retry.
         // The API-key rotation still uses Pi's ordinary provider defaults.
-        expect(transportSettings).toEqual([{ transport: "sse" }, {}]);
+        expect(transportSettings).toEqual([
+          { cacheWarming: "off", transport: "sse" },
+          { cacheWarming: "off" },
+        ]);
         expect(events.filter((event) => event.type === "init")).toHaveLength(2);
         expect(events.filter((event) => event.type === "error")).toHaveLength(
           0,
