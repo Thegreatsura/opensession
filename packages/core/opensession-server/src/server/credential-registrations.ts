@@ -27,7 +27,7 @@ import { broadcastToSession } from "./ws-hub";
 import { audit } from "./audit";
 import {
   addCredentialAsync,
-  normalizeCredentialHost,
+  credentialSpecHost,
   normalizeCredentialSpec,
   type CredentialSpec,
   type KeychainCredentialMeta,
@@ -63,7 +63,7 @@ type Pending = {
 
 /** Long enough to find a key in a provider dashboard. */
 export const CREDENTIAL_REGISTRATION_TTL_MS = 15 * 60 * 1000;
-/** Keychain secrets are API keys and tokens, not documents. */
+/** Keychain secrets are API keys, tokens and passwords, not documents. */
 export const MAX_SECRET_LENGTH = 8 * 1024;
 
 const g = globalThis as {
@@ -159,7 +159,8 @@ export function requestCredentialRegistration(
     const same =
       open.login === input.login.toLowerCase() &&
       open.request.service === input.spec.service.trim().toLowerCase() &&
-      open.request.host === normalizeCredentialHost(input.spec.host);
+      (open.request.kind ?? "api") === (input.spec.kind ?? "api") &&
+      open.request.host === credentialSpecHost(input.spec);
     if (!same)
       throw new Error(
         `this session already has an open credential request for "${open.request.service}"`,

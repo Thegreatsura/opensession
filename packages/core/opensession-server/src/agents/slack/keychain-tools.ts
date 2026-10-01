@@ -1,7 +1,7 @@
 /**
  * opensession-keychain — borrow a teammate's credential for a stated purpose.
  *
- * No tool handles secret values: list what exists, ask an owner
+ * No tool returns a secret value: list what exists, ask an owner
  * for a scoped grant, list this session's grants. Approved calls go through
  * call_credential (keychain-broker.ts), which injects the credential
  * server-side and is bound to this session, so the model never holds the
@@ -21,6 +21,12 @@
  * register_credential never takes one: the agent names the service and host,
  * the session's driver pastes the secret into a card that posts over HTTP
  * (credential-registrations.ts), and the tool gets metadata back.
+ *
+ * A login (a test account's username and password for a sign-in page) is the
+ * one secret an agent does get, because it must type it into the page. Its
+ * owner approves each release, and use_login writes the password to a
+ * short-lived file in the session's workspace (keychain-logins.ts) rather
+ * than returning it, so it stays out of the transcript.
  */
 
 import { createSdkMcpServer, tool } from "../../server/inprocess-mcp";
@@ -45,8 +51,14 @@ import {
   listKeychainAsks,
   MAX_RUN_CALLS,
   MAX_RUN_COMMAND_CHARS,
+  claimLoginRelease,
   requestCredential,
 } from "../../server/keychain";
+import {
+  writeReleasedLogin,
+  type LoginReleaseTarget,
+} from "../../server/keychain-logins";
+import { workspaceExecFor } from "../../server/sandbox/workspace-exec";
 import {
   credentialRunStatus,
   DEFAULT_RUN_MINUTES,
@@ -73,6 +85,30 @@ export interface KeychainToolContext {
       > &
         Partial<Pick<UnifiedSession, "worktreeDir" | "sandbox" | "runner">>)
     | undefined;
+  /** Test seam: where use_login writes. Defaults to the session's workspace. */
+  loginTarget?: () => Promise<LoginReleaseTarget | { error: string }>;
+}
+
+/** Where a released password must land for the agent's shell to read it. */
+async function loginTarget(
+  ctx: KeychainToolContext,
+): Promise<LoginReleaseTarget | { error: string }> {
+  if (ctx.loginTarget) return ctx.loginTarget();
+  const session = findSession(ctx.sessionId);
+  if (!session) return { error: "this session isn't loaded" };
+  if (session.runner)
+    return {
+      error:
+        "this session's workspace is on a Runner, which can't receive a login",
+    };
+  if (!session.sandbox?.provider || !session.sandbox.sandboxId)
+    return { kind: "host" };
+  const exec = await workspaceExecFor(session);
+  if (!exec.sandboxed)
+    return exec.remote
+      ? { error: "this session's Sandbox is unavailable right now" }
+      : { kind: "host" };
+  return { kind: "sandbox", provider: session.sandbox.provider, exec };
 }
 
 /** Where a scripted run may start, or why it can't. The proxy listens on this
@@ -207,6 +243,11 @@ export function createKeychainMcpServer(ctx: KeychainToolContext) {
           ]
             .filter(Boolean)
             .join("; ");
+          if (c.kind === "login")
+            return (
+              `- **${c.service}** (login: ${c.username} on ${c.loginUrl}) — owner ${c.owner}` +
+              (c.description ? `: ${c.description}` : "")
+            );
           return (
             `- **${c.service}** (${c.host}) — owner ${c.owner}` +
             (c.description ? `: ${c.description}` : "") +
@@ -218,7 +259,8 @@ export function createKeychainMcpServer(ctx: KeychainToolContext) {
     ),
     tool(
       "request_credential",
-      "Ask a credential's owner to lend it to THIS session for a stated purpose. They get a DM with Approve once / Approve standing / Decline, and this call blocks until they answer. On approval you receive instructions for call_credential, which injects the credential server-side; you never see the secret itself. Ask only when you actually need the access now, state the real purpose (the owner is approving that sentence, and every call is audited against it), and prefer 'once' unless the task genuinely needs repeated calls. For bulk work by a script (hundreds or more calls), pass `run` instead: the owner approves that exact command and call cap, and you start it with run_with_credential. If they decline, don't re-ask. Calling again with the same purpose while your ask is pending reminds the owner and waits on that same ask; if they already approved it, you get the live grant back.",
+      "Ask a credential's owner to lend it to THIS session for a stated purpose. They get a DM with Approve once / Approve standing / Decline, and this call blocks until they answer. On approval you receive instructions for call_credential, which injects the credential server-side; you never see the secret itself. For a login (a username and password for a sign-in page), the owner instead chooses Release password or Decline, and on approval you use use_login to get the password into this session's workspace." +
+        " Ask only when you actually need the access now, state the real purpose (the owner is approving that sentence, and every call is audited against it), and prefer 'once' unless the task genuinely needs repeated calls. For bulk work by a script (hundreds or more calls), pass `run` instead: the owner approves that exact command and call cap, and you start it with run_with_credential. If they decline, don't re-ask. Calling again with the same purpose while your ask is pending reminds the owner and waits on that same ask; if they already approved it, you get the live grant back.",
       {
         credential: z
           .string()
@@ -349,6 +391,49 @@ export function createKeychainMcpServer(ctx: KeychainToolContext) {
       },
     ),
     tool(
+      "use_login",
+      "Get the password of a login credential (a test account for a sign-in page) that its owner approved releasing to THIS session (request_credential, Release password). Writes the password to a 0600 file in this session's workspace and returns the sign-in page URL, the username and the file's path, never the password itself. Read it from the file in a script that types it into the page (for example Playwright's fill or CDP Input.insertText). Never print, echo or cat it, and never put it in a message, commit, screenshot, log or any other file. Each approval releases the password once, and the file is deleted after 30 minutes. Not available on a Runner.",
+      {
+        credential: z
+          .string()
+          .describe("The login's service slug (from list_credentials) or id."),
+      },
+      async ({ credential }: { credential: string }) => {
+        const target = await loginTarget(ctx);
+        if ("error" in target)
+          return text(`Couldn't release: ${target.error}.`);
+        const release = await claimLoginRelease({
+          sessionId: ctx.sessionId,
+          credential,
+        });
+        if ("error" in release)
+          return text(`Couldn't release: ${release.error}.`);
+        let file;
+        try {
+          file = await writeReleasedLogin({
+            sessionId: ctx.sessionId,
+            password: release.credential.secret,
+            target,
+          });
+        } catch (error: any) {
+          await release.undo();
+          return text(
+            `Couldn't release: ${error?.message || "the password file couldn't be written"}. The approval is still unused.`,
+          );
+        }
+        return text(
+          JSON.stringify({
+            service: release.credential.service,
+            loginUrl: release.credential.loginUrl,
+            username: release.credential.username,
+            passwordFile: file.path,
+            deletedAt: file.expiresAt,
+            next: "Open loginUrl in your browser, fill in the username, and type the password from passwordFile with a script that never prints it. Don't copy the password anywhere else. If you need to sign in again after the file is gone, ask with request_credential again.",
+          }),
+        );
+      },
+    ),
+    tool(
       "run_with_credential",
       `Start a scripted run the credential's owner approved (request_credential with \`run\`): one process running exactly the approved command, on this server, in the session's workspace. The process gets KEYCHAIN_PROXY_URL, a base URL standing in for https://<credential host>: a request to $KEYCHAIN_PROXY_URL/v1/items goes to https://<host>/v1/items with the credential injected. The URL works only for this run and stops working when the process exits, times out or is stopped. Calls are held to the credential's method/path limits and the approved cap, and every call is audited. The script gets a minimal environment (PATH, HOME, LANG, TMPDIR), so pass anything else on the command line, and never a secret. Returns at once with a run id; poll credential_run_status. A Sandbox or Runner session cannot start one.`,
       {
@@ -449,7 +534,8 @@ export function createKeychainMcpServer(ctx: KeychainToolContext) {
     ),
     tool(
       "register_credential",
-      "Add a credential to the keychain, owned by the person driving this session, so this and later sessions can borrow it through request_credential. You supply only metadata. A card appears in the session where THEY paste the secret; it goes straight to the keychain and you never see it. This call waits until they save or decline (15 minutes at most) and returns the credential's id, service, host and owner. If the call is cut short, the card stays open: call again with the same service and host to keep waiting on it, or check list_credentials. Never ask anyone to paste a secret in chat; if they already did, tell them to rotate it. Check list_credentials first: service slugs are unique. Set allowedMethods / allowedPathPrefixes when the task needs less than full access. Interactive sessions with a signed-in teammate only.",
+      "Add a credential to the keychain, owned by the person driving this session, so this and later sessions can borrow it through request_credential. You supply only metadata. A card appears in the session where THEY paste the secret; it goes straight to the keychain and you never see it. For a username and password that must be typed into a sign-in page, pass kind 'login' with loginUrl and username (no host or limits): its owner later approves each release of the password with use_login, and the agent does see it then, so only register test accounts this way." +
+        " This call waits until they save or decline (15 minutes at most) and returns the credential's id, service, host and owner. If the call is cut short, the card stays open: call again with the same service and host to keep waiting on it, or check list_credentials. Never ask anyone to paste a secret in chat; if they already did, tell them to rotate it. Check list_credentials first: service slugs are unique. Set allowedMethods / allowedPathPrefixes when the task needs less than full access. Interactive sessions with a signed-in teammate only.",
       {
         service: z
           .string()
@@ -460,10 +546,30 @@ export function createKeychainMcpServer(ctx: KeychainToolContext) {
           ),
         host: z
           .string()
-          .min(1)
           .max(253)
+          .optional()
           .describe(
-            "API host the broker will call over HTTPS, e.g. 'api.example.test'. No scheme, port or path.",
+            "API host the broker will call over HTTPS, e.g. 'api.example.test'. No scheme, port or path. Required unless kind is 'login'.",
+          ),
+        kind: z
+          .enum(["api", "login"])
+          .optional()
+          .describe(
+            "'api' (default): a token the broker injects as a header. 'login': a username and password typed into a sign-in page.",
+          ),
+        loginUrl: z
+          .string()
+          .max(2000)
+          .optional()
+          .describe(
+            "For a login: the full https:// URL of the sign-in page, e.g. 'https://app.example.test/login'.",
+          ),
+        username: z
+          .string()
+          .max(200)
+          .optional()
+          .describe(
+            "For a login: the username or email. Not secret; it is shown to the owner and to agents.",
           ),
         description: z
           .string()
@@ -507,7 +613,10 @@ export function createKeychainMcpServer(ctx: KeychainToolContext) {
       async (
         args: {
           service: string;
-          host: string;
+          host?: string;
+          kind?: "api" | "login";
+          loginUrl?: string;
+          username?: string;
           description?: string;
           allowedMethods?: string[];
           allowedPathPrefixes?: string[];
@@ -532,7 +641,14 @@ export function createKeychainMcpServer(ctx: KeychainToolContext) {
               login,
               spec: {
                 service: args.service,
-                host: args.host,
+                ...(args.host !== undefined ? { host: args.host } : {}),
+                ...(args.kind ? { kind: args.kind } : {}),
+                ...(args.loginUrl !== undefined
+                  ? { loginUrl: args.loginUrl }
+                  : {}),
+                ...(args.username !== undefined
+                  ? { username: args.username }
+                  : {}),
                 ...(args.description ? { description: args.description } : {}),
                 ...(args.allowedMethods
                   ? { allowedMethods: args.allowedMethods }
@@ -583,12 +699,18 @@ export function createKeychainMcpServer(ctx: KeychainToolContext) {
               service: c.service,
               host: c.host,
               owner: c.owner,
+              ...(c.kind === "login"
+                ? { kind: c.kind, loginUrl: c.loginUrl, username: c.username }
+                : {}),
               ...(c.allowedMethods ? { allowedMethods: c.allowedMethods } : {}),
               ...(c.allowedPathPrefixes
                 ? { allowedPathPrefixes: c.allowedPathPrefixes }
                 : {}),
             },
-            next: `Borrow it with request_credential({ credential: "${c.service}", purpose }). The secret is never available to you directly.`,
+            next:
+              c.kind === "login"
+                ? `Ask for it with request_credential({ credential: "${c.service}", purpose }); once its owner releases the password, use_login puts it in a file in this session's workspace.`
+                : `Borrow it with request_credential({ credential: "${c.service}", purpose }). The secret is never available to you directly.`,
           }),
         );
       },

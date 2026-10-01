@@ -85,6 +85,7 @@ function RequestCard({
     }
   }
 
+  const login = request.kind === "login";
   const limits = [
     request.allowedMethods?.length ? request.allowedMethods.join(", ") : null,
     request.allowedPathPrefixes?.length
@@ -100,13 +101,21 @@ function RequestCard({
           className="h-1.5 w-1.5 shrink-0 rounded-full bg-green shadow-[0_0_0_3px_var(--green-soft)]"
         />
         <span className="text-label font-semibold text-dim">
-          {AGENT_NAME} wants to add a credential to the keychain
+          {login
+            ? `${AGENT_NAME} wants to add a login to the keychain`
+            : `${AGENT_NAME} wants to add a credential to the keychain`}
         </span>
       </div>
       <div className="flex flex-col gap-1">
         <p className="m-0 text-body leading-6 text-fg [overflow-wrap:anywhere]">
-          <span className="font-semibold">{request.service}</span> for{" "}
-          {request.host}
+          <span className="font-semibold">{request.service}</span>
+          {login ? (
+            <>
+              : {request.username} on {request.loginUrl}
+            </>
+          ) : (
+            <> for {request.host}</>
+          )}
         </p>
         {request.description && (
           <p className="m-0 text-supporting text-dim [overflow-wrap:anywhere]">
@@ -119,9 +128,11 @@ function RequestCard({
           </p>
         )}
         <p className="m-0 text-meta text-faint">
-          {canAnswer
-            ? `Owned by you. Teammates' sessions must ask you before using it. ${AGENT_NAME} never sees the secret.`
-            : `Waiting for ${request.owner} to add the secret.`}
+          {!canAnswer
+            ? `Waiting for ${request.owner} to add the ${login ? "password" : "secret"}.`
+            : login
+              ? `Owned by you. Each time a session asks, you decide whether to release the password to it, and ${AGENT_NAME} can read it then. Use a test account.`
+              : `Owned by you. Teammates' sessions must ask you before using it. ${AGENT_NAME} never sees the secret.`}
         </p>
       </div>
 
@@ -136,8 +147,8 @@ function RequestCard({
           <Input
             type="password"
             size="lg"
-            aria-label="Secret"
-            placeholder="Paste the secret"
+            aria-label={login ? "Password" : "Secret"}
+            placeholder={login ? "Paste the password" : "Paste the secret"}
             autoComplete="off"
             spellCheck={false}
             value={secret}

@@ -753,6 +753,11 @@ export type ProtocolServerMessage =
         service: string;
         host: string;
         description?: string;
+        /** A username and password for a sign-in page, rather than an API
+         *  token. The card then asks for the password. */
+        kind?: "login";
+        loginUrl?: string;
+        username?: string;
         injection?: { header?: string; scheme?: string };
         allowedMethods?: string[];
         allowedPathPrefixes?: string[];

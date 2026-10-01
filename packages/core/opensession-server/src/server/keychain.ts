@@ -42,6 +42,17 @@
  * agent supplies only metadata, and the session's own driver pastes the
  * secret into a card that posts straight to that HTTP path.
  *
+ * Logins are the one exception to "the agent never sees the secret". A
+ * credential of kind "login" holds a sign-in page, a username and a password
+ * for a test account. A password has to be typed into a page the agent's
+ * browser drives, and the agent can read a field it typed into, so no relay
+ * can keep it hidden. Its asks say so plainly and offer only Release
+ * password or Decline. An approval mints a single-use "release" grant: the
+ * use_login tool writes the password to a short-lived 0600 file in the
+ * session's own workspace (keychain-logins.ts), never into a tool result or
+ * the transcript. A login is never usable through call_credential or a
+ * scripted run, and an API credential is never released.
+ *
  * Stated limitation: the store is a 0600 file owned by the service user,
  * which agent shells also run as (and which may have root on the host), so
  * nothing here stops a local agent that deliberately reads the store or the
@@ -83,7 +94,11 @@ const STANDING_GRANT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 /** Terminal asks/grants older than this are pruned on load. */
 const TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
-export type GrantMode = "once" | "standing" | "run";
+export type GrantMode = "once" | "standing" | "run" | "release";
+
+/** "api" (the default, stored as absent) is a header the broker injects;
+ *  "login" is a username and password for a sign-in page. */
+export type CredentialKind = "api" | "login";
 
 /** What the owner approves for a scripted run: this exact command, and at
  *  most this many proxied calls. */
@@ -102,7 +117,14 @@ export interface KeychainCredential {
   /** Lookup + display key, e.g. "vercel", "ahrefs". Unique per keychain. */
   service: string;
   description?: string;
-  /** Broker target host (https assumed), e.g. "api.vercel.com". */
+  /** Absent for an API credential. */
+  kind?: "login";
+  /** A login's sign-in page. Its host is `host`. */
+  loginUrl?: string;
+  /** A login's username. Not secret: shown to the agent and to teammates. */
+  username?: string;
+  /** Broker target host (https assumed), e.g. "api.vercel.com". For a
+   *  login, the sign-in page's host. */
   host: string;
   /** How the secret rides the proxied request. Default Authorization: Bearer. */
   injection?: { header?: string; scheme?: string };
@@ -316,9 +338,13 @@ function sameOwner(a: string, b: string): boolean {
 export interface AddCredentialInput {
   owner: string;
   service: string;
-  host: string;
+  /** Required for an API credential; a login takes it from loginUrl. */
+  host?: string;
   secret: string;
   description?: string;
+  kind?: CredentialKind;
+  loginUrl?: string;
+  username?: string;
   injection?: { header?: string; scheme?: string };
   allowedMethods?: string[];
   allowedPathPrefixes?: string[];
@@ -331,6 +357,9 @@ export interface NormalizedCredentialSpec {
   service: string;
   host: string;
   description?: string;
+  kind?: "login";
+  loginUrl?: string;
+  username?: string;
   injection?: { header?: string; scheme?: string };
   allowedMethods?: string[];
   allowedPathPrefixes?: string[];
@@ -356,6 +385,32 @@ export function normalizeCredentialHost(host: string): string {
     .replace(/[/?#].*$/, "");
 }
 
+/** A login's sign-in page as stored, or an error safe to show the caller. */
+export function normalizeLoginUrl(raw: string | undefined): URL {
+  let url: URL;
+  try {
+    url = new URL((raw || "").trim());
+  } catch {
+    throw new Error("loginUrl must be a full https:// URL of the sign-in page");
+  }
+  if (url.protocol !== "https:" || url.username || url.password)
+    throw new Error("loginUrl must be a full https:// URL of the sign-in page");
+  url.hash = "";
+  return url;
+}
+
+/** The host a spec will be stored under: a login's sign-in page host, else
+ *  the normalized API host. Throws like normalizeLoginUrl. */
+export function credentialSpecHost(spec: CredentialSpec): string {
+  return spec.kind === "login"
+    ? normalizeLoginUrl(spec.loginUrl).hostname
+    : normalizeCredentialHost(spec.host || "");
+}
+
+// Model-authored or pasted text shown to a person: no control or
+// bidi-override characters that could make it say something else.
+const UNSAFE_DISPLAY_CHARS = /[\x00-\x1f\x7f‪-‮⁦-⁩]/;
+
 /**
  * Validate and normalize everything about a credential except its owner and
  * secret. Throws with a message safe to show the caller. Shared by the HTTP
@@ -368,12 +423,17 @@ export function normalizeCredentialSpec(
 ): NormalizedCredentialSpec {
   load();
   const service = norm(input.service);
-  const host = normalizeCredentialHost(input.host);
   if (!service || !/^[a-z0-9][a-z0-9._-]*$/.test(service)) {
     throw new Error(
       "service must be a short lowercase slug (letters, digits, . _ -)",
     );
   }
+  if (input.kind === "login") return normalizeLoginSpec(input, service);
+  if (input.kind !== undefined && input.kind !== "api")
+    throw new Error('kind must be "api" or "login"');
+  if (input.loginUrl !== undefined || input.username !== undefined)
+    throw new Error("loginUrl and username belong to a login credential");
+  const host = normalizeCredentialHost(input.host || "");
   if (!host || !/^[a-z0-9][a-z0-9.-]*$/.test(host) || host.includes(":")) {
     throw new Error("host must be a bare host name (no scheme, port, or path)");
   }
@@ -417,6 +477,42 @@ export function normalizeCredentialSpec(
   };
 }
 
+function normalizeLoginSpec(
+  input: CredentialSpec,
+  service: string,
+): NormalizedCredentialSpec {
+  if (
+    input.injection ||
+    input.allowedMethods?.length ||
+    input.allowedPathPrefixes?.length ||
+    input.statusOnly
+  )
+    throw new Error(
+      "a login has no header, method, path or status-only settings: it is typed into its sign-in page",
+    );
+  const url = normalizeLoginUrl(input.loginUrl);
+  if (
+    input.host !== undefined &&
+    input.host.trim() &&
+    normalizeCredentialHost(input.host) !== url.hostname
+  )
+    throw new Error("host must match the sign-in page's host, or be omitted");
+  const username = input.username?.trim() || "";
+  if (!username || username.length > 200 || UNSAFE_DISPLAY_CHARS.test(username))
+    throw new Error("a login needs a username of at most 200 characters");
+  if ([...credentials.values()].some((c) => c.service === service))
+    throw new Error(`a credential for service "${service}" already exists`);
+  const description = input.description?.trim();
+  return {
+    service,
+    host: url.hostname,
+    kind: "login",
+    loginUrl: url.toString(),
+    username,
+    ...(description ? { description } : {}),
+  };
+}
+
 /** Validate and insert, without persisting. Synchronous from the check to
  *  the insert, so two concurrent adds cannot both take one service slug. */
 function insertCredential(input: AddCredentialInput): KeychainCredential {
@@ -427,7 +523,8 @@ function insertCredential(input: AddCredentialInput): KeychainCredential {
     id: `kc-${crypto.randomUUID()}`,
     owner: ownerName(input.owner),
     ...spec,
-    secret: input.secret.trim(),
+    // A password may begin or end with a space; an API token never does.
+    secret: spec.kind === "login" ? input.secret : input.secret.trim(),
     createdAt: now,
     updatedAt: now,
   };
@@ -442,6 +539,7 @@ function auditAdded(cred: KeychainCredential): KeychainCredentialMeta {
     owner: cred.owner,
     service: cred.service,
     host: cred.host,
+    ...(cred.kind ? { credential_kind: cred.kind } : {}),
   });
   return meta(cred);
 }
@@ -591,7 +689,7 @@ function mintGrant(ask: KeychainAskRecord, mode: GrantMode): KeychainGrant {
     createdAt: new Date(now).toISOString(),
     expiresAt: new Date(
       now +
-        (mode === "once"
+        (mode === "once" || mode === "release"
           ? ONCE_GRANT_TTL_MS
           : mode === "run"
             ? RUN_GRANT_START_TTL_MS
@@ -688,6 +786,12 @@ export function consumeGrantForBroker(
     };
   const cred = credentials.get(gr.credentialId);
   if (!cred) return { error: "credential no longer exists", status: 404 };
+  // A password is typed into its sign-in page, never sent as a header.
+  if (gr.mode === "release" || cred.kind === "login")
+    return {
+      error: "this credential is a login; use it with use_login",
+      status: 403,
+    };
   const refusal = ceilingRefusal(cred, method, path);
   if (refusal) return { error: refusal, status: 403 };
   if (gr.mode === "once") {
@@ -816,9 +920,78 @@ export function useRunGrant(
       status: 403,
     };
   const cred = credentials.get(gr.credentialId);
-  if (!cred) return { error: "credential no longer exists", status: 403 };
+  if (!cred || cred.kind === "login")
+    return { error: "credential no longer exists", status: 403 };
   const refusal = ceilingRefusal(cred, method, path);
   return refusal ? { error: refusal, status: 403 } : { credential: cred };
+}
+
+export interface LoginRelease {
+  credential: KeychainCredential;
+  grant: KeychainGrant;
+  /** Puts the grant back if the password never reached the workspace. */
+  undo: () => Promise<void>;
+}
+
+/**
+ * Spend this session's approved release grant for a login. The grant is
+ * marked used in memory before the store is written, so two concurrent
+ * releases cannot both take it. The caller writes the password where the
+ * session can read it and calls `undo` if that fails, so a write error does
+ * not cost the owner another approval. Never blocks on the filesystem.
+ */
+export async function claimLoginRelease(input: {
+  sessionId: string;
+  credential: string;
+}): Promise<LoginRelease | { error: string }> {
+  await ensureKeychainLoaded();
+  const credMeta = findCredential(input.credential);
+  if (!credMeta)
+    return { error: `no credential matches "${input.credential}"` };
+  if (credMeta.kind !== "login")
+    return {
+      error: `${credMeta.service} is an API credential, so its secret is never released. Use call_credential`,
+    };
+  const gr = [...grants.values()]
+    .filter(
+      (g) =>
+        g.sessionId === input.sessionId &&
+        g.credentialId === credMeta.id &&
+        g.mode === "release" &&
+        liveNow(g),
+    )
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  if (!gr)
+    return {
+      error: `this session holds no approved release for ${credMeta.service}. Ask its owner with request_credential({ credential: "${credMeta.service}", purpose }) first`,
+    };
+  const cred = credentials.get(gr.credentialId)!;
+  gr.status = "used";
+  gr.usedAt = new Date().toISOString();
+  grants.set(gr.id, gr);
+  const undo = async () => {
+    if (gr.status !== "used") return;
+    gr.status = "active";
+    delete gr.usedAt;
+    grants.set(gr.id, gr);
+    await persistAsync().catch(() => {});
+  };
+  try {
+    await persistAsync();
+  } catch (error) {
+    await undo();
+    console.error("[keychain] failed to save a login release:", error);
+    return { error: "couldn't write the keychain store" };
+  }
+  auditAsync({
+    kind: "keychain_login_released",
+    grant_id: gr.id,
+    credential_id: gr.credentialId,
+    session_id: gr.sessionId,
+    owner: gr.owner,
+    requested_by: gr.requestedBy,
+  });
+  return { credential: cred, grant: gr, undo };
 }
 
 /** Close a run's grant when the run ends, without blocking on the store. */
@@ -849,7 +1022,8 @@ export function activeGrantFor(
     (gr) =>
       gr.credentialId === cred.id &&
       gr.status === "active" &&
-      gr.mode !== "run",
+      gr.mode !== "run" &&
+      gr.mode !== "release",
   );
   return live.find((gr) => gr.mode === "standing") ?? live[0];
 }
@@ -886,6 +1060,7 @@ export function scrubSecret(body: string, secret: string): string {
 const APPROVE_ONCE = "Approve once";
 const APPROVE_STANDING = "Approve standing";
 const APPROVE_RUN = "Approve run";
+const RELEASE_PASSWORD = "Release password";
 const DECLINE = "Decline";
 
 const KEYCHAIN_ASK_DOMAIN = "keychain-ask";
@@ -906,6 +1081,17 @@ export function grantInstructions(
   ]
     .filter(Boolean)
     .join("; ");
+  if (gr.mode === "release")
+    return (
+      `${gr.owner} approved releasing the **${credMeta.service}** login to this session ` +
+      `(once, grant ${gr.id}; use it before ${gr.expiresAt}).\n` +
+      `Call use_login({ credential: "${credMeta.service}" }). It writes the password to a file in this ` +
+      `session's workspace and returns the sign-in page, the username and the file's path. ` +
+      `Type the password into the page from that file in a script (for example with Playwright's fill or ` +
+      `CDP Input.insertText). Never print it, never put it in a message, a commit, a screenshot or a log, ` +
+      `and never save it anywhere else. The file is deleted after a short while; ask again if you need it later. ` +
+      `Stay within the approved purpose ("${gr.purpose}"); the release is audited.`
+    );
   if (gr.mode === "run" && gr.run)
     return (
       `${gr.owner} approved a scripted run with **${credMeta.service}** ` +
@@ -977,6 +1163,11 @@ export function requestCredential(
       error: `credential owner "${credMeta.owner}" is not in the identity roster`,
     };
 
+  const isLogin = credMeta.kind === "login";
+  if (isLogin && input.run)
+    return {
+      error: `${credMeta.service} is a login: it can't be used by a scripted run. Ask without \`run\` to have the password released to this session`,
+    };
   let run: KeychainScriptedRun | undefined;
   if (input.run) {
     const command = input.run.command.trim();
@@ -991,7 +1182,11 @@ export function requestCredential(
       };
     run = { command, maxCalls };
   }
-  const requestedMode: GrantMode = run ? "run" : input.mode || "once";
+  const requestedMode: GrantMode = isLogin
+    ? "release"
+    : run
+      ? "run"
+      : input.mode || "once";
   const sameRun = (other?: KeychainScriptedRun) =>
     (!run && !other) ||
     (!!run &&
@@ -1062,24 +1257,35 @@ export function requestCredential(
     sessionId: input.sessionId,
     createdBy: input.requestedBy,
     person: { slackId: owner.slackId, name: owner.name },
-    question: run
-      ? `May this session run a script with your **${credMeta.service}** credential ` +
-        `(${credMeta.host})? This is a scripted run: bulk API use, not a single call.\n` +
-        `Purpose: ${purpose}\nCommand: \`${run.command}\`\n` +
-        `Expected volume: up to ${run.maxCalls.toLocaleString("en-US")} API calls, refused beyond that.`
-      : `May this session borrow your **${credMeta.service}** credential ` +
-        `(${credMeta.host})?\nPurpose: ${purpose}\nRequested: ${record.requestedMode} ` +
-        `(once = a single API call through the broker; standing = 7 days, revocable).`,
-    context: run
-      ? "_The script never sees the secret. It gets a proxy URL that works only for " +
-        "this one process, within the credential's method/path limits, and stops " +
-        "working when the script exits or times out. Every call is audited, and " +
-        "revoking the grant stops the run._"
-      : "_The secret is never shown to the session — approved calls go through the " +
-        "keychain broker with method/path limits, and every call is audited._",
-    options: run
-      ? [APPROVE_RUN, DECLINE]
-      : [APPROVE_ONCE, APPROVE_STANDING, DECLINE],
+    question: isLogin
+      ? `May this session have the password for your **${credMeta.service}** login ` +
+        `(${credMeta.username} on ${credMeta.loginUrl})?\nPurpose: ${purpose}\n` +
+        `The agent will see the password: it types it into the sign-in page itself. ` +
+        `Approve only for a test account.`
+      : run
+        ? `May this session run a script with your **${credMeta.service}** credential ` +
+          `(${credMeta.host})? This is a scripted run: bulk API use, not a single call.\n` +
+          `Purpose: ${purpose}\nCommand: \`${run.command}\`\n` +
+          `Expected volume: up to ${run.maxCalls.toLocaleString("en-US")} API calls, refused beyond that.`
+        : `May this session borrow your **${credMeta.service}** credential ` +
+          `(${credMeta.host})?\nPurpose: ${purpose}\nRequested: ${record.requestedMode} ` +
+          `(once = a single API call through the broker; standing = 7 days, revocable).`,
+    context: isLogin
+      ? "_Releasing writes the password to a short-lived file in that session's workspace, " +
+        "once. It never appears in the transcript, but the agent can read it, so treat it as " +
+        "disclosed to that session. The release is audited._"
+      : run
+        ? "_The script never sees the secret. It gets a proxy URL that works only for " +
+          "this one process, within the credential's method/path limits, and stops " +
+          "working when the script exits or times out. Every call is audited, and " +
+          "revoking the grant stops the run._"
+        : "_The secret is never shown to the session — approved calls go through the " +
+          "keychain broker with method/path limits, and every call is audited._",
+    options: isLogin
+      ? [RELEASE_PASSWORD, DECLINE]
+      : run
+        ? [APPROVE_RUN, DECLINE]
+        : [APPROVE_ONCE, APPROVE_STANDING, DECLINE],
     mode: "block",
     deliver: "now",
     domain: { kind: KEYCHAIN_ASK_DOMAIN, ref: record.id },
@@ -1145,7 +1351,7 @@ export function listKeychainAsks(opts?: {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-export type OwnerDecision = "once" | "standing" | "run" | "decline";
+export type OwnerDecision = "once" | "standing" | "run" | "release" | "decline";
 
 /**
  * The owner answers an ask from Settings. `by` must be an identity the caller
@@ -1164,18 +1370,26 @@ export function answerKeychainAsk(
     return { error: "That request is no longer waiting for an answer" };
   if (!by || !sameOwner(record.owner, by))
     return { error: "Only the credential's owner can answer this request" };
-  // A scripted run is approved as a run or not at all, and only a run ask
-  // can be approved as one.
-  if (
-    (decision === "run") !== (record.requestedMode === "run") &&
-    decision !== "decline"
-  )
-    return {
-      error:
-        record.requestedMode === "run"
-          ? "This request is for a scripted run: approve the run or decline"
-          : "This request is not for a scripted run",
-    };
+  // A scripted run is approved as a run or not at all, a login release as a
+  // release or not at all, and neither approval fits any other ask.
+  if (decision !== "decline") {
+    const exclusive = (mode: "run" | "release") =>
+      (decision === mode) !== (record.requestedMode === mode);
+    if (exclusive("run"))
+      return {
+        error:
+          record.requestedMode === "run"
+            ? "This request is for a scripted run: approve the run or decline"
+            : "This request is not for a scripted run",
+      };
+    if (exclusive("release"))
+      return {
+        error:
+          record.requestedMode === "release"
+            ? "This request is for a login: release the password or decline"
+            : "This request is not for a login",
+      };
+  }
   const label =
     decision === "once"
       ? APPROVE_ONCE
@@ -1183,7 +1397,9 @@ export function answerKeychainAsk(
         ? APPROVE_STANDING
         : decision === "run"
           ? APPROVE_RUN
-          : DECLINE;
+          : decision === "release"
+            ? RELEASE_PASSWORD
+            : DECLINE;
   if (!resolveAskAsPerson(record.humanAskId, label, ownerName(by)))
     return { error: "That request is no longer waiting for an answer" };
   return { ok: true, status: keychainAsks.get(askId)?.status ?? "pending" };
@@ -1226,16 +1442,18 @@ export function parseOwnerAnswer(
   requestedMode: GrantMode,
 ): { approve: true; mode: GrantMode } | { approve: false; note?: string } {
   const t = answer.trim().toLowerCase();
-  // A run ask approves its run or nothing; a once/standing ask can never
-  // turn into a scripted run, whatever the reply says.
-  if (requestedMode === "run") {
+  // A run ask approves its run or nothing, a login ask its release or
+  // nothing; a once/standing ask can never turn into either, whatever the
+  // reply says.
+  if (requestedMode === "run" || requestedMode === "release") {
     if (t === DECLINE.toLowerCase() || /^(no|deny|decline|reject)\b/.test(t))
       return { approve: false };
+    const button = requestedMode === "run" ? APPROVE_RUN : RELEASE_PASSWORD;
     if (
-      t === APPROVE_RUN.toLowerCase() ||
-      /^(approve|yes|ok|sure|go ahead)\b/.test(t)
+      t === button.toLowerCase() ||
+      /^(approve|release|yes|ok|sure|go ahead)\b/.test(t)
     )
-      return { approve: true, mode: "run" };
+      return { approve: true, mode: requestedMode };
     return { approve: false, note: answer.trim() };
   }
   if (t === APPROVE_ONCE.toLowerCase()) return { approve: true, mode: "once" };

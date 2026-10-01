@@ -47,7 +47,7 @@ touches an in-process tool:
 | [`opensession-search`](#opensession-search) | 2 | interactive | – |
 | [`opensession-self-deploy`](#opensession-self-deploy) | 2 | interactive | Withheld from dev instances (isDevInstance()) — the script targets the production service and state. |
 | [`opensession-humans`](#opensession-humans) | 3 | interactive, Slack loop, goal wake | Interactive runs need a session id (the answer routes back to it). |
-| [`opensession-keychain`](#opensession-keychain) | 11 | interactive | Needs a session id. |
+| [`opensession-keychain`](#opensession-keychain) | 12 | interactive | Needs a session id. |
 | [`opensession-publish`](#opensession-publish) | 4 | interactive | Needs a session id. |
 | [`opensession-repos`](#opensession-repos) | 6 | interactive | Needs a session id. |
 | [`opensession-memory`](#opensession-memory) | 9 | interactive | Needs a session id. |
@@ -74,7 +74,7 @@ touches an in-process tool:
 | [`opensession-github`](#opensession-github) | 4 | Slack loop | – |
 | [`opensession-goal-self`](#opensession-goal-self) | 6 | goal wake | Only on a session that carries a goalId. |
 
-33 servers, 162 tools.
+33 servers, 163 tools.
 
 ## opensession-sessions
 
@@ -515,13 +515,19 @@ List the credentials teammates have registered in the keychain — service, owne
 
 `mcp__opensession-keychain__request_credential` · input: `credential` (string, required), `purpose` (string, required), `mode` ("once" | "standing"), `run` (object)
 
-Ask a credential's owner to lend it to THIS session for a stated purpose. They get a DM with Approve once / Approve standing / Decline, and this call blocks until they answer. On approval you receive instructions for call_credential, which injects the credential server-side; you never see the secret itself. Ask only when you actually need the access now, state the real purpose (the owner is approving that sentence, and every call is audited against it), and prefer 'once' unless the task genuinely needs repeated calls. For bulk work by a script (hundreds or more calls), pass `run` instead: the owner approves that exact command and call cap, and you start it with run_with_credential. If they decline, don't re-ask. Calling again with the same purpose while your ask is pending reminds the owner and waits on that same ask; if they already approved it, you get the live grant back.
+Ask a credential's owner to lend it to THIS session for a stated purpose. They get a DM with Approve once / Approve standing / Decline, and this call blocks until they answer. On approval you receive instructions for call_credential, which injects the credential server-side; you never see the secret itself. For a login (a username and password for a sign-in page), the owner instead chooses Release password or Decline, and on approval you use use_login to get the password into this session's workspace. Ask only when you actually need the access now, state the real purpose (the owner is approving that sentence, and every call is audited against it), and prefer 'once' unless the task genuinely needs repeated calls. For bulk work by a script (hundreds or more calls), pass `run` instead: the owner approves that exact command and call cap, and you start it with run_with_credential. If they decline, don't re-ask. Calling again with the same purpose while your ask is pending reminds the owner and waits on that same ask; if they already approved it, you get the live grant back.
 
 ### `call_credential`
 
 `mcp__opensession-keychain__call_credential` · input: `credential` (string, required), `method` ("GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE", required), `path` (string, required), `headers` (object), `body` (string)
 
 Make one HTTPS API call with a credential this session holds a live grant for (see request_credential and list_grants). The credential is injected server-side; you never see it. The call goes to the credential's own host, within its method and path limits, and does not follow redirects. A once grant is spent by this call even if it fails. Returns the status, a few response headers and the text body (secret scrubbed, long bodies truncated, binary omitted), or only the status for a status-only credential. Stay within the purpose the owner approved; every call is audited.
+
+### `use_login`
+
+`mcp__opensession-keychain__use_login` · input: `credential` (string, required)
+
+Get the password of a login credential (a test account for a sign-in page) that its owner approved releasing to THIS session (request_credential, Release password). Writes the password to a 0600 file in this session's workspace and returns the sign-in page URL, the username and the file's path, never the password itself. Read it from the file in a script that types it into the page (for example Playwright's fill or CDP Input.insertText). Never print, echo or cat it, and never put it in a message, commit, screenshot, log or any other file. Each approval releases the password once, and the file is deleted after 30 minutes. Not available on a Runner.
 
 ### `run_with_credential`
 
@@ -549,9 +555,9 @@ Withdraw one of this session's pending keychain asks (ids from list_grants). The
 
 ### `register_credential`
 
-`mcp__opensession-keychain__register_credential` · input: `service` (string, required), `host` (string, required), `description` (string), `allowedMethods` ("GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE"[]), `allowedPathPrefixes` (string[]), `header` (string), `scheme` (string), `statusOnly` (boolean)
+`mcp__opensession-keychain__register_credential` · input: `service` (string, required), `host` (string), `kind` ("api" | "login"), `loginUrl` (string), `username` (string), `description` (string), `allowedMethods` ("GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE"[]), `allowedPathPrefixes` (string[]), `header` (string), `scheme` (string), `statusOnly` (boolean)
 
-Add a credential to the keychain, owned by the person driving this session, so this and later sessions can borrow it through request_credential. You supply only metadata. A card appears in the session where THEY paste the secret; it goes straight to the keychain and you never see it. This call waits until they save or decline (15 minutes at most) and returns the credential's id, service, host and owner. If the call is cut short, the card stays open: call again with the same service and host to keep waiting on it, or check list_credentials. Never ask anyone to paste a secret in chat; if they already did, tell them to rotate it. Check list_credentials first: service slugs are unique. Set allowedMethods / allowedPathPrefixes when the task needs less than full access. Interactive sessions with a signed-in teammate only.
+Add a credential to the keychain, owned by the person driving this session, so this and later sessions can borrow it through request_credential. You supply only metadata. A card appears in the session where THEY paste the secret; it goes straight to the keychain and you never see it. For a username and password that must be typed into a sign-in page, pass kind 'login' with loginUrl and username (no host or limits): its owner later approves each release of the password with use_login, and the agent does see it then, so only register test accounts this way. This call waits until they save or decline (15 minutes at most) and returns the credential's id, service, host and owner. If the call is cut short, the card stays open: call again with the same service and host to keep waiting on it, or check list_credentials. Never ask anyone to paste a secret in chat; if they already did, tell them to rotate it. Check list_credentials first: service slugs are unique. Set allowedMethods / allowedPathPrefixes when the task needs less than full access. Interactive sessions with a signed-in teammate only.
 
 ### `list_grants`
 

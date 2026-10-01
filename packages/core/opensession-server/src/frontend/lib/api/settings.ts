@@ -169,6 +169,11 @@ export interface KeychainCredentialDto {
   service: string;
   description?: string;
   host: string;
+  /** A username and password for a sign-in page, released to a session
+   *  with the owner's approval. Absent for an API credential. */
+  kind?: "login";
+  loginUrl?: string;
+  username?: string;
   injection?: { header?: string; scheme?: string };
   allowedMethods?: string[];
   allowedPathPrefixes?: string[];
@@ -191,7 +196,7 @@ export interface KeychainGrantDto {
   sessionId: string;
   requestedBy: string;
   purpose: string;
-  mode: "once" | "standing" | "run";
+  mode: "once" | "standing" | "run" | "release";
   status: "active" | "used" | "revoked" | "expired";
   run?: KeychainScriptedRunDto;
   createdAt: string;
@@ -205,7 +210,7 @@ export interface KeychainAskDto {
   sessionId: string;
   requestedBy: string;
   purpose: string;
-  requestedMode: "once" | "standing" | "run";
+  requestedMode: "once" | "standing" | "run" | "release";
   /** A scripted run: the command the owner approves and its call cap. */
   run?: KeychainScriptedRunDto;
   status: "pending" | "approved" | "declined" | "expired" | "cancelled";
@@ -224,8 +229,11 @@ export async function fetchKeychain(): Promise<{
 
 export async function addKeychainCredential(input: {
   service: string;
-  host: string;
+  host?: string;
   secret: string;
+  kind?: "login";
+  loginUrl?: string;
+  username?: string;
   description?: string;
   injection?: { header?: string; scheme?: string };
   allowedMethods?: string[];
@@ -245,7 +253,7 @@ export async function deleteKeychainCredential(
 
 export async function answerKeychainAsk(
   id: string,
-  decision: "once" | "standing" | "run" | "decline",
+  decision: "once" | "standing" | "run" | "release" | "decline",
 ): Promise<{ ok: true }> {
   return request(`/keychain/asks/${encodeURIComponent(id)}/answer`, {
     method: "POST",

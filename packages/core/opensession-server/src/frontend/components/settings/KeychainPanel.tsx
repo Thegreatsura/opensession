@@ -44,7 +44,7 @@ export function KeychainSection() {
     asks: KeychainAskDto[];
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState<"api" | "login" | null>(null);
   const serviceRef = useRef<HTMLInputElement>(null);
 
   const reload = () => {
@@ -61,14 +61,24 @@ export function KeychainSection() {
   const label = (
     <SettingsGroupLabel
       actions={
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={!data}
-          onClick={() => setAdding(true)}
-        >
-          Add credential
-        </Button>
+        <>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={!data}
+            onClick={() => setAdding("login")}
+          >
+            Add login
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={!data}
+            onClick={() => setAdding("api")}
+          >
+            Add credential
+          </Button>
+        </>
       }
     >
       Keychain
@@ -78,7 +88,9 @@ export function KeychainSection() {
     <SettingsHint>
       Any teammate's session can ask to borrow a credential. Its owner approves
       or declines here or in Slack. The secret is injected server-side, so the
-      agent never sees it, and every grant expires.
+      agent never sees it, and every grant expires. A login is different: the
+      agent types its password into the sign-in page, so it can read it. Add
+      only test accounts as logins.
     </SettingsHint>
   );
 
@@ -116,21 +128,37 @@ export function KeychainSection() {
 
       {label}
 
-      <Modal.Root open={adding} onOpenChange={setAdding}>
+      <Modal.Root
+        open={adding !== null}
+        onOpenChange={(open) => {
+          if (!open) setAdding(null);
+        }}
+      >
         {/* The form is a child so Base UI's portal remounts it on every
 				    open. That is what clears the typed secret when the dialog is
 				    dismissed rather than saved: it used to be cleared only on a
 				    successful submit, so cancelling left it sitting in a React
 				    state a devtools user could read back. */}
         <Modal.Content initialFocus={serviceRef}>
-          <AddCredentialForm
-            serviceRef={serviceRef}
-            onAdded={() => {
-              setAdding(false);
-              reload();
-            }}
-            onError={setError}
-          />
+          {adding === "login" ? (
+            <AddLoginForm
+              serviceRef={serviceRef}
+              onAdded={() => {
+                setAdding(null);
+                reload();
+              }}
+              onError={setError}
+            />
+          ) : (
+            <AddCredentialForm
+              serviceRef={serviceRef}
+              onAdded={() => {
+                setAdding(null);
+                reload();
+              }}
+              onError={setError}
+            />
+          )}
         </Modal.Content>
       </Modal.Root>
 
@@ -144,8 +172,13 @@ export function KeychainSection() {
           {data.credentials.map((c) => (
             <SettingRow
               key={c.id}
-              title={`${c.service} · ${c.host}`}
+              title={
+                c.kind === "login"
+                  ? `${c.service} · ${c.username ?? ""}`
+                  : `${c.service} · ${c.host}`
+              }
               desc={[
+                c.kind === "login" ? `login on ${c.loginUrl ?? c.host}` : null,
                 `owner ${c.owner}`,
                 c.description,
                 c.allowedMethods?.length
@@ -191,13 +224,32 @@ export function KeychainSection() {
                 key={a.id}
                 title={`${a.requestedBy} wants ${byId.get(a.credentialId)?.service ?? a.credentialId}`}
                 desc={
-                  a.run
-                    ? `Scripted run, up to ${a.run.maxCalls.toLocaleString()} calls · ${a.run.command} · ${a.purpose}`
-                    : `Asked for ${a.requestedMode === "once" ? "one call" : "7 days"} · ${a.purpose}`
+                  a.requestedMode === "release"
+                    ? `Wants the password, which the agent will see · ${a.purpose}`
+                    : a.run
+                      ? `Scripted run, up to ${a.run.maxCalls.toLocaleString()} calls · ${a.run.command} · ${a.purpose}`
+                      : `Asked for ${a.requestedMode === "once" ? "one call" : "7 days"} · ${a.purpose}`
                 }
                 controlClassName="flex flex-wrap justify-end gap-1"
                 control={
-                  a.run ? (
+                  a.requestedMode === "release" ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => answer(a.id, "decline")}
+                      >
+                        Decline
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        onClick={() => answer(a.id, "release")}
+                      >
+                        Release password
+                      </Button>
+                    </>
+                  ) : a.run ? (
                     <>
                       <Button
                         size="sm"
@@ -245,8 +297,10 @@ export function KeychainSection() {
           </SettingCard>
           <SettingsHint>
             Allow once covers a single API call. Allow run covers one script, up
-            to its call cap, while it runs. The session never sees the secret,
-            and you can revoke a grant below.
+            to its call cap, while it runs. The session never sees those
+            secrets, and you can revoke a grant below. Release password writes a
+            login's password to a file the session reads once, deleted after 30
+            minutes.
           </SettingsHint>
         </>
       )}
@@ -452,6 +506,122 @@ function AddCredentialForm({
           />
           <Button variant="primary" type="submit" disabled={busy || !ready}>
             {busy ? "Saving…" : "Add credential"}
+          </Button>
+        </Modal.Footer>
+      </form>
+    </>
+  );
+}
+
+/**
+ * Registering a login: a test account a session signs in with. Unlike an
+ * API credential, its password reaches the agent when the owner releases
+ * it, so the form says so where the password is typed.
+ */
+function AddLoginForm({
+  serviceRef,
+  onAdded,
+  onError,
+}: {
+  serviceRef: RefObject<HTMLInputElement | null>;
+  onAdded: () => void;
+  onError: (message: string) => void;
+}) {
+  const [service, setService] = useState("");
+  const [loginUrl, setLoginUrl] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [description, setDescription] = useState("");
+  const [busy, setBusy] = useState(false);
+  const ready = Boolean(
+    service.trim() && loginUrl.trim() && username.trim() && password,
+  );
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (!ready) return;
+    setBusy(true);
+    const login: Parameters<typeof addKeychainCredential>[0] = {
+      service: service.trim(),
+      kind: "login",
+      loginUrl: loginUrl.trim(),
+      username: username.trim(),
+      secret: password,
+    };
+    if (description.trim()) login.description = description.trim();
+    addKeychainCredential(login)
+      .then(() => {
+        setPassword("");
+        onAdded();
+      })
+      .catch((e) => onError(e.message))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <>
+      <Modal.Header
+        title="Add login"
+        description="A test account a session can sign in with. You approve each release, and the agent can read the password once it has it."
+      />
+      <form className="flex flex-col gap-5" onSubmit={submit}>
+        <div className="flex flex-col gap-3">
+          <Field label="Service">
+            <Input
+              ref={serviceRef}
+              value={service}
+              onChange={(e) => setService(e.target.value)}
+              placeholder="acme-staging"
+              autoCapitalize="none"
+              spellCheck={false}
+            />
+          </Field>
+          <Field label="Sign-in page">
+            <Input
+              value={loginUrl}
+              onChange={(e) => setLoginUrl(e.target.value)}
+              placeholder="https://app.example.test/login"
+              autoCapitalize="none"
+              spellCheck={false}
+            />
+          </Field>
+          <Field label="Username">
+            <Input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="qa@example.test"
+              autoCapitalize="none"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </Field>
+          <Field label="Password">
+            <Input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Never shown again here"
+              autoComplete="new-password"
+            />
+          </Field>
+          <Field label="Description" title="Optional.">
+            <Input
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="What it is for"
+            />
+          </Field>
+        </div>
+        <Modal.Footer>
+          <Modal.Close
+            render={
+              <Button variant="ghost" disabled={busy}>
+                Cancel
+              </Button>
+            }
+          />
+          <Button variant="primary" type="submit" disabled={busy || !ready}>
+            {busy ? "Saving…" : "Add login"}
           </Button>
         </Modal.Footer>
       </form>

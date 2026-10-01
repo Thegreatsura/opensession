@@ -155,6 +155,36 @@ const alex = { login: "alex-gh", name: "Alex Example" };
 const blair = { login: "blair-gh", name: "Blair Example" };
 
 describe("registration requests", () => {
+  test("a login card carries its sign-in page and username, and saves the password", async () => {
+    const waiting = reg.requestCredentialRegistration("s-login", {
+      owner: "Alex",
+      login: "alex-gh",
+      spec: {
+        service: "acme-staging",
+        kind: "login",
+        loginUrl: "https://app.example.test/login",
+        username: "qa@example.test",
+      },
+    });
+    const { request } = reg.pendingCredentialRegistration("s-login")!;
+    expect(request).toMatchObject({
+      kind: "login",
+      host: "app.example.test",
+      loginUrl: "https://app.example.test/login",
+      username: "qa@example.test",
+    });
+    await reg.submitCredentialRegistration(
+      "s-login",
+      request.id,
+      "alex-gh",
+      SECRET,
+    );
+    const result = await waiting;
+    expect(result.status).toBe("registered");
+    expect(kc.findCredential("acme-staging")).toMatchObject({ kind: "login" });
+    expectNoSecretLeaked(result);
+  });
+
   test("the driver's secret lands in the keychain; the waiter gets metadata only", async () => {
     const waiting = open("s-ok");
     const { request } = reg.pendingCredentialRegistration("s-ok")!;
