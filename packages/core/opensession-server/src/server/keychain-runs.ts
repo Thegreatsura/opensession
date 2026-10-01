@@ -210,6 +210,12 @@ export async function startCredentialRun(
     },
   };
   runs.set(id, run);
+  // The claim awaited its write; a revocation in that window found no run
+  // to end. Then the approved command must not start at all.
+  if (grant.status !== "active") {
+    await finish(run, "revoked");
+    return { error: "the run was revoked before it started" };
+  }
 
   try {
     run.server = Bun.serve({
