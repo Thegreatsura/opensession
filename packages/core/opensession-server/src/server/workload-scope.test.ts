@@ -38,6 +38,14 @@ describe("workload scope", () => {
     ).toBeTruthy();
   });
 
+  test("a caller can name the scope so a later gateway can stop it", () => {
+    __setWorkloadScopingForTest(true);
+    const argv = workloadArgv(["bun", "server.ts"], "app", {
+      unit: "opensession-app-dep-1",
+    });
+    expect(argv).toContain("--unit=opensession-app-dep-1");
+  });
+
   test("unit names are unique and systemd-safe", () => {
     const a = workloadUnitName("Keychain Run!");
     const b = workloadUnitName("Keychain Run!");

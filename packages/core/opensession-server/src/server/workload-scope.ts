@@ -59,7 +59,11 @@ export function workloadUnitName(kind: string): string {
  * the user manager's runtime dir, so the result works with any spawn API and
  * any (even minimal) caller environment.
  */
-export function workloadArgv(argv: string[], kind: string): string[] {
+export function workloadArgv(
+  argv: string[],
+  kind: string,
+  options: { unit?: string } = {},
+): string[] {
   if (!shouldScope()) return argv;
   return [
     "/usr/bin/env",
@@ -69,12 +73,17 @@ export function workloadArgv(argv: string[], kind: string): string[] {
     "--scope",
     "--collect",
     "--quiet",
-    `--unit=${workloadUnitName(kind)}`,
+    `--unit=${options.unit ?? workloadUnitName(kind)}`,
     ...engineScopeSystemdArgs(),
     "--property=TimeoutStopSec=2",
     "--",
     ...argv,
   ];
+}
+
+/** Whether workloadArgv currently wraps commands in a scope. */
+export function workloadScopingActive(): boolean {
+  return shouldScope();
 }
 
 /** `{ command, args }` form of workloadArgv (stdio MCP transports, spawn). */
