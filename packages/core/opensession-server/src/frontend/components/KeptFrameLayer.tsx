@@ -3,11 +3,13 @@ import {
   getKeptFrames,
   keptFrameEntered,
   keptFrameLoaded,
+  keptFrameNavigated,
   keptFrameReturned,
   subscribeKeptFrames,
   type KeptFrame,
 } from "../lib/kept-frames";
 import { useFrameFocus } from "../hooks/useFrameFocus";
+import { useFrameLocation } from "../hooks/useFrameLocation";
 import { BROWSER_FRAME, BrowserLoading } from "./BrowserPane";
 
 /**
@@ -51,6 +53,7 @@ function KeptFrameBox({
     () => keptFrameEntered(key),
     () => keptFrameReturned(key, window.history.length),
   );
+  useFrameLocation(frameRef, (href) => keptFrameNavigated(key, href));
 
   // Follows the slot: placed before paint, then on every size change of the
   // slot or the pane (tab strip, side panel, split ratio, window). A slot with
