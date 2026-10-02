@@ -5,6 +5,7 @@ import {
   commitAuthorFor,
   deriveIdentityTables,
   gitIdentityEnv,
+  gitIdentityFor,
   labelIdentity,
   githubLoginForTrustedSlackId,
   githubLoginToPersonKeyFromTeam,
@@ -122,6 +123,31 @@ describe("commit attribution", () => {
       expect(githubLoginForTrustedSlackId("U_ALICE")).toBeNull();
     } finally {
       restoreDuplicate();
+    }
+  });
+
+  test("memoized identities are copies and follow a roster change", () => {
+    const first = gitIdentityFor("alice");
+    expect(first).toEqual({
+      name: "Alice Example",
+      email: "alice@example.com",
+    });
+    first!.name = "Mutated";
+    expect(gitIdentityFor("alice")?.name).toBe("Alice Example");
+    expect(gitIdentityFor("mallory")).toBeNull();
+
+    const restoreRoster = __setIdentitiesForTest([
+      {
+        name: "Mallory Example",
+        email: "mallory@example.com",
+        github: "mallory",
+      },
+    ]);
+    try {
+      expect(gitIdentityFor("alice")).toBeNull();
+      expect(gitIdentityFor("mallory")?.email).toBe("mallory@example.com");
+    } finally {
+      restoreRoster();
     }
   });
 

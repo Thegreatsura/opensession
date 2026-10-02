@@ -779,14 +779,21 @@ export function prsBySessionRef(
     string,
     Array<{ repo: string; branch: string; pr: PrInfo }>
   >();
+  // This runs for every live sidebar row update, over every cached PR. Read
+  // the bot logins once and decide each author once, not once per PR.
+  const botLogins = new Set(githubBotLogins());
+  const trusted = new Map<string, boolean>();
   for (const [repoId, byBranch] of prsByRepo)
     for (const [branch, pr] of byBranch) {
       if (!pr.sessionRef) continue;
-      if (
-        !githubBotLogins().includes(pr.author.toLowerCase()) &&
-        !githubLoginToPersonKey(pr.author)
-      )
-        continue;
+      let authorTrusted = trusted.get(pr.author);
+      if (authorTrusted === undefined) {
+        authorTrusted =
+          botLogins.has(pr.author.toLowerCase()) ||
+          !!githubLoginToPersonKey(pr.author);
+        trusted.set(pr.author, authorTrusted);
+      }
+      if (!authorTrusted) continue;
       const list = out.get(pr.sessionRef);
       if (list) list.push({ repo: repoId, branch, pr });
       else out.set(pr.sessionRef, [{ repo: repoId, branch, pr }]);

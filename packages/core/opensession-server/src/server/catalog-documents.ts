@@ -312,6 +312,14 @@ async function exportCommitted(
   }
 }
 
+const namespaceWrites = new Map<string, number>();
+
+/** Commits this process has made to `namespace`. Read-side caches compare it
+ *  to drop a projection as soon as their own process writes. */
+export function catalogNamespaceWriteCount(namespace: string): number {
+  return namespaceWrites.get(namespace) ?? 0;
+}
+
 export function catalogDocuments(namespace: string) {
   validateNamespace(namespace);
   async function update<T>(
@@ -345,6 +353,10 @@ export function catalogDocuments(namespace: string) {
           current = result.current;
           continue;
         }
+        namespaceWrites.set(
+          namespace,
+          catalogNamespaceWriteCount(namespace) + 1,
+        );
         await exportCommitted(namespace, key, value);
         return value;
       }

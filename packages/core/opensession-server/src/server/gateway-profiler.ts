@@ -61,8 +61,7 @@ export function summarizeGatewayProfile(
 ): string {
   const self = new Map<string, number>();
   const inclusive = new Map<string, number>();
-  const stalls: { startMs: number; ms: number; samples: ProfileTrace[] }[] =
-    [];
+  const stalls: { startMs: number; ms: number; samples: ProfileTrace[] }[] = [];
   let current: (typeof stalls)[number] | undefined;
   let previousMs = -Infinity;
   for (const trace of traces) {
