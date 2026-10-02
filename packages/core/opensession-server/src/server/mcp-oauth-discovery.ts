@@ -111,6 +111,26 @@ function challengeMetadata(header: string): string | undefined {
   return undefined;
 }
 
+/** RFC 9728 binds the document to the requested resource. Like the MCP SDK,
+ * also accept a same-origin parent path (an origin-wide `https://acme.test`
+ * document for `https://acme.test/mcp`), but never a sibling path, a longer
+ * path, or one carrying its own query or fragment. */
+function coversResource(raw: string, requested: URL): boolean {
+  const advertised = new URL(raw);
+  if (advertised.href === requested.href) return true;
+  if (
+    advertised.origin !== requested.origin ||
+    advertised.search ||
+    advertised.hash
+  )
+    return false;
+  const slash = (path: string) => (path.endsWith("/") ? path : `${path}/`);
+  return (
+    advertised.pathname.length <= requested.pathname.length &&
+    slash(requested.pathname).startsWith(slash(advertised.pathname))
+  );
+}
+
 function wellKnown(issuer: URL, name: string): string[] {
   const path =
     issuer.pathname === "/" ? "" : issuer.pathname.replace(/\/$/, "");
@@ -182,10 +202,9 @@ export async function discoverMcpOauth(
   for (const candidate of candidates) {
     try {
       const pr = await metadata(await request(candidate), signal);
-      // RFC 9728 binds the document to the requested resource, not a sibling path.
       if (
         typeof pr.resource !== "string" ||
-        new URL(pr.resource).href !== resourceUrl.href
+        !coversResource(pr.resource, resourceUrl)
       )
         continue;
       if (
