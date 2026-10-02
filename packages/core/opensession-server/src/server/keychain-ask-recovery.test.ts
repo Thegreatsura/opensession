@@ -86,6 +86,16 @@ mock.module("./asks", () => ({
   },
 }));
 
+// Session frames: record them instead of reaching any socket.
+const frames: Array<{ sessionId: string; msg: any }> = [];
+const realHub = await import("./ws-hub");
+mock.module("./ws-hub", () => ({
+  ...realHub,
+  broadcastToSession: (sessionId: string, msg: object) => {
+    frames.push({ sessionId, msg });
+  },
+}));
+
 // Delivery normally runs as a durable session-kernel effect; deliver inline.
 const realKernel = await import("./session-kernel");
 mock.module("./session-kernel", () => ({
@@ -140,6 +150,7 @@ beforeEach(() => {
   slackPosts.length = 0;
   duringReply = null;
   cards.length = 0;
+  frames.length = 0;
   kc.addCredential({
     owner: "Alex",
     service: "acme-prod",
@@ -534,6 +545,81 @@ describe("the keychain routes", () => {
 
     expect((await route(path, alex, body)).status).toBe(200);
     expect(textOf(await call)).toContain(kc.listGrants()[0]!.id);
+  });
+});
+
+describe("the keychain card in the asking session", () => {
+  const alex = { login: "alex-gh", name: "Alex Example" };
+  const bob = { login: "bob-gh", name: "Bob Example" };
+  const list = async (
+    authUser: { login: string; name: string; automation?: boolean } | null,
+    sessionId = SESSION,
+  ) =>
+    (
+      await (
+        await route(`/api/keychain/asks?sessionId=${sessionId}`, authUser)
+      ).json()
+    ).asks;
+
+  test("shows the ask only to the credential's verified owner", async () => {
+    const client = await connect();
+    const call = client.callTool({
+      name: "request_credential",
+      arguments: { credential: "acme-prod", purpose: "read the invoices" },
+    });
+    for (let i = 0; i < 100 && !kc.listKeychainAsks().length; i++)
+      await Bun.sleep(5);
+    const ask = pendingAsk();
+
+    // The frame every viewer gets says only that something changed.
+    expect(frames).toEqual([
+      {
+        sessionId: SESSION,
+        msg: { type: "keychain_asks_changed", sessionId: SESSION },
+      },
+    ]);
+
+    // Another teammate, a claimed name, or an automation sees nothing.
+    expect(await list(bob)).toEqual([]);
+    expect(await list(null)).toEqual([]);
+    expect(await list({ ...alex, automation: true })).toEqual([]);
+    expect(await list(alex, "os-other-session")).toEqual([]);
+
+    const [card] = await list(alex);
+    expect(card).toMatchObject({
+      id: ask.id,
+      requestedBy: "Alex",
+      purpose: "read the invoices",
+      requestedMode: "once",
+      credentials: [{ service: "acme-prod", host: "api.example.test" }],
+    });
+
+    // The card answers through the owner-checked route.
+    const path = `/api/keychain/asks/${card.id}/answer`;
+    expect((await route(path, bob, { decision: "standing" })).status).toBe(403);
+    expect((await route(path, alex, { decision: "standing" })).status).toBe(
+      200,
+    );
+    expect(textOf(await call)).toContain(kc.listGrants()[0]!.id);
+    expect(frames).toHaveLength(2);
+    expect(await list(alex)).toEqual([]);
+  });
+
+  test("a withdrawn ask leaves the card too", async () => {
+    const client = await connect();
+    void client
+      .callTool({
+        name: "request_credential",
+        arguments: { credential: "acme-prod", purpose: "read the invoices" },
+      })
+      .catch(() => {});
+    for (let i = 0; i < 100 && !kc.listKeychainAsks().length; i++)
+      await Bun.sleep(5);
+    const ask = pendingAsk();
+    expect(await list(alex)).toHaveLength(1);
+    kc.cancelCredentialAsk(ask.id, SESSION);
+    expect(frames.at(-1)?.msg.type).toBe("keychain_asks_changed");
+    expect(await list(alex)).toEqual([]);
   });
 });
 

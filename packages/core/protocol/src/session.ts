@@ -812,6 +812,13 @@ export type ProtocolServerMessage =
       status: "registered" | "declined" | "expired";
     }
   | {
+      /** A keychain ask from this session was made or settled. Names no
+       *  credential or owner: viewers re-read /api/keychain/asks, which shows
+       *  an ask only to the credential's owner. */
+      type: "keychain_asks_changed";
+      sessionId: string;
+    }
+  | {
       /** The agent asked the session's driver to force merge a PR
        *  (force_merge_pull_request). The gateway fills in everything but the
        *  reason from GitHub. Confirmed or cancelled over HTTP

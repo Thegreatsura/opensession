@@ -49,6 +49,7 @@ import { AskCard } from "../AskCard";
 import { LocalFilesRequestCard } from "../LocalFilesRequestCard";
 import { ForceMergeCard } from "../ForceMergeCard";
 import { CredentialRegistrationCard } from "../CredentialRegistrationCard";
+import { KeychainAskCard } from "../KeychainAskCard";
 import { ScriptRunsCard } from "../ScriptRunsCard";
 import {
   ShippedChangeComposer,
@@ -1092,6 +1093,8 @@ export function SessionViewerMainRegion({
               <LocalFilesRequestCard sessionId={session.id} />
 
               <CredentialRegistrationCard sessionId={session.id} />
+
+              <KeychainAskCard sessionId={session.id} />
 
               <ForceMergeCard sessionId={session.id} />
 

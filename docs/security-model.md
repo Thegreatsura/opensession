@@ -168,10 +168,14 @@ ceiling) over the signed-in HTTP route; it is stored 0600 on the server and no
 API or tool returns it. Any interactive session may ask to borrow any
 credential for a stated purpose. Only the owner answers: in their Slack DM,
 where a button counts only when the clicking Slack user is the one the ask was
-sent to, or in Settings, which requires the owner's verified GitHub sign-in
-(a claimed name or an automation token is refused). A keychain ask is never
-posed as a card in the asking session, because anyone watching that session,
-or another agent through session control, could answer a card.
+sent to, or on the web, which requires the owner's verified GitHub sign-in
+(a claimed name or an automation token is refused). On the web the ask shows
+in Settings and as a card in the asking session. That card is not a session
+question card, which anyone watching the session or another agent through
+session control could answer. The socket frame only says the session's asks
+changed; the card's content comes from `/api/keychain/asks`, which returns an
+ask only to the credential's verified owner, and its buttons post to the same
+owner-checked answer route as Settings.
 
 Approval mints a grant for the asking session: once (one call, one hour) or
 standing (seven days), revocable by the owner or requester. The agent uses it

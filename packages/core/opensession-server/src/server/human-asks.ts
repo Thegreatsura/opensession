@@ -261,11 +261,11 @@ export interface CreateAskInput {
   deliver: DeliverWhen;
   domain?: { kind: string; ref: string };
   /**
-   * Only the person asked may answer. Such an ask never goes up as a card in
-   * the session: anyone watching the session, or another agent through
-   * session control, could answer that card. It reaches the person through
-   * their Slack DM or an identity-checked surface of the owning domain (the
-   * keychain's Settings list).
+   * Only the person asked may answer. Such an ask never goes up as a generic
+   * question card in the session: anyone watching the session, or another
+   * agent through session control, could answer that card. It reaches the
+   * person through their Slack DM or an identity-checked surface of the
+   * owning domain (the keychain's owner-only session card and Settings list).
    */
   personOnly?: boolean;
 }

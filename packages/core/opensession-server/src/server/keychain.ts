@@ -66,6 +66,7 @@ import { readFile } from "node:fs/promises";
 import { writeJsonAtomic, writeJsonAtomicAsync } from "./shared/atomic-write";
 import { audit, auditAsync } from "./audit";
 import { resolveTeammate } from "./shared/user-mappings";
+import { broadcastToSession } from "./ws-hub";
 import {
   cancelAsk,
   getAsk,
@@ -1465,6 +1466,7 @@ export function requestCredential(
   record.humanAskId = transport.id;
   keychainAsks.set(record.id, record);
   persist();
+  announceAsks(record.sessionId);
   audit({
     kind: "keychain_ask_created",
     ask_id: record.id,
@@ -1785,6 +1787,7 @@ export function requestCredentialRun(
     transports.push(transport);
   }
   persist();
+  if (records.length) announceAsks(input.sessionId);
   return { asks: records, transports };
 }
 
@@ -1887,6 +1890,7 @@ function settleAsk(
   record.note = note;
   keychainAsks.set(record.id, record);
   persist();
+  announceAsks(record.sessionId);
   audit({
     kind: "keychain_ask_cancelled",
     ask_id: record.id,
@@ -1986,6 +1990,82 @@ export function answerKeychainAsk(
 }
 
 /**
+ * Tell the requesting session's viewers that its keychain asks changed. The
+ * frame names no credential, owner or purpose: each viewer re-reads
+ * keychainAsksInSession, which shows an ask only to its owner.
+ */
+function announceAsks(sessionId: string): void {
+  broadcastToSession(sessionId, { type: "keychain_asks_changed", sessionId });
+}
+
+export interface SessionKeychainAsk {
+  /** The id answerKeychainAsk takes. */
+  id: string;
+  requestedBy: string;
+  purpose: string;
+  requestedMode: GrantMode;
+  run?: { command: string; maxCalls: number };
+  /** Every credential of this owner the one answer covers (a
+   *  multi-credential run asks each owner once for all of theirs). */
+  credentials: Array<{
+    service: string;
+    host: string;
+    kind?: CredentialKind;
+    username?: string;
+    loginUrl?: string;
+  }>;
+  createdAt: string;
+}
+
+/**
+ * The pending asks one session made that `user` may answer, for the card in
+ * that session. Only the credential's owner sees one: anyone else watching
+ * the session, and every agent, gets an empty list. `user` must be a
+ * verified identity, as for answerKeychainAsk.
+ */
+export function keychainAsksInSession(
+  sessionId: string,
+  user: string,
+): SessionKeychainAsk[] {
+  load();
+  if (!user || !sessionId) return [];
+  const byTransport = new Map<string, SessionKeychainAsk>();
+  const pending = listKeychainAsks({ sessionId })
+    .filter(
+      (a) =>
+        a.status === "pending" && !!a.humanAskId && sameOwner(a.owner, user),
+    )
+    .reverse();
+  for (const a of pending) {
+    const cred = findCredential(a.credentialId);
+    const meta = {
+      service: cred?.service ?? a.credentialId,
+      host: cred?.host ?? "",
+      ...(cred?.kind ? { kind: cred.kind } : {}),
+      ...(cred?.username ? { username: cred.username } : {}),
+      ...(cred?.loginUrl ? { loginUrl: cred.loginUrl } : {}),
+    };
+    const seen = byTransport.get(a.humanAskId!);
+    if (seen) {
+      seen.credentials.push(meta);
+      continue;
+    }
+    byTransport.set(a.humanAskId!, {
+      id: a.id,
+      requestedBy: a.requestedBy,
+      purpose: a.purpose,
+      requestedMode: a.requestedMode,
+      ...(a.run
+        ? { run: { command: a.run.command, maxCalls: a.run.maxCalls } }
+        : {}),
+      credentials: [meta],
+      createdAt: a.createdAt,
+    });
+  }
+  return [...byTransport.values()];
+}
+
+/**
  * What one person may see of the keychain. Every credential's metadata, so a
  * teammate knows what exists to ask for. Grants and asks only where they are
  * the owner or the requester: a grant id is the broker's bearer token, so
@@ -2082,6 +2162,7 @@ function resolveKeychainAsk(ask: HumanAsk, answer: string): string | null {
       keychainAsks.set(r.id, r);
     }
     persist();
+    announceAsks(record.sessionId);
     for (const r of records)
       audit({
         kind: "keychain_ask_declined",
@@ -2129,6 +2210,7 @@ function resolveKeychainAsk(ask: HumanAsk, answer: string): string | null {
   const group = record.run?.group;
   if (group) startWindowOnceComplete(record.sessionId, group);
   persist();
+  announceAsks(record.sessionId);
   const credMeta = findCredential(record.credentialId);
   return credMeta && grant ? grantInstructions(grant, credMeta) : null;
 }
