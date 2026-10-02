@@ -25,23 +25,17 @@ import {
   sessionKernel,
   type DurableTimer,
 } from "./session-kernel";
-import {
-  SessionSearchStore,
-  type SearchHit,
-  type SearchRecord,
-} from "./session-search-store";
+import { callSearchIndex } from "./session-search-client";
+import type { SearchHit, SearchRecord } from "./session-search-store";
 import { mergedSessionTranscriptAsync } from "./sessions";
 import { oneShot } from "./one-shot";
-import { stateDir } from "./paths";
 import type { TranscriptEntry, UnifiedSession } from "./types";
 
 const g = globalThis as typeof globalThis & {
-  __sessionSearchStore?: SessionSearchStore;
   __sessionHistoryTimerRegistered?: boolean;
   __sessionHistoryDistillBusy?: boolean;
 };
 
-const DB_PATH = process.env.OPENSESSION_SEARCH_DB || stateDir("search.db");
 const TIMER_KIND = "session_history_index";
 const DISTILL_TIMER_ID = "session-history:distill";
 const INDEX_HEAD_ENTRIES = 80;
@@ -55,20 +49,26 @@ const DISTILL_BUSY_MIN_MS = 15_000;
 const DISTILL_BUSY_JITTER_MS = 15_000;
 const MIN_DISTILL_CHARS = 400;
 
-export function searchIndex(): SessionSearchStore {
-  return (g.__sessionSearchStore ??= new SessionSearchStore(DB_PATH));
+/** Records in the search index. */
+export function searchIndexCount(): Promise<number> {
+  return callSearchIndex("count");
+}
+
+/** Drop one record (e.g. `session:<id>`) from the search index. */
+export function removeFromSearchIndex(id: string): Promise<void> {
+  return callSearchIndex("remove", id);
 }
 
 const FOLD_POOL = 60;
 const MAX_RESULTS = 25;
 
-export function searchSessionHistory(
+export async function searchSessionHistory(
   query: string,
   opts: { repo?: string; limit?: number; days?: number } = {},
-): Folded<SearchHit>[] {
+): Promise<Folded<SearchHit>[]> {
   const sinceTs = opts.days ? Date.now() - opts.days * 86_400_000 : undefined;
   const limit = Math.min(Math.max(opts.limit ?? 8, 1), MAX_RESULTS);
-  const hits = searchIndex().search(query, {
+  const hits = await callSearchIndex("search", query, {
     repo: opts.repo,
     limit: FOLD_POOL,
     sinceTs,
@@ -300,7 +300,7 @@ export async function indexSessionHistory(
 ): Promise<SessionHistoryIndexResult> {
   const session = await findSessionAsync(sessionId);
   if (!session) {
-    searchIndex().remove(`session:${sessionId}`);
+    await removeFromSearchIndex(`session:${sessionId}`);
     return { kind: "missing" };
   }
   const activityTs = Date.parse(
@@ -334,13 +334,13 @@ export async function indexSessionHistory(
   if (mode === "distill" && distillable) {
     const distilled = await distillWithLlm(session, extracted, base);
     if (distilled) {
-      searchIndex().upsert(distilled);
+      await callSearchIndex("upsert", distilled);
       return { kind: "indexed", activityTs, distillable, distilled: true };
     }
     return { kind: "indexed", activityTs, distillable, distilled: false };
   }
 
-  searchIndex().upsert(base);
+  await callSearchIndex("upsert", base);
   return { kind: "indexed", activityTs, distillable, distilled: false };
 }
 
@@ -506,8 +506,7 @@ export async function backfillSessionHistoryIndexBatch(
     BACKFILL_BATCH,
     Math.max(1, Number.isFinite(limit) ? Math.floor(limit) : BACKFILL_BATCH),
   );
-  const store = searchIndex();
-  const state = store.indexState();
+  const state = await callSearchIndex("indexState");
   const sessions = [...(await getSessionListSnapshotAsync())].sort(
     (left, right) =>
       (right.lastActivity || "").localeCompare(left.lastActivity || ""),
@@ -531,7 +530,7 @@ export async function backfillSessionHistoryIndexBatch(
     msg: "session_history_backfill",
     scanned,
     indexed,
-    total: store.count(),
+    total: await searchIndexCount(),
     duration_ms: Date.now() - startedAt,
   });
   return { scanned, indexed };

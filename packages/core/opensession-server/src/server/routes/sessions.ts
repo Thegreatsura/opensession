@@ -93,7 +93,7 @@ import {
 import { withSessionMutationLock } from "../session-mutation-lock";
 import { sessionIdForRequest } from "../session-request-id";
 import { suggestBranchName } from "../suggest-branch";
-import { searchIndex } from "../session-index";
+import { removeFromSearchIndex } from "../session-index";
 import { destroySessionSandbox } from "../session-sandbox";
 import { deleteSessionCheckpoint } from "../sandbox/checkpoint";
 import { withSessionLifecycleLane } from "../sandbox/lifecycle-lane";
@@ -1936,7 +1936,7 @@ export async function handleSessionsRoutes(
         await deleteSessionTranscript(id);
       } catch {}
       try {
-        searchIndex().remove(`session:${id}`);
+        await removeFromSearchIndex(`session:${id}`);
       } catch {}
     };
     // Every deletion step works on the record as it stands once the lifecycle
