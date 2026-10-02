@@ -104,6 +104,10 @@ export interface LoadedSkill {
   mirrorPath?: string;
 }
 
+/** Leading fenced context blocks, then an optional "[user] " attribution. */
+const SKILL_COMMAND_LEAD_RE =
+  /^(?:\s*<(?:opensession|backstage):context(?:\s[^>]*)?>[\s\S]*?<\/(?:opensession|backstage):context>)*\s*(?:\[[^\]\n]{1,80}\] )?/;
+
 /**
  * Expand a prompt that invokes a skill into the block pi would have built.
  *
@@ -123,8 +127,14 @@ export function expandSkillCommand(
   text: string,
   skills: LoadedSkill[],
 ): string {
-  if (!text.startsWith("/")) return text;
-  const match = text.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
+  // The server prepends fenced context (retrieved memory, handoffs, the
+  // portals note) and, for steers, a "[user] " attribution before the engine
+  // sees a prompt. The command is what the person typed after those, so look
+  // past them and keep them in place.
+  const lead = text.match(SKILL_COMMAND_LEAD_RE)?.[0] ?? "";
+  const typed = text.slice(lead.length);
+  if (!typed.startsWith("/")) return text;
+  const match = typed.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
   if (!match) return text;
   const requested = match[1].startsWith("skill:")
     ? match[1].slice(6)
@@ -141,7 +151,7 @@ export function expandSkillCommand(
     const block =
       `<skill name="${skill.name}" location="${skill.filePath}">\n` +
       `References are relative to ${skill.baseDir}.\n\n${body}\n</skill>`;
-    return args ? `${block}\n\n${args}` : block;
+    return lead + (args ? `${block}\n\n${args}` : block);
   } catch {
     return text;
   }
