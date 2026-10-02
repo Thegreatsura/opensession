@@ -101,6 +101,7 @@ import {
 import { startGoalTicker } from "./src/server/goal-runner";
 import { startSessionHistoryIndexing } from "./src/server/session-index";
 import { startEventLoopLagMonitor } from "./src/server/system-stats";
+import { startGatewayProfilerSignal } from "./src/server/gateway-profiler";
 import { startDerivedCatalogRepair } from "./src/server/catalog-documents";
 import { ensureWarmTemplateScheduler } from "./src/server/warm-template";
 import { handleRunnerWsUpgrade } from "./src/server/runner-ws";
@@ -955,6 +956,8 @@ if (!g.__opensessionBooted) {
     // (system-stats.ts). The session-performance contract only measures the
     // client; this is the server-side counterpart.
     startEventLoopLagMonitor();
+    // `kill -USR1` samples this thread and writes what blocked it.
+    startGatewayProfilerSignal();
 
     // Catalog projections imported by this boot get a one-time repair once
     // the previous gateway has drained (catalog-documents.ts).
