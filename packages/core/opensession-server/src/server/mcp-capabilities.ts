@@ -78,9 +78,9 @@ export const INTERNAL_MCP_CAPABILITIES = {
   },
   "opensession-repos": {
     summary:
-      "Attach or switch repos, link a PR to this session, label PRs, and check whether a PR is ready to merge.",
+      "Attach or switch repos, link a PR to this session, label PRs, check whether a PR is ready to merge, and ask the driver to force merge one.",
     guidance:
-      "Attach or switch repositories and link pull requests while preserving this session's multi-repo context. Use label_pull_request to label a PR in any registered repo, including one your shell cannot reach. Use check_pr_ready for one deterministic merge-readiness verdict (checks, reviews, conflicts, draft, branch rules) instead of reading transcripts or raw gh output.",
+      "Attach or switch repositories and link pull requests while preserving this session's multi-repo context. Use label_pull_request to label a PR in any registered repo, including one your shell cannot reach. Use check_pr_ready for one deterministic merge-readiness verdict (checks, reviews, conflicts, draft, branch rules) instead of transcripts or raw gh output. To merge past blockers on request, use force_merge_pull_request.",
   },
   "opensession-memory": {
     summary:

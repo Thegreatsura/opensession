@@ -47,6 +47,7 @@ import { TranscriptView } from "../session/TranscriptView";
 import { SessionSafetyNotice } from "../SessionSafetyNotice";
 import { AskCard } from "../AskCard";
 import { LocalFilesRequestCard } from "../LocalFilesRequestCard";
+import { ForceMergeCard } from "../ForceMergeCard";
 import { CredentialRegistrationCard } from "../CredentialRegistrationCard";
 import { ScriptRunsCard } from "../ScriptRunsCard";
 import {
@@ -1091,6 +1092,8 @@ export function SessionViewerMainRegion({
               <LocalFilesRequestCard sessionId={session.id} />
 
               <CredentialRegistrationCard sessionId={session.id} />
+
+              <ForceMergeCard sessionId={session.id} />
 
               <ScriptRunsCard sessionId={session.id} />
 

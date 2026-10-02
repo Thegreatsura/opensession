@@ -90,6 +90,9 @@ function harness(overrides: Partial<ReposToolContext> = {}) {
         },
       };
     },
+    forceMerge: async () => {
+      throw new Error("unused");
+    },
     ...overrides,
   };
   return { server: createReposMcpServer(ctx), labelCalls, readyCalls };
@@ -176,6 +179,66 @@ describe("check_pr_ready", () => {
     const out = await call(server, "check_pr_ready", { session: "os-x" });
     expect(out).toBe(
       "Couldn't check that PR: Session os-x has no pull request yet (opensession:feat)",
+    );
+  });
+});
+
+describe("force_merge_pull_request", () => {
+  test("relays the outcome and the bypassed checks", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const { server } = harness({
+      forceMerge: async (input) => {
+        calls.push(input);
+        return {
+          request: {
+            id: "00000000-0000-0000-0000-000000000000",
+            repo: "app",
+            ghRepo: "acme/app",
+            number: 7,
+            title: "Fix",
+            url: "https://github.com/acme/app/pull/7",
+            author: "ada",
+            base: "main",
+            head: "fix",
+            headSha: "abcdef1234567890",
+            method: "squash",
+            reason: "e2e is down",
+            bypass: [
+              { kind: "check", name: "e2e", state: "failing", required: true },
+            ],
+            driver: "Ada",
+            requestedAt: 0,
+            expiresAt: 0,
+          },
+          result: { status: "merged", confirmedBy: "ada", commented: true },
+        };
+      },
+    });
+    const out = await call(server, "force_merge_pull_request", {
+      repo: "app",
+      number: 7,
+      reason: "e2e is down",
+    });
+    expect(calls).toEqual([{ repo: "app", number: 7, reason: "e2e is down" }]);
+    expect(out).toContain("acme/app#7 was merged (squash) at abcdef1");
+    expect(out).toContain("Bypassed: Check e2e failing (required).");
+  });
+
+  test("a refusal comes back as a message", async () => {
+    const { server } = harness({
+      forceMerge: async () => {
+        throw new Error(
+          "acme/app#7 is a draft. Mark it ready for review first.",
+        );
+      },
+    });
+    const out = await call(server, "force_merge_pull_request", {
+      repo: "app",
+      number: 7,
+      reason: "r",
+    });
+    expect(out).toBe(
+      "Couldn't force merge: acme/app#7 is a draft. Mark it ready for review first.",
     );
   });
 });
