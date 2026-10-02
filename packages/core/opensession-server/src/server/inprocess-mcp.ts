@@ -14,6 +14,8 @@
  *    those stdio proxy configs.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
+import type { jsonSchemaValidator } from "@modelcontextprotocol/sdk/validation";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { z, ZodRawShape } from "zod";
 
@@ -45,6 +47,25 @@ export function tool<Schema extends ZodRawShape>(
   return { name, description, inputSchema, handler };
 }
 
+/**
+ * A JSON Schema validator that builds its Ajv instance on first use.
+ *
+ * The SDK's Server and Client each construct an Ajv instance up front, and
+ * that was a third of building a session's in-process servers, which happens
+ * on every tool call a run makes. A server only validates for elicitation and
+ * a client only for tool output schemas after listing tools, so most
+ * instances never need one.
+ */
+export function lazyJsonSchemaValidator(): jsonSchemaValidator {
+  let inner: AjvJsonSchemaValidator | undefined;
+  return {
+    getValidator(schema) {
+      inner ??= new AjvJsonSchemaValidator();
+      return inner.getValidator(schema);
+    },
+  };
+}
+
 export interface InProcessMcpServer {
   /** Kept as "sdk" — run-rpc, the runners and the tests key off this tag. */
   type: "sdk";
@@ -61,7 +82,10 @@ export function createSdkMcpServer(options: {
 }): InProcessMcpServer {
   const instance = new McpServer(
     { name: options.name, version: options.version ?? "1.0.0" },
-    { capabilities: { tools: options.tools ? {} : undefined } },
+    {
+      capabilities: { tools: options.tools ? {} : undefined },
+      jsonSchemaValidator: lazyJsonSchemaValidator(),
+    },
   );
   for (const t of options.tools ?? []) {
     instance.registerTool(
