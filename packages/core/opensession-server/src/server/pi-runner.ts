@@ -111,6 +111,15 @@ import {
   sessionStartContext,
 } from "./context-log";
 import { wrapContext } from "./prompt-context";
+import {
+  PI_TURN_CHECKPOINT_FILE,
+  createPiTurnCheckpointWriter,
+  interruptedReplyNote,
+  repairInterruptedPiTurn,
+  takePiTurnCheckpoint,
+  type PiTurnCheckpointWriter,
+  type PiTurnRepair,
+} from "./pi-turn-checkpoint";
 import { stagePromptImages, withImagesNote } from "./prompt-attachments";
 import {
   EMPTY_REPLY_RETRY_PROMPT,
@@ -2265,6 +2274,7 @@ async function* runPiAttempt(
   let session: AgentSession | undefined;
   let mcpRuntime: McpRuntime | undefined;
   let mcpBridge: PiMcpBridge | undefined;
+  let checkpointWriter: PiTurnCheckpointWriter | undefined;
   let sawSettled = false;
   // Pool-backed providers only (pi/openai: Codex pool, pi/xai-oauth: SuperGrok
   // pool): the picked account — visible to the catch/terminal paths so the
@@ -3060,6 +3070,22 @@ async function* runPiAttempt(
       (resumePath
         ? sdk.SessionManager.open(resumePath, sessionDir)
         : sdk.SessionManager.create(cwd, sessionDir));
+    // A previous turn on this Pi session that died with its process left
+    // tool calls without results and lost the reply it was streaming
+    // (pi-turn-checkpoint.ts). Close those calls before the model sees the
+    // session, and keep the reply for the prompt below.
+    const checkpointPath = join(sessionDir, PI_TURN_CHECKPOINT_FILE);
+    let turnRepair: PiTurnRepair | null = null;
+    if (!walk.continuation && opts.sessionId && unifiedSessionId) {
+      try {
+        turnRepair = repairInterruptedPiTurn(
+          resumePath ? sessionManager : null,
+          await takePiTurnCheckpoint(checkpointPath, opts.sessionId),
+        );
+      } catch (e) {
+        console.warn("[pi-runner] interrupted-turn repair failed:", e);
+      }
+    }
 
     // Preset effort override (workspace preset's pin first, then the built-in
     // preset's) falls back to the session's own effort.
@@ -3153,6 +3179,12 @@ async function* runPiAttempt(
     // Match that behavior instead of Pi's one-message-per-step default.
     session.setSteeringMode("all");
     piSessionId = session.sessionId;
+    if (unifiedSessionId) {
+      checkpointWriter = createPiTurnCheckpointWriter(
+        checkpointPath,
+        piSessionId,
+      );
+    }
 
     // Map pi→unified BEFORE any engine-keyed append (the W1 import-first gate
     // resolves through this map; unmapped appends are dropped + degraded).
@@ -3311,6 +3343,54 @@ async function* runPiAttempt(
     // store write, so the row upserts instead of duplicating the bubble.
     appendRunLines([userLine]);
 
+    if (turnRepair && (turnRepair.reply || turnRepair.toolResults.length)) {
+      const recovered: TranscriptEntry[] = [];
+      if (turnRepair.reply) {
+        recovered.push(
+          ...piAssistantTranscriptEntries(
+            [{ type: "text", text: turnRepair.reply.text }],
+            turnRepair.reply.startedAt,
+            parsed.modelID,
+            turnRepair.reply.id,
+          ),
+        );
+      }
+      for (const result of turnRepair.toolResults) {
+        recovered.push({
+          id: `${result.toolCallId}-result`,
+          type: "tool_result",
+          content: result.text,
+          timestamp: nowIso(),
+          toolUseId: result.toolCallId,
+          isError: true,
+        });
+      }
+      const calls = turnRepair.toolResults.length;
+      const notice = [
+        "The previous turn stopped unexpectedly.",
+        turnRepair.reply ? "Its unfinished reply is kept above." : "",
+        calls
+          ? `${calls === 1 ? "1 tool call" : `${calls} tool calls`} it was running ${calls === 1 ? "is" : "are"} marked as interrupted.`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      recovered.push({
+        id: crypto.randomUUID(),
+        type: "system",
+        content: notice,
+        timestamp: nowIso(),
+      });
+      persistRunEntries(recovered);
+      push({ type: "runner_notice", text: notice });
+      audit({
+        ...auditBase,
+        direction: "in",
+        kind: "interrupted_turn_repaired",
+        reply_chars: turnRepair.reply?.text.length ?? 0,
+        tool_calls: calls,
+      });
+    }
     if (resumeMissNote) {
       const notice =
         "Pi couldn't resume the previous engine session. " +
@@ -3341,6 +3421,14 @@ async function* runPiAttempt(
     const promptForEngine = [
       wrapContext(sessionContext, "session"),
       ...(resumeMissNote ? [wrapContext(resumeMissNote, "handoff")] : []),
+      ...(turnRepair?.reply
+        ? [
+            wrapContext(
+              interruptedReplyNote(turnRepair.reply.text),
+              "restart-recovery",
+            ),
+          ]
+        : []),
       walk.continuation
         ? wrapContext(
             "The previous account reached its usage limit. Continue the unfinished task from the existing conversation and completed tool results. Do not restart the task or repeat completed actions. Finish with a reply to the user.",
@@ -3381,6 +3469,7 @@ async function* runPiAttempt(
     // state for pi's own session file, not transcript content.
     const unsubscribe = session.subscribe((ev: AgentSessionEvent) => {
       try {
+        checkpointWriter?.observe(ev);
         switch (ev.type) {
           case "message_update": {
             const ame = (ev as any).assistantMessageEvent;
@@ -3869,6 +3958,13 @@ async function* runPiAttempt(
       try {
         void session.abort();
       } catch {}
+    }
+    // Mirrors the run journal below: only a turn torn down mid-run (or a
+    // process that never reaches here) leaves a checkpoint to recover from.
+    if (checkpointWriter) {
+      await (reachedTerminal || abort.signal.aborted
+        ? checkpointWriter.discard()
+        : checkpointWriter.flush());
     }
     if (mcpRuntime) {
       try {
