@@ -6,9 +6,11 @@ import {
 import { statusMenuIcon } from "../../lib/sidebar-lanes";
 import { MINE_STATUS_META, type CtxEntry } from "../../lib/sidebar-types";
 import { snoozePresets } from "../../lib/snoozes";
+import { ROW_COLORS } from "../../lib/row-colors";
 import {
   IconChevronRight,
   IconMoon,
+  IconPalette,
   IconPeople,
   IconStatusRing,
 } from "../icons";
@@ -214,7 +216,7 @@ export function SidebarCtxMenu({
   // Flyout state + hover grace so the pointer can
   // cross the gap between the menu and the panel.
   const [sub, setSub] = useState<{
-    kind: "status" | "snooze" | "collaborators";
+    kind: "status" | "snooze" | "collaborators" | "color";
     rect: DOMRect;
   } | null>(null);
   const closeT = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -233,6 +235,9 @@ export function SidebarCtxMenu({
   );
   const snoozeEntry = entries.find(
     (e): e is Extract<CtxEntry, { kind: "snooze" }> => e.kind === "snooze",
+  );
+  const colorEntry = entries.find(
+    (e): e is Extract<CtxEntry, { kind: "color" }> => e.kind === "color",
   );
   const collaboratorsEntry = entries.find(
     (e): e is Extract<CtxEntry, { kind: "collaborators" }> =>
@@ -258,7 +263,9 @@ export function SidebarCtxMenu({
       ? MINE_STATUS_META.length + 1
       : sub?.kind === "collaborators"
         ? TEAM.length || 1
-        : snoozePresets().length + (snoozeEntry?.until ? 1 : 0);
+        : sub?.kind === "color"
+          ? ROW_COLORS.length + 1
+          : snoozePresets().length + (snoozeEntry?.until ? 1 : 0);
   const subTop = sub
     ? Math.max(
         8,
@@ -317,6 +324,21 @@ export function SidebarCtxMenu({
                 onOpen={(rect) => {
                   cancelClose();
                   setSub({ kind: "collaborators", rect });
+                }}
+                onLeave={scheduleClose}
+              />
+            );
+          }
+          if (entry.kind === "color") {
+            return (
+              <CtxFlyoutRow
+                key={i}
+                icon={<IconPalette size={20} />}
+                label="Color"
+                value={ROW_COLORS.find((c) => c.key === entry.current)?.label}
+                onOpen={(rect) => {
+                  cancelClose();
+                  setSub({ kind: "color", rect });
                 }}
                 onLeave={scheduleClose}
               />
@@ -407,6 +429,48 @@ export function SidebarCtxMenu({
           onMouseEnter={cancelClose}
           onMouseLeave={scheduleClose}
         />
+      )}
+      {sub?.kind === "color" && colorEntry && (
+        <div
+          className={POPUP_CLASS}
+          style={{
+            ...CTX_MENU_STYLE,
+            left: subLeft,
+            top: subTop,
+            minWidth: SUB_W,
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onMouseEnter={cancelClose}
+          onMouseLeave={scheduleClose}
+        >
+          {ROW_COLORS.map((c) => (
+            <CtxItem
+              key={c.key}
+              icon={
+                <span
+                  className="size-3 rounded-full"
+                  style={{ background: c.hex }}
+                />
+              }
+              label={c.label}
+              trailing={check(colorEntry.current === c.key)}
+              onClick={() => {
+                colorEntry.onPick(c.key);
+                onClose();
+              }}
+            />
+          ))}
+          <div style={CTX_SEP_STYLE} />
+          <CtxItem
+            icon={<span />}
+            label="None"
+            trailing={check(colorEntry.current === null)}
+            onClick={() => {
+              colorEntry.onPick(null);
+              onClose();
+            }}
+          />
+        </div>
       )}
       {sub?.kind === "snooze" && snoozeEntry && (
         <div

@@ -49,7 +49,7 @@ touches an in-process tool:
 | [`opensession-humans`](#opensession-humans) | 3 | interactive, Slack loop, goal wake | Interactive runs need a session id (the answer routes back to it). |
 | [`opensession-keychain`](#opensession-keychain) | 12 | interactive | Needs a session id. |
 | [`opensession-publish`](#opensession-publish) | 4 | interactive | Needs a session id. |
-| [`opensession-repos`](#opensession-repos) | 6 | interactive | Needs a session id. |
+| [`opensession-repos`](#opensession-repos) | 7 | interactive | Needs a session id. |
 | [`opensession-memory`](#opensession-memory) | 9 | interactive | Needs a session id. |
 | [`opensession-web`](#opensession-web) | 3 | interactive, goal wake | Needs a session id. |
 | [`opensession-portals`](#opensession-portals) | 9 | interactive | Needs a session id. |
@@ -75,7 +75,7 @@ touches an in-process tool:
 | [`opensession-github`](#opensession-github) | 4 | Slack loop | – |
 | [`opensession-goal-self`](#opensession-goal-self) | 6 | goal wake | Only on a session that carries a goalId. |
 
-34 servers, 166 tools.
+34 servers, 167 tools.
 
 ## opensession-sessions
 
@@ -601,7 +601,7 @@ Stop a published app. It stays registered with its versions intact and can be st
 
 ## opensession-repos
 
-Attach or switch repos, link a PR to this session, label PRs, and check whether a PR is ready to merge.
+Attach or switch repos, link a PR to this session, label PRs, check whether a PR is ready to merge, and ask the driver to force merge one.
 
 - **Source** `packages/core/opensession-server/src/agents/slack/repos-tools.ts`
 - **Wired in** `packages/core/opensession-server/src/server/interactive-mcp.ts`
@@ -643,6 +643,12 @@ Add or remove labels on a pull request in any registered GitHub repo, including 
 `mcp__opensession-repos__check_pr_ready` · input: `url` (string), `repo` (string), `number` (number), `session` (string)
 
 Is a pull request ready to merge? One deterministic verdict from live GitHub state: ready or not, and every blocker: open/merged/closed, draft, merge conflicts, each check's latest run by name (failing, pending, passing), the review decision and who gave it, and the base branch's rules. The first line is a sentence to say as-is; the JSON block at the end is the same verdict for branching on. Pass a PR URL, a repo id and number, or a session id to check that session's PR (defaults to this session's own PR). Read-only, runs as the bot, works for any registered repo. Use this instead of piecing readiness together from transcripts or gh output.
+
+### `force_merge_pull_request`
+
+`mcp__opensession-repos__force_merge_pull_request` · input: `url` (string), `repo` (string), `number` (number), `reason` (string, required), `method` ("squash" | "merge" | "rebase")
+
+Ask the person driving this session to merge a pull request despite failing, pending or missing checks or reviews. Only when they asked for it: never on your own judgment. A card shows them the PR, its title, the head commit, the merge method and exactly which checks and reviews would be bypassed; nothing happens until they press Confirm, and you cannot confirm it. The merge runs with their own GitHub account and is pinned to the head commit on the card, so a push after the card appears aborts it. GitHub still decides whether they may bypass branch protection; a refusal names what is missing. Merged PRs get a comment with the reason. Drafts and PRs with merge conflicts are refused. Waits up to 15 minutes. After a cancel, do not ask again unless they say so.
 
 ## opensession-memory
 

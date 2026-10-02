@@ -1391,6 +1391,20 @@ export function IconMoon(p: IconProps) {
   );
 }
 
+export function IconPalette(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path
+        {...stroke}
+        d="M12 4.75C7.99 4.75 4.75 7.99 4.75 12C4.75 16.01 7.99 19.25 12 19.25C12.97 19.25 13.5 18.6 13.5 17.85C13.5 17.42 13.3 17.1 13.06 16.83C12.82 16.56 12.64 16.24 12.64 15.83C12.64 15.04 13.28 14.4 14.07 14.4H15.75C17.68 14.4 19.25 12.83 19.25 10.9C19.25 7.47 16.01 4.75 12 4.75Z"
+      />
+      <circle cx="8.5" cy="11.5" r="1" fill="currentColor" />
+      <circle cx="10.75" cy="8.25" r="1" fill="currentColor" />
+      <circle cx="14.75" cy="8.75" r="1" fill="currentColor" />
+    </Svg>
+  );
+}
+
 export function IconBell(p: IconProps) {
   return (
     <Svg {...p}>

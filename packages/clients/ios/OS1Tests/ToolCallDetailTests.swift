@@ -57,6 +57,21 @@ final class ToolCallDetailTests: XCTestCase {
         XCTAssertEqual(detail.inputLanguage, "typescript")
     }
 
+    func testCodemodeShowsItsScriptWithoutTheOptionsLine() {
+        let detail = toolDetail(
+            name: "codemode",
+            canonical: "Codemode",
+            input: [
+                "code": .string("// @options: {\"timeout_ms\": 60000}\nconst a = await tools.read({ path: \"a.ts\" });\nreturn a.length;"),
+            ]
+        )
+
+        XCTAssertEqual(detail.inputKind, .code)
+        XCTAssertEqual(detail.inputLabel, "Script")
+        XCTAssertEqual(detail.inputText, "const a = await tools.read({ path: \"a.ts\" });\nreturn a.length;")
+        XCTAssertEqual(detail.inputLanguage, "javascript")
+    }
+
     func testEmptyWriteStillBecomesAnAdditionsDiff() {
         let detail = toolDetail(
             name: "Write",

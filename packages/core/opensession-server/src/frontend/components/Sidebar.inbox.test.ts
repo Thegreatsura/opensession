@@ -9,7 +9,7 @@ test("pinned work remains in its primary Active placement", async () => {
   const inboxDerivation = source.slice(inboxStart, inboxEnd);
 
   expect(inboxDerivation).toContain(
-    "const activeFocusWsRows = sortInboxByCreation(focusWsRows);",
+    "const activeFocusWsRows = sortActiveRows(focusWsRows, activeDrag.order);",
   );
   expect(inboxDerivation).not.toContain("pinnedRowKeys");
 });

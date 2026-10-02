@@ -20,12 +20,16 @@
  * Discovery follows the MCP auth spec: RFC 9728 protected-resource metadata
  * for the server resource → authorization server → RFC 8414 AS metadata →
  * dynamic client registration (RFC 7591, token_endpoint_auth_method "none").
+ * When the AS has no registration endpoint or refuses registration but
+ * accepts Client ID Metadata Documents, the client_id is instead the URL of
+ * the document this instance serves on its public ingress (Oneleet, e.g.,
+ * disables dynamic registration).
  */
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { randomBytes, createHash } from "crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { discoverMcpOauth, OauthDiscoveryError } from "./mcp-oauth-discovery";
-import { configuredServer, productName } from "./config";
+import { configuredIngress, configuredServer, productName } from "./config";
 import { statePath } from "./paths";
 import { resolveTeammate } from "./shared/user-mappings";
 import { readJsonFileCopy } from "./shared/json-file-cache";
@@ -170,21 +174,54 @@ function callbackUrl(): string {
   return `${configuredServer().publicBaseUrl}/api/connections/mcp-oauth/callback`;
 }
 
-/** Ensure a registered public client for this server (cached in the store). */
-async function ensureServerAuth(
-  name: string,
-  serverUrl: string,
-): Promise<ServerAuth> {
-  const store = readStore();
-  const cur = store[name];
-  if (cur?.clientInfo?.clientId && cur.serverUrl === serverUrl) return cur;
-  const { resource, scopes, endpoints } = await discoverMcpOauth(serverUrl);
-  if (!endpoints.register)
-    throw new Error(
-      `${name}: authorization server offers no dynamic client registration`,
-    );
-  const registrationUrl = new URL(endpoints.register);
-  const registrationResponse = await fetch(endpoints.register, {
+export const CLIENT_METADATA_PATH = "/oauth/client-metadata.json";
+
+/** The public URL of this instance's client metadata document, which doubles
+ *  as its client_id. Only an HTTPS public ingress can serve one: the
+ *  authorization server fetches it from the internet. */
+export function clientMetadataUrl(): string | undefined {
+  const base = configuredIngress().publicBaseUrl;
+  return base.startsWith("https://")
+    ? `${base}${CLIENT_METADATA_PATH}`
+    : undefined;
+}
+
+/** draft-ietf-oauth-client-id-metadata-document: a public PKCE client. */
+export function clientMetadataDocument(clientId: string) {
+  return {
+    client_id: clientId,
+    client_name: productName(),
+    client_uri: configuredServer().publicBaseUrl,
+    redirect_uris: [callbackUrl()],
+    grant_types: ["authorization_code", "refresh_token"],
+    response_types: ["code"],
+    token_endpoint_auth_method: "none",
+  };
+}
+
+/** Public ingress route serving the client metadata document. */
+export function mcpOauthPublicRoutes(): Map<
+  string,
+  (req: Request, url: URL) => Promise<Response>
+> {
+  return new Map([
+    [
+      `GET ${CLIENT_METADATA_PATH}`,
+      async () => {
+        const clientId = clientMetadataUrl();
+        if (!clientId) return new Response(null, { status: 404 });
+        return Response.json(clientMetadataDocument(clientId), {
+          headers: { "Cache-Control": "public, max-age=300" },
+        });
+      },
+    ],
+  ]);
+}
+
+/** Dynamic client registration (RFC 7591). Returns the client_id. */
+async function registerClient(name: string, register: string): Promise<string> {
+  const registrationUrl = new URL(register);
+  const registrationResponse = await fetch(register, {
     redirect: "error",
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -233,12 +270,46 @@ async function ensureServerAuth(
     throw new Error(
       `${name}: client registration failed (${reg.error_description || "no client_id"})`,
     );
+  return reg.client_id;
+}
+
+/** Ensure a public client for this server (cached in the store): a dynamic
+ *  registration, else this instance's client metadata document URL. */
+async function ensureServerAuth(
+  name: string,
+  serverUrl: string,
+): Promise<ServerAuth> {
+  const store = readStore();
+  const cur = store[name];
+  if (cur?.clientInfo?.clientId && cur.serverUrl === serverUrl) return cur;
+  const { resource, scopes, endpoints, clientIdMetadataDocument } =
+    await discoverMcpOauth(serverUrl);
+  const metadataClientId = clientIdMetadataDocument
+    ? clientMetadataUrl()
+    : undefined;
+  let clientId: string;
+  if (endpoints.register) {
+    try {
+      clientId = await registerClient(name, endpoints.register);
+    } catch (error) {
+      if (!metadataClientId) throw error;
+      clientId = metadataClientId;
+    }
+  } else if (metadataClientId) {
+    clientId = metadataClientId;
+  } else {
+    throw new Error(
+      clientIdMetadataDocument
+        ? `${name}: client registration needs a public HTTPS ingress URL for Open Session's client metadata document`
+        : `${name}: authorization server offers no dynamic client registration`,
+    );
+  }
   const next: ServerAuth = {
     serverUrl,
     resource,
     ...(scopes ? { scopes } : {}),
     endpoints,
-    clientInfo: { clientId: reg.client_id },
+    clientInfo: { clientId },
     ...(cur ? { shared: cur.shared, users: cur.users } : {}),
   };
   const fresh = readStore();
@@ -723,6 +794,44 @@ export function removeMcpOauthGrant(name: string, forUser?: string): boolean {
 // A validated pasted token is stored as a grant, so it rides the exact same
 // per-run injection path as an OAuth grant — no separate plumbing.
 
+/** Check a bearer key with an MCP initialize request to the server itself. */
+function mcpInitializeValidator(
+  url: string,
+  provider: string,
+  rejected: string,
+): (token: string) => Promise<{ ok: true } | { ok: false; error: string }> {
+  return async (token) => {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json, text/event-stream",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "Open Session", version: "1" },
+        },
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    void res.body?.cancel().catch(() => {});
+    if (res.status === 401 || res.status === 403)
+      return { ok: false, error: rejected };
+    if (!res.ok)
+      return {
+        ok: false,
+        error: `Could not check the key with ${provider} (HTTP ${res.status})`,
+      };
+    return { ok: true };
+  };
+}
+
 const TOKEN_VALIDATORS: Record<
   string,
   (token: string) => Promise<{ ok: true } | { ok: false; error: string }>
@@ -745,39 +854,18 @@ const TOKEN_VALIDATORS: Record<
       };
     return { ok: true };
   },
-  vero: async (token) => {
-    const res = await fetch("https://api.getvero.com/mcp", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/json, text/event-stream",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2025-03-26",
-          capabilities: {},
-          clientInfo: { name: "Open Session", version: "1" },
-        },
-      }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (res.status === 401 || res.status === 403)
-      return {
-        ok: false,
-        error:
-          "Vero rejected that key. Create a Campaigns API secret key in Vero and paste it again.",
-      };
-    if (!res.ok)
-      return {
-        ok: false,
-        error: `Could not check the key with Vero (HTTP ${res.status})`,
-      };
-    return { ok: true };
-  },
+  vero: mcpInitializeValidator(
+    "https://api.getvero.com/mcp",
+    "Vero",
+    "Vero rejected that key. Create a Campaigns API secret key in Vero and paste it again.",
+  ),
+  // Oneleet accepts OAuth only from clients it has approved; a workspace
+  // admin's service key is its documented fallback for everyone else.
+  oneleet: mcpInitializeValidator(
+    "https://api.oneleet.com/mcp",
+    "Oneleet",
+    "Oneleet rejected that key. Create a service key in Oneleet's workspace settings and paste it again.",
+  ),
 };
 
 /** Can this server be connected by pasting a personal API token? */

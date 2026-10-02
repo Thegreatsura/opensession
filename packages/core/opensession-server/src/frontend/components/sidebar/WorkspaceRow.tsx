@@ -37,6 +37,7 @@ import type { WsRow } from "../../lib/sidebar-types";
 import { shouldEmphasizeUnread } from "../../lib/sidebar-unread-session";
 import { shortTime } from "../../lib/time";
 import type { WsTimePref } from "../../lib/workspace-time";
+import { ROW_TINT_CLASS } from "../../lib/row-colors";
 import { cn } from "../../ui/cn";
 import { Tooltip } from "../../ui/tooltip";
 import { RepoTile } from "../RepoTile";
@@ -73,6 +74,7 @@ export interface WorkspaceRowSwipe {
 type WorkspaceSwipeStyle = React.CSSProperties & {
   "--swipe-action-w"?: string;
   "--swipe-x"?: string;
+  "--row-tint"?: string;
 };
 
 interface WorkspaceRowEvents {
@@ -101,6 +103,8 @@ interface WorkspaceRowPresentation {
   timePreference: WsTimePref;
   shipsDirectlyToMain: boolean;
   pinned: boolean;
+  /** The row's color swatch hex, painted as a faint wash; null for none. */
+  tint: string | null;
 }
 
 interface WorkspaceRowContext {
@@ -154,6 +158,7 @@ export function WorkspaceRow({
     timePreference,
     shipsDirectlyToMain,
     pinned,
+    tint,
   },
   context: { editing, currentUser, mePersonKey, teamViewing },
   swipe,
@@ -239,9 +244,9 @@ export function WorkspaceRow({
         )}px`,
       }
     : undefined;
-  const swipeRowStyle: WorkspaceSwipeStyle | undefined = swipeOffset
-    ? { "--swipe-x": `${swipeOffset}px` }
-    : undefined;
+  const rowStyle: WorkspaceSwipeStyle = {};
+  if (swipeOffset) rowStyle["--swipe-x"] = `${swipeOffset}px`;
+  if (tint) rowStyle["--row-tint"] = tint;
 
   return (
     <div
@@ -357,6 +362,7 @@ export function WorkspaceRow({
           // belongs to selection. The blue mark in the rail and the bold
           // title carry it — same as the native app.
           active && "bg-selected",
+          tint && ROW_TINT_CLASS,
           draggingRow
             ? "transition-none"
             : swipeSide
@@ -374,7 +380,7 @@ export function WorkspaceRow({
         data-finished-unread={
           shouldEmphasizeUnread(row.unread, row.running) || undefined
         }
-        style={swipeRowStyle}
+        style={rowStyle}
         onClick={events.onActivate}
         onMouseEnter={events.onMouseEnter}
         onMouseLeave={events.onMouseLeave}

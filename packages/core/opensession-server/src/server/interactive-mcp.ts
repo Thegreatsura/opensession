@@ -76,6 +76,7 @@ import {
   switchPrimaryRepo,
 } from "./session-repos";
 import { makeAskHandler } from "./asks";
+import { forceMergeForSession } from "./force-merge-session";
 import { createScheduleMcpServer } from "./schedule-mcp";
 import { activeSandboxFor } from "./session-sandbox";
 import {
@@ -280,6 +281,10 @@ export function interactiveMcpServers(
             linkPr: (input) => linkPr(sessionId, input),
             labelPr: (input) => labelPr(sessionId, input),
             checkPrReady: (input) => checkPrMergeReadiness(sessionId, input),
+            // Opens a card only the driver can confirm (force-merge.ts);
+            // the merge runs with their token, never the run's.
+            forceMerge: (input, signal) =>
+              forceMergeForSession(sessionId, createdBy, input, signal),
           }),
           // Durable repo/user/team memory, shared both ways with Slack's
           // channel memory. Write tools are

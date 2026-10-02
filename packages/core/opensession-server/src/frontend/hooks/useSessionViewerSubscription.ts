@@ -9,6 +9,7 @@ import type { SlackSent } from "../components/ShippedChangeComposer";
 import { getCurrentUser } from "../components/UserPicker";
 import type { FileAttachment } from "../lib/images";
 import { applyCredentialRegistrationFrame } from "../lib/credential-registration-store";
+import { applyForceMergeFrame } from "../lib/force-merge-store";
 import { loadDraft } from "../lib/drafts";
 import { getLiveTypingPref } from "../lib/live-typing-pref";
 import { randomUUID } from "../lib/random-uuid";
@@ -545,6 +546,10 @@ export function useSessionViewerSubscription({
         case "credential_registration_request":
         case "credential_registration_resolved":
           applyCredentialRegistrationFrame(msg);
+          break;
+        case "force_merge_request":
+        case "force_merge_request_resolved":
+          applyForceMergeFrame(msg);
           break;
         case "slack_composer_resolved":
           if (msg.sessionId === session.id) {
