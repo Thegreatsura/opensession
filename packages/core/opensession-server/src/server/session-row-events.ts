@@ -9,7 +9,7 @@
  * the sockets rendering that scope. Cost is O(distinct scopes) per coalesced
  * write, and a frame is a few hundred bytes.
  *
- * Bursts inside one turn coalesce per session. The client keeps a slow
+ * Every session changed inside one window flushes together. The client keeps a slow
  * fallback poll and refetches on reconnect, so a lost frame heals the same
  * way a lost invalidation did.
  */
@@ -32,24 +32,45 @@ type RowSocket = {
 };
 
 const g = globalThis as typeof globalThis & {
-  __osSessionRowPublishes?: Map<string, ReturnType<typeof setTimeout>>;
+  __osSessionRowBatch?: {
+    pending: Set<string>;
+    timer?: ReturnType<typeof setTimeout>;
+    flushing?: Promise<void>;
+  };
 };
-const scheduled = (g.__osSessionRowPublishes ??= new Map());
+const batch = (g.__osSessionRowBatch ??= { pending: new Set() });
 
-/** Tell subscribed sidebars that one session's row changed. Coalesced. */
+/**
+ * Tell subscribed sidebars that one session's row changed. Coalesced: every
+ * session published inside one window flushes together, so the enrichment,
+ * each viewer's scope context, and each scope's evaluation of a shared
+ * workspace group are computed once per window instead of once per session.
+ */
 export function publishSessionRow(sessionId: string): void {
-  if (scheduled.has(sessionId)) return;
+  batch.pending.add(sessionId);
+  if (batch.timer) return;
   const timer = setTimeout(() => {
-    scheduled.delete(sessionId);
-    void flushSessionRow(sessionId).catch((error) => {
-      console.warn(
-        `[session-row] publish failed for ${sessionId}:`,
-        error instanceof Error ? error.message : error,
-      );
+    batch.timer = undefined;
+    // One flush at a time: a slow flush absorbs the next window instead of
+    // running beside it on the gateway thread.
+    const previous = batch.flushing ?? Promise.resolve();
+    const run = previous.then(() => {
+      const ids = [...batch.pending];
+      batch.pending.clear();
+      return flushSessionRows(ids).catch((error) => {
+        console.warn(
+          "[session-row] publish failed:",
+          error instanceof Error ? error.message : error,
+        );
+      });
     });
+    const tracked: Promise<void> = run.finally(() => {
+      if (batch.flushing === tracked) batch.flushing = undefined;
+    });
+    batch.flushing = tracked;
   }, SESSION_ROW_COALESCE_MS);
   timer.unref?.();
-  scheduled.set(sessionId, timer);
+  batch.timer = timer;
 }
 
 /** Sockets that asked for row frames, grouped by the scope they render. */
@@ -90,43 +111,105 @@ export async function sessionRowVisible(
   );
 }
 
-async function flushSessionRow(sessionId: string): Promise<void> {
+type StoredRow = { session: UnifiedSession; group: UnifiedSession[] };
+
+async function flushSessionRows(sessionIds: string[]): Promise<void> {
+  if (sessionIds.length === 0) return;
   const subscribers = sidebarSubscribers();
   if (subscribers.size === 0) return;
-  // One worker round trip: the row and the rows its visibility depends on.
-  const stored = await indexedSessionWithVisibilityGroup(sessionId);
-  if (!stored) {
-    const payload = JSON.stringify({
-      type: "session_row_removed",
-      id: sessionId,
-    });
+  const removedFrame = (id: string) =>
+    JSON.stringify({ type: "session_row_removed", id });
+  const broadcast = (payload: string) => {
     for (const { sockets } of subscribers.values())
       for (const ws of sockets) send(ws, payload);
-    return;
-  }
+  };
+
+  // The rows and the rows their visibility depends on, one worker round trip
+  // per session, issued together.
+  const stored = await Promise.all(
+    sessionIds.map((id) =>
+      indexedSessionWithVisibilityGroup(id).then(
+        (row): StoredRow | null | undefined => row,
+        (error) => {
+          console.warn(
+            `[session-row] publish failed for ${id}:`,
+            error instanceof Error ? error.message : error,
+          );
+          return undefined;
+        },
+      ),
+    ),
+  );
+
+  // Sessions of one workspace share one visibility group. Evaluate it once,
+  // with every changed member's freshest copy swapped in.
+  const groups = new Map<
+    string,
+    { members: Map<string, UnifiedSession>; changed: string[] }
+  >();
+  sessionIds.forEach((id, index) => {
+    const entry = stored[index];
+    if (entry === undefined) return;
+    if (entry === null) {
+      broadcast(removedFrame(id));
+      return;
+    }
+    const key = entry.group
+      .map((member) => member.id)
+      .sort()
+      .join("\u0000");
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        members: new Map(entry.group.map((member) => [member.id, member])),
+        changed: [],
+      };
+      groups.set(key, group);
+    }
+    group.members.set(entry.session.id, entry.session);
+    group.changed.push(entry.session.id);
+  });
+  if (groups.size === 0) return;
+
   // routes/sessions imports this module's callers; load it on demand so the
   // row projection is shared with the list route without an import cycle.
-  const { sidebarRowProjection } = await import("./routes/sessions");
-  const { row, group } = await sidebarRowProjection(
-    stored.session,
-    stored.group,
-  );
-  const shown = JSON.stringify({ type: "session_row", row });
-  const removed = JSON.stringify({
-    type: "session_row_removed",
-    id: sessionId,
-  });
-  const contexts = new Map<string, SidebarSessionScopeContext>();
-  for (const { scope, sockets } of subscribers.values()) {
-    let context = scope ? contexts.get(scope.user) : undefined;
-    if (scope && !context) {
-      context = await loadSidebarSessionScopeContext(scope, group);
-      contexts.set(scope.user, context);
+  const { sidebarRowsProjection } = await import("./routes/sessions");
+  const projected = [];
+  for (const { members, changed } of groups.values())
+    projected.push(await sidebarRowsProjection(changed, [...members.values()]));
+  // One scope context per viewer for the whole window. It must know every
+  // workspace the window's groups belong to.
+  const everyRow = projected.flatMap(({ group }) => group);
+  const contexts = new Map<string, Promise<SidebarSessionScopeContext>>();
+  for (const { rows, group } of projected) {
+    const frames = rows.map((row) => ({
+      id: row.id,
+      shown: JSON.stringify({ type: "session_row", row }),
+      removed: removedFrame(row.id),
+    }));
+    for (const { scope, sockets } of subscribers.values()) {
+      let visible: Set<string>;
+      if (!scope) {
+        visible = new Set(
+          group.filter((row) => !row.archived).map((row) => row.id),
+        );
+      } else {
+        let context = contexts.get(scope.user);
+        if (!context) {
+          context = loadSidebarSessionScopeContext(scope, everyRow);
+          contexts.set(scope.user, context);
+        }
+        visible = new Set(
+          scopeSessionsForSidebar(group, scope, await context)
+            .filter((row) => !row.archived)
+            .map((row) => row.id),
+        );
+      }
+      for (const frame of frames) {
+        const payload = visible.has(frame.id) ? frame.shown : frame.removed;
+        for (const ws of sockets) send(ws, payload);
+      }
     }
-    const payload = (await sessionRowVisible(row.id, group, scope, context))
-      ? shown
-      : removed;
-    for (const ws of sockets) send(ws, payload);
   }
 }
 
@@ -138,10 +221,11 @@ function send(ws: RowSocket, payload: string): void {
 
 /** Session ids with a publish pending, in scheduling order. */
 export function __scheduledSessionRowsForTest(): string[] {
-  return [...scheduled.keys()];
+  return [...batch.pending];
 }
 
 export function __resetSessionRowPublishesForTest(): void {
-  for (const timer of scheduled.values()) clearTimeout(timer);
-  scheduled.clear();
+  if (batch.timer) clearTimeout(batch.timer);
+  batch.timer = undefined;
+  batch.pending.clear();
 }

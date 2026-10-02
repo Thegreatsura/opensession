@@ -73,42 +73,78 @@ function parseField(
   return { any: false, values };
 }
 
-export function cronMatches(expr: string, date: Date): boolean {
+// Automation listings compute every schedule's next run, and the scheduler
+// checks every schedule each minute. Parse each distinct expression once.
+const PARSED_MAX = 1_000;
+const parsed = new Map<string, readonly FieldSpec[] | null>();
+
+function parsedCron(expr: string): readonly FieldSpec[] | null {
+  if (parsed.has(expr)) return parsed.get(expr)!;
   const specs = parseCron(expr);
-  if (!specs) return false;
+  if (parsed.size >= PARSED_MAX) parsed.clear();
+  parsed.set(expr, specs);
+  return specs;
+}
 
-  const minute = date.getUTCMinutes();
-  const hour = date.getUTCHours();
-  const dom = date.getUTCDate();
-  const month = date.getUTCMonth() + 1;
-  const dow = date.getUTCDay();
-
-  const [mSpec, hSpec, domSpec, monSpec, dowSpec] = specs;
-  if (!fieldMatches(mSpec, minute)) return false;
-  if (!fieldMatches(hSpec, hour)) return false;
-  if (!fieldMatches(monSpec, month)) return false;
-
+function dayMatches(specs: readonly FieldSpec[], date: Date): boolean {
+  const [, , domSpec, monSpec, dowSpec] = specs;
+  if (!fieldMatches(monSpec, date.getUTCMonth() + 1)) return false;
   // Standard cron: if both dom and dow are restricted, either may match
-  const domOk = fieldMatches(domSpec, dom);
-  const dowOk = fieldMatches(dowSpec, dow);
+  const domOk = fieldMatches(domSpec, date.getUTCDate());
+  const dowOk = fieldMatches(dowSpec, date.getUTCDay());
   if (!domSpec.any && !dowSpec.any) return domOk || dowOk;
   return domOk && dowOk;
+}
+
+export function cronMatches(expr: string, date: Date): boolean {
+  const specs = parsedCron(expr);
+  if (!specs) return false;
+  return (
+    fieldMatches(specs[0], date.getUTCMinutes()) &&
+    fieldMatches(specs[1], date.getUTCHours()) &&
+    dayMatches(specs, date)
+  );
 }
 
 function fieldMatches(spec: FieldSpec, value: number): boolean {
   return spec.any || spec.values.has(value);
 }
 
+const NEXT_RUN_MAX = 1_000;
+const nextRuns = new Map<string, number | null>();
+
 /** Next matching minute strictly after `from`, scanning up to ~1 year. */
 export function nextRun(expr: string, from: Date = new Date()): Date | null {
-  if (!parseCron(expr)) return null;
+  const specs = parsedCron(expr);
+  if (!specs) return null;
   const cursor = new Date(from.getTime());
   cursor.setUTCSeconds(0, 0);
+  // Every `from` inside one minute has the same answer.
+  const key = `${cursor.getTime()}\u0000${expr}`;
+  if (nextRuns.has(key)) {
+    const hit = nextRuns.get(key)!;
+    return hit === null ? null : new Date(hit);
+  }
+  const end = cursor.getTime() + 527040 * 60_000;
   cursor.setUTCMinutes(cursor.getUTCMinutes() + 1);
-
-  for (let i = 0; i < 527040; i++) {
-    if (cronMatches(expr, cursor)) return cursor;
+  let found: number | null = null;
+  while (cursor.getTime() <= end) {
+    // Skip whole days and hours that cannot match instead of every minute.
+    if (!dayMatches(specs, cursor)) {
+      cursor.setUTCHours(24, 0, 0, 0);
+      continue;
+    }
+    if (!fieldMatches(specs[1], cursor.getUTCHours())) {
+      cursor.setUTCMinutes(60, 0, 0);
+      continue;
+    }
+    if (fieldMatches(specs[0], cursor.getUTCMinutes())) {
+      found = cursor.getTime();
+      break;
+    }
     cursor.setUTCMinutes(cursor.getUTCMinutes() + 1);
   }
-  return null;
+  if (nextRuns.size >= NEXT_RUN_MAX) nextRuns.clear();
+  nextRuns.set(key, found);
+  return found === null ? null : new Date(found);
 }

@@ -438,12 +438,35 @@ type SessionEnrichmentContext = {
   workspaceNames: ReadonlyMap<string, string>;
 };
 
+// The footer index walks every cached PR. Row publishes, detail reads and
+// list builds each ask for it, often many times a second. The PR cache is
+// updated in place as well as replaced, so key on its identity and bound
+// staleness with a short TTL rather than trusting identity alone.
+const PRS_BY_SESSION_TTL_MS = 1_000;
+let prsBySessionMemo:
+  | {
+      source: ReturnType<typeof getPrsByRepo>;
+      value: ReturnType<typeof prsBySessionRef>;
+      expiresAt: number;
+    }
+  | undefined;
+
 function sessionEnrichmentContext(): SessionEnrichmentContext {
   const prsByRepo = getPrsByRepo();
+  const now = Date.now();
+  if (
+    prsBySessionMemo?.source !== prsByRepo ||
+    prsBySessionMemo.expiresAt <= now
+  )
+    prsBySessionMemo = {
+      source: prsByRepo,
+      value: prsBySessionRef(prsByRepo),
+      expiresAt: now + PRS_BY_SESSION_TTL_MS,
+    };
   return {
     defaultRepoId: defaultRepo().id,
     prsByRepo,
-    prsBySession: prsBySessionRef(prsByRepo),
+    prsBySession: prsBySessionMemo.value,
     workspaceNames: workspaceNameSnapshot(),
   };
 }
@@ -571,15 +594,16 @@ export async function sessionDetail(
 }
 
 /**
- * One changed session as a row frame, plus the enriched rows its sidebar
+ * Changed sessions as row frames, plus the enriched rows their sidebar
  * visibility depends on. session-row-events evaluates each subscribed scope
- * against `group` and sends `row` to the sockets whose lens shows it.
+ * against `group` once and sends each row to the sockets whose lens shows
+ * it. Every id in `sessionIds` must be a member of `group`.
  */
-export async function sidebarRowProjection(
-  session: UnifiedSession,
+export async function sidebarRowsProjection(
+  sessionIds: readonly string[],
   group: UnifiedSession[],
 ): Promise<{
-  row: SessionListRow;
+  rows: SessionListRow[];
   group: Array<UnifiedSession & SessionListSignals>;
 }> {
   const signals = await sessionListRuntimeSignals();
@@ -588,10 +612,12 @@ export async function sidebarRowProjection(
     enrichSession(member, signals, context, "row"),
   );
   shareWorkspacePrRefs(enrichedGroup);
-  const enriched =
-    enrichedGroup.find((member) => member.id === session.id) ??
-    enrichSession(session, signals, context, "row");
-  return { row: sessionListRow(enriched), group: enrichedGroup };
+  const byId = new Map(enrichedGroup.map((member) => [member.id, member]));
+  const rows = sessionIds.flatMap((id) => {
+    const enriched = byId.get(id);
+    return enriched ? [sessionListRow(enriched)] : [];
+  });
+  return { rows, group: enrichedGroup };
 }
 
 /**
