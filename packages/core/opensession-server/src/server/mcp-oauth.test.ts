@@ -4,6 +4,8 @@ import { mkdirSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { statePath } from "./paths";
 import {
+  CLIENT_METADATA_PATH,
+  mcpOauthPublicRoutes,
   startMcpOauthFlow,
   supportsManualToken,
   validateManualMcpToken,
@@ -121,6 +123,101 @@ describe("MCP OAuth client registration", () => {
       startMcpOauthFlow("Figma test", "https://mcp.figma.com/mcp"),
     ).rejects.toThrow(
       "Its remote MCP server accepts only clients listed in the Figma MCP Catalog",
+    );
+  });
+});
+
+describe("MCP OAuth client metadata document", () => {
+  const realFetch = globalThis.fetch;
+  const realIngress = process.env.OPENSESSION_INGRESS_BASE;
+  let lookup: ReturnType<typeof spyOn<typeof dns, "lookup">>;
+  const storePath = statePath(".opensession-mcp-oauth.json");
+  const metadataUrl = `https://ingress.example.test${CLIENT_METADATA_PATH}`;
+
+  beforeEach(() => {
+    process.env.OPENSESSION_INGRESS_BASE = "https://ingress.example.test";
+    lookup = spyOn(dns, "lookup").mockImplementation((async () => [
+      { address: "203.0.113.1", family: 4 },
+    ]) as unknown as typeof dns.lookup);
+    mkdirSync(dirname(storePath), { recursive: true });
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (realIngress === undefined) delete process.env.OPENSESSION_INGRESS_BASE;
+    else process.env.OPENSESSION_INGRESS_BASE = realIngress;
+    lookup.mockRestore();
+    rmSync(storePath, { force: true });
+  });
+
+  function mockAuthServer(opts: { cimd: boolean; register: boolean }) {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (
+        url.startsWith(
+          "https://mcp.acme.test/.well-known/oauth-protected-resource",
+        )
+      )
+        return Response.json({
+          resource: "https://mcp.acme.test/mcp",
+          authorization_servers: ["https://auth.acme.test/"],
+        });
+      if (
+        url === "https://auth.acme.test/.well-known/oauth-authorization-server"
+      )
+        return Response.json({
+          issuer: "https://auth.acme.test/",
+          authorization_endpoint: "https://auth.acme.test/authorize",
+          token_endpoint: "https://auth.acme.test/token",
+          ...(opts.register
+            ? { registration_endpoint: "https://auth.acme.test/register" }
+            : {}),
+          ...(opts.cimd ? { client_id_metadata_document_supported: true } : {}),
+        });
+      if (url === "https://auth.acme.test/register")
+        return Response.json(
+          { message: "dynamic client registration is disabled" },
+          { status: 400 },
+        );
+      if (url === "https://mcp.acme.test/mcp")
+        return new Response(null, { status: 401 });
+      throw new Error(`Unexpected URL: ${url}`);
+    }) as unknown as typeof fetch;
+  }
+
+  test.each([
+    { label: "refuses", register: true },
+    { label: "has no", register: false },
+  ])(
+    "uses the metadata document URL when the server $label registration",
+    async ({ label, register }) => {
+      mockAuthServer({ cimd: true, register });
+      const { url } = await startMcpOauthFlow(
+        `cimd-${label}`,
+        "https://mcp.acme.test/mcp",
+      );
+      expect(new URL(url).searchParams.get("client_id")).toBe(metadataUrl);
+    },
+  );
+
+  test("keeps the registration error when metadata documents are unsupported", async () => {
+    mockAuthServer({ cimd: false, register: true });
+    await expect(
+      startMcpOauthFlow("cimd-none", "https://mcp.acme.test/mcp"),
+    ).rejects.toThrow("dynamic client registration is disabled");
+  });
+
+  test("serves a public client document whose client_id is its own URL", async () => {
+    const handler = mcpOauthPublicRoutes().get(`GET ${CLIENT_METADATA_PATH}`)!;
+    const response = await handler(
+      new Request(metadataUrl),
+      new URL(metadataUrl),
+    );
+    const doc = await response.json();
+    expect(doc.client_id).toBe(metadataUrl);
+    expect(doc.token_endpoint_auth_method).toBe("none");
+    expect(doc.redirect_uris[0]).toEndWith(
+      "/api/connections/mcp-oauth/callback",
     );
   });
 });

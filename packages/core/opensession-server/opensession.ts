@@ -140,6 +140,7 @@ import {
 import { configureWebhookRoutes } from "./src/server/webhook-server";
 import { boatWebhookRoutes } from "./src/server/sandbox/boat-webhook";
 import { prImagePublicRoutes } from "./src/server/pr-images";
+import { mcpOauthPublicRoutes } from "./src/server/mcp-oauth";
 import {
   sessionHtmlWithSocialMeta,
   sessionSocialCardPublicRoutes,
@@ -839,6 +840,9 @@ if (!g.__opensessionBooted) {
       webhookRoutes.set(key, handler);
     }
     for (const [key, handler] of sessionSocialCardPublicRoutes()) {
+      webhookRoutes.set(key, handler);
+    }
+    for (const [key, handler] of mcpOauthPublicRoutes()) {
       webhookRoutes.set(key, handler);
     }
     for (const [key, handler] of boatWebhookRoutes()) {

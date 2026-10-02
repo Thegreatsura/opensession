@@ -4,6 +4,8 @@ export interface OauthDiscovery {
   resource?: string;
   scopes?: string[];
   endpoints: { authorize: string; token: string; register?: string };
+  /** The AS accepts an HTTPS URL as client_id (Client ID Metadata Documents). */
+  clientIdMetadataDocument?: true;
 }
 
 /** A definitive absence can be cached; transport failures must be retried soon. */
@@ -251,6 +253,9 @@ export async function discoverMcpOauth(
           token: token.href,
           register: register?.href,
         },
+        ...(as.client_id_metadata_document_supported === true
+          ? { clientIdMetadataDocument: true as const }
+          : {}),
       };
     } catch (error) {
       noteFailure(error);
