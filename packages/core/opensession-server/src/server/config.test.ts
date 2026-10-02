@@ -412,3 +412,33 @@ describe("config loader", () => {
     expect(readFileSync(configPath(), "utf-8")).toBe("{ not json");
   });
 });
+
+describe("configuredRepos memo", () => {
+  const section = {
+    acme: { repo: "/srv/acme", ghRepo: "acme/app", default: true },
+  };
+
+  test("one snapshot resolves once and hands out independent maps", () => {
+    const config = { repos: section } as Parameters<typeof configuredRepos>[0];
+    const first = configuredRepos(config);
+    const second = configuredRepos(config);
+    expect(second).toEqual(first);
+    expect(second).not.toBe(first);
+    delete (first as Record<string, unknown>).acme;
+    expect(configuredRepos(config).acme?.ghRepo).toBe("acme/app");
+  });
+
+  test("a replaced repos section or snapshot resolves again", () => {
+    const config = { repos: section } as Parameters<typeof configuredRepos>[0];
+    expect(configuredRepos(config).acme?.ghRepo).toBe("acme/app");
+    config!.repos = {
+      acme: { repo: "/srv/acme", ghRepo: "acme/renamed", default: true },
+    };
+    expect(configuredRepos(config).acme?.ghRepo).toBe("acme/renamed");
+    expect(
+      configuredRepos({
+        repos: { other: { repo: "/srv/other" } },
+      } as Parameters<typeof configuredRepos>[0]).other?.label,
+    ).toBe("other");
+  });
+});
