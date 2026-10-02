@@ -96,3 +96,43 @@ export function createSdkMcpServer(options: {
   }
   return { type: "sdk", name: options.name, instance };
 }
+
+/**
+ * A server set whose entries are built on first read.
+ *
+ * Every run tool call resolves a session's whole interactive server set to
+ * pick one server out of it, and building all of them (each tool's zod
+ * schemas, each McpServer) cost tens of milliseconds on the gateway thread.
+ * A thunk entry becomes an enumerable getter that builds once and keeps the
+ * result, so `servers[name]` and `Object.keys(servers)` build only what they
+ * touch, while spreads and `Object.entries` still see every server. Entries
+ * that are not functions are kept as they are. Writes and deletes behave like
+ * ordinary properties.
+ */
+export function lazyServerRecord(
+  entries: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [name, entry] of Object.entries(entries)) {
+    if (typeof entry !== "function") {
+      out[name] = entry;
+      continue;
+    }
+    const settle = (value: unknown) => {
+      Object.defineProperty(out, name, {
+        value,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
+      return value;
+    };
+    Object.defineProperty(out, name, {
+      enumerable: true,
+      configurable: true,
+      get: () => settle((entry as () => unknown)()),
+      set: settle,
+    });
+  }
+  return out;
+}

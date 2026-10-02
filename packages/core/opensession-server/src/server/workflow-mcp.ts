@@ -260,8 +260,10 @@ export function workflowInProcessServers(
   carried: Record<string, unknown>,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const [name, cfg] of Object.entries(carried)) {
+  // Read only allowed names: `carried` may build each server on first read.
+  for (const name of Object.keys(carried)) {
     if (!WORKFLOW_INPROCESS_ALLOWED.has(name)) continue;
+    const cfg = carried[name];
     // Only the sdk shape can be mounted over an in-memory pair. A proxy
     // config (a detached host's stdio shim) would point back at this process
     // through a socket we have no token for, so it is skipped rather than
