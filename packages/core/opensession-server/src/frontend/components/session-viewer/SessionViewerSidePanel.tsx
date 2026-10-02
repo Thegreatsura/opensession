@@ -1,4 +1,4 @@
-import type { ComponentProps } from "react";
+import { type ComponentProps, type CSSProperties, useState } from "react";
 import { DiffPanel } from "../DiffPanel";
 import { PortalPane } from "../PortalPane";
 import { PortalsPage } from "../PortalsPanel";
@@ -110,6 +110,10 @@ export function SessionViewerSidePanel({
   portals,
   agents,
 }: SessionViewerSidePanelProps) {
+  const [prBandHeight, measurePrBand] = useBoxHeight();
+  const changesStyle: CSSProperties & { "--diff-panel-top": string } = {
+    "--diff-panel-top": `${prBandHeight}px`,
+  };
   return (
     <>
       {/* Right region: the Workspace panel. Portaled to an app-level slot so
@@ -142,12 +146,15 @@ export function SessionViewerSidePanel({
           ) : undefined
         }
         changes={
-          <>
-            <section
-              aria-label="Workspace summary"
-              className="flex flex-col border-b border-divider py-2"
-            >
+          // One box around the summary and the diff, so the pinned PR band
+          // stays up for the whole scroll, and the diff's own sticky toolbar
+          // and file headers land under it rather than behind it.
+          <div style={changesStyle}>
+            {/* `contents` lets the PR band pin against the box above rather
+                than ending its stick with the summary. */}
+            <section aria-label="Workspace summary" className="contents">
               <WorkspaceSummaryBody
+                prGroupRef={measurePrBand}
                 session={summary.session}
                 onOpenPanelTab={summary.onOpenPanelTab}
                 onOpenPr={summary.onOpenPr}
@@ -168,6 +175,10 @@ export function SessionViewerSidePanel({
                 liveMedia={summaryRuntime.liveMedia}
                 close={summaryRuntime.close}
               />
+              <div
+                aria-hidden="true"
+                className="mt-2 border-b border-divider"
+              />
             </section>
             <div ref={changesContainerRef}>
               {changes.waitingForWorkspace ? (
@@ -185,7 +196,7 @@ export function SessionViewerSidePanel({
                 />
               )}
             </div>
-          </>
+          </div>
         }
         portals={
           <PortalsPage
@@ -215,4 +226,17 @@ export function SessionViewerSidePanel({
       />
     </>
   );
+}
+
+/** Tracks an element's rendered height through a callback ref. The React
+ *  Compiler keeps `measure` stable, so the observer attaches once per node. */
+function useBoxHeight() {
+  const [height, setHeight] = useState(0);
+  const measure = (el: HTMLElement | null) => {
+    if (!el) return;
+    const observer = new ResizeObserver(() => setHeight(el.offsetHeight));
+    observer.observe(el);
+    return () => observer.disconnect();
+  };
+  return [height, measure] as const;
 }

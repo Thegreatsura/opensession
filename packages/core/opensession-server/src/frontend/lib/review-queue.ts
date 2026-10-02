@@ -96,7 +96,8 @@ export function wsPrRequestsReviewFrom(
  * status lanes for Needs review the moment their PR opens.
  *
  * The test is the sidebar's own "in the room" rule: the row is yours if you
- * own it or if one of its sessions is a conversation of yours. A PR someone
+ * own it, collaborate on its workspace, or if one of its sessions is a
+ * conversation of yours. A PR someone
  * asked you to review mints a session-less workspace row, so it keeps its
  * claim on you until you open a session and work in it.
  */
@@ -104,11 +105,18 @@ export function rowIsOwnWork(
   row: {
     owner: string;
     sessions: Pick<UnifiedSession, "automation" | "startedBy">[];
+    workspace?: { collaborators?: { name: string }[] } | null;
   },
   person: string,
 ): boolean {
   const key = personKey(person);
   if (row.owner && personKey(row.owner) === key) return true;
+  if (
+    row.workspace?.collaborators?.some(
+      (collaborator) => personKey(collaborator.name) === key,
+    )
+  )
+    return true;
   return row.sessions.some(
     (session) =>
       !session.automation &&
