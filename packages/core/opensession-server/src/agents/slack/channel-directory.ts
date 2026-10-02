@@ -3,23 +3,29 @@
  *
  * `integrations.slack.channelNames` is a short, operator-curated list; it is
  * the suggestion set, not the universe. The composer posts as the signed-in
- * person with their own grant, so the channels they can actually reach are
- * whatever `users.conversations` returns for that token: every public and
- * private channel they are a member of. That list is fetched with their token,
- * cached briefly per caller, and merged after the configured channels so the
- * curated ones stay at the top of the picker.
+ * person with their own grant, so the channels they can reach are every
+ * public channel in the workspace (`conversations.list`) plus the private
+ * channels they are a member of (`users.conversations`). Slack refuses a
+ * user-token post to a channel the person has not joined, so posting to a
+ * public channel they are not in joins it first (`joinSlackChannelIfNeeded`).
+ * The list is fetched with their token, cached briefly per caller, and merged
+ * after the configured channels so the curated ones stay at the top of the
+ * picker.
  */
-import { slackApiGet } from "./slack-api";
+import { slackApiCall, slackApiGet } from "./slack-api";
 
 export interface SlackChannelOption {
   id: string;
   name: string;
+  /** False for a public channel the caller has not joined. Absent means a
+   *  member (or unknown, for configured channels). */
+  member?: boolean;
 }
 
 const DIRECTORY_TTL_MS = 5 * 60 * 1000;
-/** users.conversations pages at up to 1000; five pages covers any workspace
- *  a person is realistically a member of without an unbounded walk. */
-const MAX_PAGES = 5;
+/** Both list methods page at up to 1000; ten pages covers the public channels
+ *  of any realistic workspace without an unbounded walk. */
+const MAX_PAGES = 10;
 
 interface DirectoryEntry {
   token: string;
@@ -42,14 +48,18 @@ export function normalizeSlackChannelName(value: string): string {
   return value.trim().replace(/^#/, "").toLowerCase();
 }
 
-async function fetchUserChannels(token: string): Promise<SlackChannelOption[]> {
+async function pageChannels(
+  method: "users.conversations" | "conversations.list",
+  types: string,
+  token: string,
+): Promise<SlackChannelOption[] | undefined> {
   const channels: SlackChannelOption[] = [];
   let cursor = "";
   for (let page = 0; page < MAX_PAGES; page += 1) {
     const data = await slackApiGet(
-      "users.conversations",
+      method,
       {
-        types: "public_channel,private_channel",
+        types,
         exclude_archived: true,
         limit: 1000,
         cursor: cursor || undefined,
@@ -59,23 +69,45 @@ async function fetchUserChannels(token: string): Promise<SlackChannelOption[]> {
     if (!data?.ok) {
       // A grant issued before channels:read was requested, or a revoked
       // token: the configured list still works, so this is not an error.
-      if (page === 0) return [];
+      if (page === 0) return undefined;
       break;
     }
     for (const channel of data.channels || []) {
       if (typeof channel?.id !== "string" || typeof channel?.name !== "string")
         continue;
       if (!channel.name) continue;
-      channels.push({ id: channel.id, name: channel.name });
+      channels.push({
+        id: channel.id,
+        name: channel.name,
+        ...(method === "conversations.list" && channel.is_member === false
+          ? { member: false }
+          : {}),
+      });
     }
     cursor = data.response_metadata?.next_cursor || "";
     if (!cursor) break;
   }
-  return channels.sort((a, b) => a.name.localeCompare(b.name));
+  return channels;
+}
+
+async function fetchUserChannels(token: string): Promise<SlackChannelOption[]> {
+  const [mine, publicChannels] = await Promise.all([
+    pageChannels(
+      "users.conversations",
+      "public_channel,private_channel",
+      token,
+    ),
+    pageChannels("conversations.list", "public_channel", token),
+  ]);
+  const byId = new Map<string, SlackChannelOption>();
+  for (const channel of publicChannels || []) byId.set(channel.id, channel);
+  // Membership from users.conversations wins over a stale is_member.
+  for (const channel of mine || []) byId.set(channel.id, channel);
+  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**
- * Every channel `caller` is a member of, as seen by their own grant. Cached
+ * Every channel `caller` can post to, as seen by their own grant. Cached
  * for a few minutes per caller and coalesced, so a composer that mounts twice
  * (or a send right after a load) does not page Slack twice.
  */
@@ -109,6 +141,43 @@ export function slackChannelsForUser(
   return next.pending;
 }
 
+/** The caller's directory now shows them in `channelId`. */
+function markJoined(caller: string, channelId: string): void {
+  const entry = directory.get(caller);
+  const channel = entry?.channels.find((c) => c.id === channelId);
+  if (channel) delete channel.member;
+}
+
+/**
+ * Join a public channel the caller is not in yet, so a post with their token
+ * lands instead of failing with `not_in_channel`. A no-op for channels they
+ * are already in and for private channels. Membership comes from the caller's
+ * directory, so a configured channel they never joined is covered too.
+ */
+export async function joinSlackChannelIfNeeded(
+  channel: SlackChannelOption,
+  auth: { caller: string; token: string },
+): Promise<void> {
+  const listed = (await slackChannelsForUser(auth.caller, auth.token)).find(
+    (candidate) => candidate.id === channel.id,
+  );
+  if (listed?.member !== false) return;
+  const joined = await slackApiCall(
+    "conversations.join",
+    { channel: channel.id },
+    auth.token,
+  ).catch(() => null);
+  if (joined?.ok) {
+    markJoined(auth.caller, channel.id);
+    return;
+  }
+  if (joined?.error === "missing_scope")
+    throw new Error(
+      `Reconnect Slack in Settings → Account to post in channels you haven't joined, or join #${channel.name} in Slack first`,
+    );
+  throw new Error(`Join #${channel.name} in Slack first, then send again`);
+}
+
 export function forgetSlackChannelsForUser(caller?: string): void {
   if (caller) directory.delete(caller);
   else directory.clear();
@@ -117,14 +186,17 @@ export function forgetSlackChannelsForUser(caller?: string): void {
 /**
  * Configured channels first, in their configured order, then the rest of the
  * person's channels alphabetically. An id that appears in both keeps the
- * configured name.
+ * configured name and takes the directory's membership.
  */
 export function mergeSlackChannels(
   configured: SlackChannelOption[],
   directoryChannels: SlackChannelOption[],
 ): SlackChannelOption[] {
   const seen = new Set(configured.map((channel) => channel.id));
-  const merged = [...configured];
+  const merged = configured.map((channel) => {
+    const listed = directoryChannels.find((c) => c.id === channel.id);
+    return listed?.member === false ? { ...channel, member: false } : channel;
+  });
   for (const channel of directoryChannels) {
     if (seen.has(channel.id)) continue;
     seen.add(channel.id);

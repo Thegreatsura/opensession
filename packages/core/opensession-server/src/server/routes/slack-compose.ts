@@ -23,6 +23,7 @@ import {
 } from "./slack-channels";
 import {
   isSlackChannelId,
+  joinSlackChannelIfNeeded,
   resolveSlackChannel,
 } from "../../agents/slack/channel-directory";
 import type { RouteContext } from "./context";
@@ -227,6 +228,7 @@ export async function handleSlackComposeRoutes(
     );
   }
   try {
+    await joinSlackChannelIfNeeded(channel, { caller, token: slackToken });
     const snapshottedScreenshots = snapshotPendingSlackImages(
       sessionId,
       requestId,

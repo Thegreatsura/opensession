@@ -26,7 +26,10 @@ import {
   slackPermalink,
   slackUploadTs,
 } from "../slack/slack-api";
-import { resolveSlackChannel } from "../slack/channel-directory";
+import {
+  joinSlackChannelIfNeeded,
+  resolveSlackChannel,
+} from "../slack/channel-directory";
 import { shippedChangesChannel } from "./constants";
 
 export interface ShippedVisualChange {
@@ -308,6 +311,11 @@ export async function shareShippedVisualChange(opts: {
   let permalink: string | undefined;
   let ts: string | undefined;
   try {
+    if (opts.caller)
+      await joinSlackChannelIfNeeded(target, {
+        caller: opts.caller,
+        token: opts.slackToken,
+      });
     if (visual) {
       const completed = await postSlackFiles(
         channel,
