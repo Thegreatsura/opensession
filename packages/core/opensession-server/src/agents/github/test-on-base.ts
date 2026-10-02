@@ -17,10 +17,11 @@
  * next to the review worktree; node_modules are symlinked in from the repo's
  * dependency-installed main checkout.
  */
-import { cpSync, existsSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, symlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { audit } from "../../server/audit";
 import { runCommand } from "../../server/run-command";
+import { removeTree } from "../../server/workload-scope";
 
 export interface TestOnBaseResult {
   /** Changed test files run against the merge base. */
@@ -92,7 +93,7 @@ export async function runTestOnBaseCheck(opts: {
     cwd: opts.cwd,
     timeoutMs: GIT_TIMEOUT_MS,
   });
-  rmSync(baseDir, { recursive: true, force: true });
+  await removeTree(baseDir);
   const add = await runCommand(
     ["git", "worktree", "add", "--detach", "--force", baseDir, mergeBase],
     {
@@ -148,7 +149,7 @@ export async function runTestOnBaseCheck(opts: {
       cwd: opts.cwd,
       timeoutMs: GIT_TIMEOUT_MS,
     });
-    rmSync(baseDir, { recursive: true, force: true });
+    await removeTree(baseDir);
   }
 }
 

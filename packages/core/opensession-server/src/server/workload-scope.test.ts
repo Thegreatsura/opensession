@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import {
   __setWorkloadScopingForTest,
   controlPlaneResidents,
+  removeTree,
   workloadArgv,
   workloadCommand,
   workloadUnitName,
@@ -56,5 +60,19 @@ describe("workload scope", () => {
   test("residents are only reported from inside the control plane", async () => {
     // Test processes never run in opensession-control.slice.
     expect(await controlPlaneResidents()).toBeNull();
+  });
+
+  test("removeTree deletes a whole tree off the event loop", async () => {
+    __setWorkloadScopingForTest(false);
+    const root = mkdtempSync(join(tmpdir(), "remove-tree-"));
+    const tree = join(root, "node_modules");
+    for (let i = 0; i < 50; i++) {
+      mkdirSync(join(tree, `pkg-${i}`, "lib"), { recursive: true });
+      writeFileSync(join(tree, `pkg-${i}`, "lib", "index.js"), "x");
+    }
+    await removeTree(tree);
+    expect(existsSync(tree)).toBe(false);
+    expect(existsSync(root)).toBe(true);
+    await removeTree(root);
   });
 });

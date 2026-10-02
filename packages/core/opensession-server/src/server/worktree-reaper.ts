@@ -727,7 +727,7 @@ export async function sweepWorktreeReaper(
     // Refresh the base ref once per repo so the ancestry test is accurate.
     if (!fetched.has(repo.id)) {
       fetched.add(repo.id);
-      await $`git -C ${repo.repo} fetch origin ${repo.defaultBranch} -q`
+      await $`${workloadArgv(["git", "-C", repo.repo, "fetch", "origin", repo.defaultBranch, "-q"], "git")}`
         .nothrow()
         .quiet();
     }

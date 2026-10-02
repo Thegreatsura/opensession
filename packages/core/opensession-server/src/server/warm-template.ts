@@ -48,7 +48,6 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
-  rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -57,6 +56,8 @@ import { dirname, join } from "path";
 import { configuredPaths, configuredRepos, type Repo } from "./config";
 import { OPENSESSION_SESSIONS_DIR } from "./paths";
 import { writeJsonAtomic } from "./shared/atomic-write";
+import { removeTree } from "./workload-scope";
+import { workloadArgv } from "./workload-scope";
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
@@ -406,14 +407,14 @@ async function doRefresh(repoId: string, force: boolean): Promise<void> {
       await withGitLock(async () => {
         await $`git -C ${repo.repo} worktree prune`.quiet().nothrow();
         if (existsSync(dir)) return;
-        await $`git -C ${repo.repo} fetch origin ${repo.defaultBranch} --quiet`.nothrow();
-        await $`git -C ${repo.repo} worktree add --detach ${dir} origin/${repo.defaultBranch}`;
+        await $`${workloadArgv(["git", "-C", repo.repo, "fetch", "origin", repo.defaultBranch, "--quiet"], "git")}`.nothrow();
+        await $`${workloadArgv(["git", "-C", repo.repo, "worktree", "add", "--detach", dir, `origin/${repo.defaultBranch}`], "git")}`;
       });
     }
 
     // 2. Fetch; skip the expensive rebuild when nothing moved and the last
     //    refresh was good.
-    await $`git -C ${dir} fetch origin ${repo.defaultBranch} --quiet`.nothrow();
+    await $`${workloadArgv(["git", "-C", dir, "fetch", "origin", repo.defaultBranch, "--quiet"], "git")}`.nothrow();
     const sha = (
       await $`git -C ${dir} rev-parse --short origin/${repo.defaultBranch}`
         .nothrow()
@@ -462,7 +463,7 @@ async function doRefresh(repoId: string, force: boolean): Promise<void> {
     //    rebuild below is incremental. This is our dedicated detached
     //    worktree; the shared-checkout no-reset rule doesn't apply here.
     await step("reset", 2 * 60_000, () =>
-      $`git -C ${dir} reset --hard origin/${repo.defaultBranch}`
+      $`${workloadArgv(["git", "-C", dir, "reset", "--hard", `origin/${repo.defaultBranch}`], "git")}`
         .quiet()
         .then(() => {}),
     );
@@ -558,7 +559,9 @@ export async function seedWorktreeFromWarmTemplate(
           );
           return moved > 0;
         } finally {
-          rmSync(spare, { recursive: true, force: true });
+          // Usually emptied by the renames above, but a seed that moved
+          // nothing leaves whole dependency trees behind.
+          void removeTree(spare);
           void replenishSpares(repo).catch(() => {});
         }
       }
@@ -601,7 +604,9 @@ export async function seedWorktreeFromWarmTemplate(
         const dst = join(wtPath, entry).replace(/\/$/, "");
         if (!existsSync(src) || existsSync(dst)) continue;
         mkdirSync(dirname(dst), { recursive: true });
-        const r = await $`cp -al ${src} ${dst}`.quiet().nothrow();
+        const r = await $`${workloadArgv(["cp", "-al", src, dst], "deps")}`
+          .quiet()
+          .nothrow();
         if (r.exitCode !== 0) {
           console.warn(
             `[warm-template] hardlink of ${entry} into ${wtPath} was partial (exit ${r.exitCode}) — bun install will reconcile`,
@@ -705,8 +710,7 @@ async function doReplenish(repo: Repo): Promise<void> {
     if (!n.startsWith(".building-") && !n.includes(".claimed-")) continue;
     const p = join(dir, n);
     try {
-      if (Date.now() - statSync(p).mtimeMs > 3_600_000)
-        rmSync(p, { recursive: true, force: true });
+      if (Date.now() - statSync(p).mtimeMs > 3_600_000) await removeTree(p);
     } catch {}
   }
   for (;;) {
@@ -720,8 +724,12 @@ async function doReplenish(repo: Repo): Promise<void> {
     // drop both so sessions start current; the loop below rebuilds fresh ones.
     for (const p of listSpares(repo)) {
       if (!p.includes(`spare-${status.sha}-`) || !spareIntact(p)) {
+        // Rename out of the pool first (instant) so the count below and a
+        // concurrent claim never see it, then delete it off the event loop.
+        const discarded = `${p}.claimed-stale`;
         try {
-          rmSync(p, { recursive: true, force: true });
+          renameSync(p, discarded);
+          await removeTree(discarded);
         } catch {}
       }
     }
@@ -741,7 +749,7 @@ async function doReplenish(repo: Repo): Promise<void> {
         const src = join(status.dir, rel);
         const dst = join(building, rel);
         mkdirSync(dirname(dst), { recursive: true });
-        await $`cp -al ${src} ${dst}`.quiet();
+        await $`${workloadArgv(["cp", "-al", src, dst], "deps")}`.quiet();
       }
       writeFileSync(
         join(building, SPARE_PATHS_FILE),
@@ -758,7 +766,7 @@ async function doReplenish(repo: Repo): Promise<void> {
         `[warm-template] built ${repo.id} dep spare (${entries.length} trees) in ${Math.round((Date.now() - buildStarted) / 1000)}s`,
       );
     } catch (e) {
-      rmSync(building, { recursive: true, force: true });
+      await removeTree(building);
       console.warn(`[warm-template] spare build for ${repo.id} failed:`, e);
       return;
     }

@@ -480,7 +480,7 @@ async function refreshAskCheckoutLocked(
   dir: string,
 ): Promise<void> {
   const fetch =
-    await $`git -C ${dir} fetch origin ${repo.defaultBranch} --quiet`
+    await $`${workloadArgv(["git", "-C", dir, "fetch", "origin", repo.defaultBranch, "--quiet"], "git")}`
       .quiet()
       .nothrow();
   if (fetch.exitCode !== 0) {
@@ -488,9 +488,10 @@ async function refreshAskCheckoutLocked(
       `Could not fetch ${repo.id}'s default branch ${repo.defaultBranch}: ${fetch.stderr.toString().trim()}`,
     );
   }
-  const reset = await $`git -C ${dir} reset --hard origin/${repo.defaultBranch}`
-    .quiet()
-    .nothrow();
+  const reset =
+    await $`${workloadArgv(["git", "-C", dir, "reset", "--hard", `origin/${repo.defaultBranch}`], "git")}`
+      .quiet()
+      .nothrow();
   if (reset.exitCode !== 0) {
     throw new Error(
       `Could not pin ${repo.id}'s Ask checkout to ${repo.defaultBranch}: ${reset.stderr.toString().trim()}`,
@@ -555,10 +556,10 @@ export async function ensureAskCheckout(repoId?: string): Promise<string> {
       }
       return dir;
     }
-    await $`git -C ${repo.repo} fetch origin ${repo.defaultBranch} --quiet`.nothrow();
+    await $`${workloadArgv(["git", "-C", repo.repo, "fetch", "origin", repo.defaultBranch, "--quiet"], "git")}`.nothrow();
     await $`git -C ${repo.repo} worktree prune`.quiet().nothrow();
     const add =
-      await $`git -C ${repo.repo} worktree add --detach ${dir} origin/${repo.defaultBranch}`
+      await $`${workloadArgv(["git", "-C", repo.repo, "worktree", "add", "--detach", dir, `origin/${repo.defaultBranch}`], "git")}`
         .quiet()
         .nothrow();
     if (add.exitCode !== 0 || !existsSync(dir)) {
@@ -721,12 +722,13 @@ export async function reviveWorktree(
       ).exitCode === 0;
     let add;
     if (hasBranch) {
-      add = await $`git -C ${repo.repo} worktree add ${wtPath} ${branch}`
-        .quiet()
-        .nothrow();
+      add =
+        await $`${workloadArgv(["git", "-C", repo.repo, "worktree", "add", wtPath, branch], "git")}`
+          .quiet()
+          .nothrow();
     } else {
       const fetchBranch =
-        await $`git -C ${repo.repo} fetch origin +refs/heads/${branch}:refs/remotes/origin/${branch} --quiet`
+        await $`${workloadArgv(["git", "-C", repo.repo, "fetch", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`, "--quiet"], "git")}`
           .quiet()
           .nothrow();
       const hasRemote =
@@ -735,13 +737,13 @@ export async function reviveWorktree(
           await $`git -C ${repo.repo} show-ref --verify --quiet refs/remotes/origin/${branch}`.nothrow()
         ).exitCode === 0;
       if (!hasRemote) {
-        await $`git -C ${repo.repo} fetch origin ${repo.defaultBranch} --quiet`;
+        await $`${workloadArgv(["git", "-C", repo.repo, "fetch", "origin", repo.defaultBranch, "--quiet"], "git")}`;
       }
       const startPoint = hasRemote
         ? `origin/${branch}`
         : `origin/${repo.defaultBranch}`;
       add =
-        await $`git -C ${repo.repo} worktree add -b ${branch} ${wtPath} ${startPoint}`
+        await $`${workloadArgv(["git", "-C", repo.repo, "worktree", "add", "-b", branch, wtPath, startPoint], "git")}`
           .quiet()
           .nothrow();
     }
@@ -780,7 +782,7 @@ async function fetchBranchesWithTracking(
     (b) => `+refs/heads/${b}:refs/remotes/origin/${b}`,
   );
   if (specs.length === 0) return;
-  await $`git -C ${gitDir} fetch origin ${specs} --quiet`.env(
+  await $`${workloadArgv(["git", "-C", gitDir, "fetch", "origin", ...specs, "--quiet"], "git")}`.env(
     await githubServiceGitEnv(ghRepo),
   );
 }
@@ -803,16 +805,16 @@ export async function createWorktreeForPrBranch(
   const reused = await withGitLock(async () => {
     await fetchBranchesWithTracking(repo.repo, repo.ghRepo, headRef);
     if (existsSync(wtPath)) {
-      await $`git -C ${wtPath} fetch origin ${headRef} --quiet`
+      await $`${workloadArgv(["git", "-C", wtPath, "fetch", "origin", headRef, "--quiet"], "git")}`
         .env(await githubServiceGitEnv(repo.ghRepo))
         .nothrow();
-      await $`git -C ${wtPath} reset --hard origin/${headRef}`
+      await $`${workloadArgv(["git", "-C", wtPath, "reset", "--hard", `origin/${headRef}`], "git")}`
         .quiet()
         .nothrow();
       return true;
     }
     await $`git -C ${repo.repo} worktree prune`.quiet();
-    await $`git -C ${repo.repo} worktree add ${wtPath} -B ${headRef}-os origin/${headRef}`;
+    await $`${workloadArgv(["git", "-C", repo.repo, "worktree", "add", wtPath, "-B", `${headRef}-os`, `origin/${headRef}`], "git")}`;
     return false;
   });
   if (reused) return wtPath;
@@ -852,8 +854,8 @@ export async function createReviewWorktreeForPrHead(
       // path and switched it onto the source branch. Restore review ownership.
       const repairAllowed = await clearStaleReviewIndexLock(wtPath);
       try {
-        await $`git -C ${wtPath} switch -C ${headRef}-os-review origin/${headRef}`.quiet();
-        await $`git -C ${wtPath} reset --hard origin/${headRef}`.quiet();
+        await $`${workloadArgv(["git", "-C", wtPath, "switch", "-C", `${headRef}-os-review`, `origin/${headRef}`], "git")}`.quiet();
+        await $`${workloadArgv(["git", "-C", wtPath, "reset", "--hard", `origin/${headRef}`], "git")}`.quiet();
         return wtPath;
       } catch (error) {
         // A restart can kill `git worktree add` after it creates the directory
@@ -871,7 +873,7 @@ export async function createReviewWorktreeForPrHead(
     } else {
       await $`git -C ${repo.repo} worktree prune`.quiet();
     }
-    await $`git -C ${repo.repo} worktree add ${wtPath} -B ${headRef}-os-review origin/${headRef}`;
+    await $`${workloadArgv(["git", "-C", repo.repo, "worktree", "add", wtPath, "-B", `${headRef}-os-review`, `origin/${headRef}`], "git")}`;
     return wtPath;
   });
 }
@@ -899,14 +901,14 @@ export async function createWorktreeForFollowup(
   await withGitLock(async () => {
     await $`git -C ${repo.repo} worktree prune`.quiet();
     if (existsSync(wtPath)) return; // pruned stale registration; dir already usable
-    await $`git -C ${repo.repo} fetch origin ${baseRef} --quiet`.nothrow();
+    await $`${workloadArgv(["git", "-C", repo.repo, "fetch", "origin", baseRef, "--quiet"], "git")}`.nothrow();
     const startPoint =
       (
         await $`git -C ${repo.repo} rev-parse --verify --quiet origin/${baseRef}`.nothrow()
       ).exitCode === 0
         ? `origin/${baseRef}`
         : `origin/${repo.defaultBranch}`;
-    await $`git -C ${repo.repo} worktree add -b ${branch} ${wtPath} ${startPoint}`;
+    await $`${workloadArgv(["git", "-C", repo.repo, "worktree", "add", "-b", branch, wtPath, startPoint], "git")}`;
   });
 
   // Best-effort dep install so the follow-up run can build/test, same as siblings.
@@ -949,9 +951,9 @@ export async function createWorktreeForExistingBranch(
         await $`git -C ${repo.repo} show-ref --verify --quiet refs/heads/${branch}`.nothrow()
       ).exitCode === 0;
     if (hasLocal) {
-      await $`git -C ${repo.repo} worktree add ${wtPath} ${branch}`;
+      await $`${workloadArgv(["git", "-C", repo.repo, "worktree", "add", wtPath, branch], "git")}`;
     } else {
-      await $`git -C ${repo.repo} worktree add -b ${branch} ${wtPath} origin/${branch}`;
+      await $`${workloadArgv(["git", "-C", repo.repo, "worktree", "add", "-b", branch, wtPath, `origin/${branch}`], "git")}`;
     }
   });
 
@@ -1021,16 +1023,16 @@ export async function withClaimedBranchWorktree<T>(
         .exitCode === 0;
     let createdBranch = false;
     if (await hasRef(`refs/heads/${branch}`)) {
-      await $`git -C ${repo.repo} worktree add ${wtPath} ${branch}`.quiet();
+      await $`${workloadArgv(["git", "-C", repo.repo, "worktree", "add", wtPath, branch], "git")}`.quiet();
     } else if (await hasRef(`refs/remotes/origin/${branch}`)) {
       createdBranch = true;
-      await $`git -C ${repo.repo} worktree add -b ${branch} ${wtPath} origin/${branch}`.quiet();
+      await $`${workloadArgv(["git", "-C", repo.repo, "worktree", "add", "-b", branch, wtPath, `origin/${branch}`], "git")}`.quiet();
     } else {
       // Neither this machine nor origin knows the branch: start it at the
       // default branch and let the caller move it where it belongs.
       createdBranch = true;
       const start = await defaultStartPoint(repo);
-      await $`git -C ${repo.repo} worktree add -b ${branch} ${wtPath} ${start}`.quiet();
+      await $`${workloadArgv(["git", "-C", repo.repo, "worktree", "add", "-b", branch, wtPath, start], "git")}`.quiet();
     }
     let result: T;
     try {
@@ -1231,7 +1233,7 @@ export async function createWorktree(
       startPoint = await resolveStartPoint(repo.repo, base, repo.defaultBranch);
     }
     const add =
-      await $`git -C ${repo.repo} worktree add -b ${branch} ${wtPath} ${startPoint}`
+      await $`${workloadArgv(["git", "-C", repo.repo, "worktree", "add", "-b", branch, wtPath, startPoint], "git")}`
         .quiet()
         .nothrow();
     if (add.exitCode === 0) return;
@@ -1261,7 +1263,7 @@ export async function createWorktree(
         console.warn(
           `[worktree] adopting orphan branch ${branch} (0 commits ahead of ${startPoint}, no worktree) — likely a killed create attempt`,
         );
-        await $`git -C ${repo.repo} worktree add ${wtPath} ${branch}`;
+        await $`${workloadArgv(["git", "-C", repo.repo, "worktree", "add", wtPath, branch], "git")}`;
         return;
       }
     }

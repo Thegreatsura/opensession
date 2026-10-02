@@ -157,3 +157,22 @@ export async function controlPlaneResidents(): Promise<{
   }
   return { count: pids.length, byCommand };
 }
+
+/**
+ * Delete a directory tree without blocking the event loop. A synchronous
+ * recursive rm of a dependency tree (a warm spare is ~150k hard links) froze
+ * the gateway for 30 s, and every in-flight kernel and executor call timed out
+ * together. `rm -rf` runs as a child in a workload scope instead. Never
+ * rejects; a tree that could not be removed is left for the next sweep.
+ */
+export async function removeTree(path: string): Promise<void> {
+  if (!path || path === "/") return;
+  try {
+    const proc = Bun.spawn(workloadArgv(["rm", "-rf", "--", path], "gc"), {
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    await proc.exited;
+  } catch {}
+}
