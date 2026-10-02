@@ -172,9 +172,11 @@ describe("indexed list rows keep their stored overlays", () => {
   });
 
   test("a row publish serves the stored overlays without a registry read", async () => {
-    const { sidebarRowProjection } = await import("./sessions");
+    const { sidebarRowsProjection } = await import("./sessions");
     const before = totalReads();
-    const { row } = await sidebarRowProjection(stored, [stored]);
+    const {
+      rows: [row],
+    } = await sidebarRowsProjection([stored.id], [stored]);
     expect(row).toMatchObject({
       title: "Stored title",
       titleOverridden: true,
