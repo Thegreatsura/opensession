@@ -13,7 +13,7 @@ import type { FilterState } from "./sidebar-filter";
 import { fuzzyMatch } from "../../shared/fuzzy-match";
 import { includesEmptyRepoBands, sessionRepo } from "./sidebar-filter";
 import { mergeRepoOrder, normalizeRepoOrder } from "./repo-order";
-import { ownerKeyOf, sessionOwners } from "./session-owner";
+import { ownerKey, ownerKeyOf, sessionOwners } from "./session-owner";
 import { personNameForKey } from "./people";
 import { sessionSharesSelectedSidebarGroup } from "./sidebar-workspaces";
 import {
@@ -304,12 +304,28 @@ export function filterSidebarSessions({
     filter.person !== "everyone" &&
     filter.person !== "unassigned"
   ) {
+    // A teammate's session in a workspace the person created or collaborates
+    // on stays: the row is theirs, the same as in their own Me lens.
+    const person = filter.person;
+    const personWorkspaceIds = new Set(
+      workspaces
+        .filter(
+          (workspace) =>
+            ownerKey(workspace.createdBy, canonicalNames) === person ||
+            workspace.collaborators?.some(
+              (collaborator) =>
+                ownerKey(collaborator.name, canonicalNames) === person,
+            ),
+        )
+        .map((workspace) => workspace.id),
+    );
     visible = visible.filter(
       (session) =>
         belongsToSelection(session) ||
         !!session.automation ||
-        (!!session.startedBy &&
-          ownerKeyOf(session, canonicalNames) === filter.person),
+        (!!session.workspaceId &&
+          personWorkspaceIds.has(session.workspaceId)) ||
+        (!!session.startedBy && ownerKeyOf(session, canonicalNames) === person),
     );
   }
 
