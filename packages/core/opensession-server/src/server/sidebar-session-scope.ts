@@ -239,6 +239,24 @@ function personMatches(
   return !!value && userMatchesAny(value, [person]);
 }
 
+/** The person created the session's workspace or collaborates on it. */
+function workspaceIncludesPerson(
+  session: UnifiedSession,
+  person: string,
+  context: SidebarSessionScopeContext,
+): boolean {
+  const workspace = session.workspaceId
+    ? context.workspaces.get(session.workspaceId)
+    : undefined;
+  return (
+    !!workspace &&
+    (personMatches(workspace.createdBy, person) ||
+      (workspace.collaborators || []).some((name) =>
+        personMatches(name, person),
+      ))
+  );
+}
+
 function sessionGroupKey(session: UnifiedSession): string {
   if (session.workspaceId) return `workspace:${session.workspaceId}`;
   if (session.worktreeDir?.includes("/worktrees/"))
@@ -522,7 +540,9 @@ export function scopeSessionsForSidebar<T extends SidebarScopeSession>(
       scope.person !== "everyone" &&
       scope.person !== "unassigned" &&
       !session.automation &&
-      !personMatches(session.startedBy, scope.person)
+      !personMatches(session.startedBy, scope.person) &&
+      // A teammate's session still belongs to the person's own workspace.
+      !workspaceIncludesPerson(session, scope.person, context)
     )
       continue;
     const key = sessionGroupKey(session);
@@ -542,14 +562,8 @@ export function scopeSessionsForSidebar<T extends SidebarScopeSession>(
     const review =
       scope.person === "me" &&
       rows.some((row) => requestInvolvesPerson(row, scope.user));
-    const workspace = key.startsWith("workspace:")
-      ? context.workspaces.get(key.slice("workspace:".length))
-      : undefined;
     const owned =
-      personMatches(workspace?.createdBy, focus) ||
-      (workspace?.collaborators || []).some((name) =>
-        personMatches(name, focus),
-      ) ||
+      workspaceIncludesPerson(rows[0]!, focus, context) ||
       rows.some(
         (row) => !row.automation && personMatches(row.startedBy, focus),
       );

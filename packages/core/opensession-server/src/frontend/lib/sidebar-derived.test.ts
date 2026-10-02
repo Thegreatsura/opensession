@@ -228,6 +228,38 @@ describe("sidebar derived data", () => {
     expect(visible.map(({ id }) => id)).toEqual(["selected", "match"]);
   });
 
+  test("keeps a collaborator's workspace in their named-person lens", () => {
+    const workspace = (id: string, collaborators: string[]): Workspace => ({
+      id,
+      name: id,
+      repo: "repo-a",
+      createdBy: "Grace",
+      createdAt: "2026-08-18T10:00:00.000Z",
+      collaborators: collaborators.map((name) => ({
+        name,
+        by: "Grace",
+        at: "2026-08-18T10:00:00.000Z",
+      })),
+    });
+    const visible = filterSidebarSessions({
+      sessions: [
+        session("shared", { workspaceId: "ws-shared", startedBy: "Grace" }),
+        session("private", { workspaceId: "ws-private", startedBy: "Grace" }),
+        session("own", { startedBy: "Ada" }),
+      ],
+      workspaces: [
+        workspace("ws-shared", ["Ada"]),
+        workspace("ws-private", []),
+      ],
+      filter: filter({ person: "ada" }),
+      search: "",
+      canonicalNames: new Map(),
+      selectedSession: null,
+    });
+
+    expect(visible.map(({ id }) => id)).toEqual(["shared", "own"]);
+  });
+
   test("groups automations by name in case-insensitive display order", () => {
     const groups = buildAutomationGroups({
       sessions: [
