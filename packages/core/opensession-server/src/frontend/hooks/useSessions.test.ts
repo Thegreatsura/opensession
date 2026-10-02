@@ -100,7 +100,7 @@ describe("sidebarSessionsQuery", () => {
         selectedSessionId: "os-1",
       }),
     ).toBe(
-      "?archived=exclude&view=sidebar&user=Ada+Lovelace&person=me&repo=tella+fusion&autoCreated=hide&session=os-1",
+      "?archived=exclude&view=sidebar&user=Ada+Lovelace&person=me&repo=tella+fusion&autoCreated=hide&prsFrom=1&session=os-1",
     );
   });
 });

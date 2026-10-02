@@ -30,11 +30,32 @@ export function sidebarSessionsQuery(
     repo: options.repo,
     autoCreated: options.autoCreated,
   });
+  // Rows repeating a sibling's PR list name it instead (restoreSharedPrs).
+  params.set("prsFrom", "1");
   if (options.selectedSessionId)
     params.set("session", options.selectedSessionId);
   if (options.selectedWorkspaceId)
     params.set("workspace", options.selectedWorkspaceId);
   return `?${params.toString()}`;
+}
+
+/**
+ * Undo the server's PR-list sharing on a sidebar response: a row with
+ * `prsFrom` gets the same `prs` as the row it names. Rows keep their own
+ * array copy so a later per-row update cannot alter a sibling.
+ */
+export function restoreSharedPrs<
+  T extends { id: string; prs?: UnifiedSession["prs"]; prsFrom?: string },
+>(rows: T[]): T[] {
+  const byId = new Map<string, T>();
+  for (const row of rows) byId.set(row.id, row);
+  for (const row of rows) {
+    if (!row.prsFrom) continue;
+    const prs = byId.get(row.prsFrom)?.prs;
+    if (prs) row.prs = prs.map((pr) => ({ ...pr }));
+    delete row.prsFrom;
+  }
+  return rows;
 }
 
 export function sessionPatchNeedsAcknowledgement(

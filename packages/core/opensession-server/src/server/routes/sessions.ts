@@ -937,10 +937,45 @@ async function ripgrepFiles(query: string, files: string[]): Promise<string[]> {
   return [...hits];
 }
 
+function sidebarResponseKey(
+  scope: SidebarSessionScope,
+  compactPrs: boolean,
+): string {
+  return `${sidebarSessionScopeKey(scope)}${compactPrs ? "\u0000prsFrom" : ""}`;
+}
+
+/**
+ * Sidebar rows of one workspace usually carry the same shared PR list
+ * (shareWorkspacePrRefs), which was over half of the response. A row whose
+ * list is identical to an earlier sibling's names that sibling in `prsFrom`
+ * instead; the web client restores `prs` before it reads the rows
+ * (restoreSharedPrs). Opt-in per request, so an older client still gets
+ * whole rows. Exported for tests.
+ */
+export function compactSharedPrs(
+  rows: SessionListRow[],
+): Array<SessionListRow & { prsFrom?: string }> {
+  const firstByWorkspace = new Map<string, Map<string, string>>();
+  return rows.map((row) => {
+    if (!row.workspaceId || !row.prs?.length) return row;
+    const encoded = JSON.stringify(row.prs);
+    let seen = firstByWorkspace.get(row.workspaceId);
+    if (!seen) firstByWorkspace.set(row.workspaceId, (seen = new Map()));
+    const source = seen.get(encoded);
+    if (!source) {
+      seen.set(encoded, row.id);
+      return row;
+    }
+    const { prs: _prs, ...rest } = row;
+    return { ...rest, prsFrom: source };
+  });
+}
+
 function refreshSidebarSessionsResponse(
   scope: SidebarSessionScope,
+  compactPrs: boolean,
 ): Promise<SessionsResponseSnapshot> {
-  const key = sidebarSessionScopeKey(scope);
+  const key = sidebarResponseKey(scope, compactPrs);
   const current = sessionsResponseRefreshes.get(key);
   if (current) return current;
   const refresh = buildAtCurrentSessionListRevision(async () => {
@@ -957,7 +992,8 @@ function refreshSidebarSessionsResponse(
       scope,
       await loadSidebarSessionScopeContext(scope, bounded),
     );
-    const text = JSON.stringify(scoped.map(sessionListRow));
+    const rows = scoped.map(sessionListRow);
+    const text = JSON.stringify(compactPrs ? compactSharedPrs(rows) : rows);
     return {
       text,
       hash: Bun.hash(text).toString(16),
@@ -1202,13 +1238,15 @@ export async function handleSessionsRoutes(
       requestUser(ctx, url.searchParams.get("user")),
     );
     if (variant === "exclude" && sidebarScope) {
-      const key = sidebarSessionScopeKey(sidebarScope);
-      const cached = sessionsResponseSnapshots.get(key);
+      const compactPrs = url.searchParams.get("prsFrom") === "1";
+      const cached = sessionsResponseSnapshots.get(
+        sidebarResponseKey(sidebarScope, compactPrs),
+      );
       return await sessionsListResponse(
         req,
         cached && cached.expiresAt > Date.now()
           ? cached
-          : await refreshSidebarSessionsResponse(sidebarScope),
+          : await refreshSidebarSessionsResponse(sidebarScope, compactPrs),
       );
     }
     // `?workspace=<id>` narrows an archived slice to one workspace's group,
