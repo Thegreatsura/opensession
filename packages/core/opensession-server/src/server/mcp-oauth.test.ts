@@ -254,6 +254,24 @@ describe("manual MCP token providers", () => {
     });
   });
 
+  test("validates a Oneleet service key against its MCP endpoint", async () => {
+    let request: Request | undefined;
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      request = new Request(input, init);
+      return Response.json({ jsonrpc: "2.0", id: 1, result: {} });
+    }) as typeof fetch;
+
+    expect(supportsManualToken("oneleet")).toBe(true);
+    await validateManualMcpToken("oneleet", "test-oneleet-key");
+    expect(request?.url).toBe("https://api.oneleet.com/mcp");
+    expect(request?.headers.get("authorization")).toBe(
+      "Bearer test-oneleet-key",
+    );
+  });
+
   test("explains when Vero rejects a key", async () => {
     globalThis.fetch = (async () =>
       new Response("", { status: 401 })) as unknown as typeof fetch;

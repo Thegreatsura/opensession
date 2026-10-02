@@ -794,6 +794,44 @@ export function removeMcpOauthGrant(name: string, forUser?: string): boolean {
 // A validated pasted token is stored as a grant, so it rides the exact same
 // per-run injection path as an OAuth grant — no separate plumbing.
 
+/** Check a bearer key with an MCP initialize request to the server itself. */
+function mcpInitializeValidator(
+  url: string,
+  provider: string,
+  rejected: string,
+): (token: string) => Promise<{ ok: true } | { ok: false; error: string }> {
+  return async (token) => {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json, text/event-stream",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "Open Session", version: "1" },
+        },
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    void res.body?.cancel().catch(() => {});
+    if (res.status === 401 || res.status === 403)
+      return { ok: false, error: rejected };
+    if (!res.ok)
+      return {
+        ok: false,
+        error: `Could not check the key with ${provider} (HTTP ${res.status})`,
+      };
+    return { ok: true };
+  };
+}
+
 const TOKEN_VALIDATORS: Record<
   string,
   (token: string) => Promise<{ ok: true } | { ok: false; error: string }>
@@ -816,39 +854,18 @@ const TOKEN_VALIDATORS: Record<
       };
     return { ok: true };
   },
-  vero: async (token) => {
-    const res = await fetch("https://api.getvero.com/mcp", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/json, text/event-stream",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2025-03-26",
-          capabilities: {},
-          clientInfo: { name: "Open Session", version: "1" },
-        },
-      }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (res.status === 401 || res.status === 403)
-      return {
-        ok: false,
-        error:
-          "Vero rejected that key. Create a Campaigns API secret key in Vero and paste it again.",
-      };
-    if (!res.ok)
-      return {
-        ok: false,
-        error: `Could not check the key with Vero (HTTP ${res.status})`,
-      };
-    return { ok: true };
-  },
+  vero: mcpInitializeValidator(
+    "https://api.getvero.com/mcp",
+    "Vero",
+    "Vero rejected that key. Create a Campaigns API secret key in Vero and paste it again.",
+  ),
+  // Oneleet accepts OAuth only from clients it has approved; a workspace
+  // admin's service key is its documented fallback for everyone else.
+  oneleet: mcpInitializeValidator(
+    "https://api.oneleet.com/mcp",
+    "Oneleet",
+    "Oneleet rejected that key. Create a service key in Oneleet's workspace settings and paste it again.",
+  ),
 };
 
 /** Can this server be connected by pasting a personal API token? */
