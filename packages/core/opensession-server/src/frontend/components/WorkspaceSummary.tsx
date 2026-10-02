@@ -560,8 +560,15 @@ export function WorkspaceSummaryBody({
   embedded = false,
   reviewMode = false,
   liveMedia = NO_LIVE_MEDIA,
+  prGroupRef,
 }: Omit<Props, "anchor" | "onOpenChange" | "tabStripVisible"> & {
   close: () => void;
+  /**
+   * Pins the PR band to the top of the surrounding scroller, so the merge
+   * action stays in reach while the content below it scrolls. The host owns
+   * the scroller and gets the band's box to offset its own sticky chrome.
+   */
+  prGroupRef?: React.Ref<HTMLDivElement>;
 }) {
   // Pictures or rows. One preference, shared with the Workspace panel's own
   // Assets section, so the same folder is not drawn two ways in one window.
@@ -1291,7 +1298,9 @@ export function WorkspaceSummaryBody({
         groupClass,
         "py-0 [&_.ws-summary-band]:mx-0 [&_.ws-summary-band]:mb-0 [&_.ws-summary-band]:px-2 [&_.ws-summary-band]:py-3 [&_.ws-summary-band]:[border-radius:inherit]",
       )
-    : cn(groupClass, "[&>.ws-summary-band:last-child]:mb-0");
+    : prGroupRef
+      ? "sticky top-0 z-10 flex flex-col bg-panel-surface pt-2"
+      : cn(groupClass, "[&>.ws-summary-band:last-child]:mb-0");
 
   return (
     <div
@@ -1303,7 +1312,10 @@ export function WorkspaceSummaryBody({
     >
       {/* These two group names are selector hooks: their DOM boxes disappear via
 			    `display: contents`, but they are the actual siblings around the PR band. */}
-      <div className={cn(prGroupClass, "ws-summary-pr-group")}>
+      <div
+        ref={embedded ? undefined : prGroupRef}
+        className={cn(prGroupClass, "ws-summary-pr-group")}
+      >
         {/* Which PR, where it stands, and the one thing to do about it. The
 				    strip owns all three; this card only says where they go. */}
         {!workspaceIsPreparing && (
