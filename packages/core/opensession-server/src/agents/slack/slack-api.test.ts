@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
+  downloadSlackAttachments,
   postSlackBlocks,
   postSlackFiles,
   slackFileRefs,
@@ -150,6 +151,72 @@ describe("slackUploadPermalink", () => {
     };
     expect(slackFileShareTs(file, "C123")).toBe("1.2");
     expect(slackFileShareTs(file, "C555")).toBeUndefined();
+  });
+});
+
+describe("downloadSlackAttachments", () => {
+  const pdf = {
+    id: "F9",
+    name: "Acme DPA.pdf",
+    mimetype: "application/pdf",
+    url: "https://files.slack.test/dpa.pdf",
+    size: 9,
+  };
+
+  test("saves documents to disk and inlines images", async () => {
+    const root = mkdtempSync(join(tmpdir(), "slack-attachments-"));
+    globalThis.fetch = (async (input) =>
+      String(input).endsWith(".pdf")
+        ? new Response("%PDF-body", {
+            headers: { "content-type": "application/pdf" },
+          })
+        : new Response("png", {
+            headers: { "content-type": "image/png" },
+          })) as typeof fetch;
+    try {
+      const out = await downloadSlackAttachments(
+        [
+          pdf,
+          {
+            id: "F8",
+            name: "shot.png",
+            mimetype: "image/png",
+            url: "https://files.slack.test/shot.png",
+            size: 3,
+          },
+        ],
+        root,
+      );
+      expect(out.files).toEqual([
+        { name: "Acme DPA.pdf", path: join(root, "slack-F9", "Acme DPA.pdf") },
+      ]);
+      expect(readFileSync(out.files[0]!.path, "utf8")).toBe("%PDF-body");
+      expect(out.images).toHaveLength(1);
+      expect(out.note).toContain("Acme DPA.pdf (application/pdf) — saved");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reports a login page instead of saving it as the document", async () => {
+    const root = mkdtempSync(join(tmpdir(), "slack-attachments-"));
+    globalThis.fetch = (async () =>
+      new Response("<html>sign in</html>", {
+        headers: { "content-type": "text/html" },
+      })) as unknown as typeof fetch;
+    try {
+      const out = await downloadSlackAttachments([pdf], root);
+      expect(out.files).toEqual([]);
+      expect(out.note).toContain("download failed");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("only lists documents when there is nowhere to save them", async () => {
+    const out = await downloadSlackAttachments([pdf]);
+    expect(out.files).toEqual([]);
+    expect(out.note).toContain("not inlined");
   });
 });
 

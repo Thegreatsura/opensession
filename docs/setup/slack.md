@@ -147,7 +147,9 @@ to pre-existing channels yourself.
 
 Slack responses can upload at most 10 files, each no larger than 20 MiB.
 Inbound prompt image handling inlines at most six images and skips an image
-over 4 MiB; non-image attachments are listed to the agent but not inlined.
+over 4 MiB. Other attachments up to 50 MiB, such as PDFs and documents, are
+saved to disk and reach the run as file attachments with their paths, the same
+way a web composer upload does.
 
 ## Who can drive it
 

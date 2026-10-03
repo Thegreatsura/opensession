@@ -9,7 +9,7 @@ import {
   updateSlackBlocks,
   getChannelKind,
   slackFileRefs,
-  downloadSlackImages,
+  downloadSlackAttachments,
 } from "./slack-api";
 import type { SlackFileRef, ThreadContext } from "./slack-api";
 import {
@@ -31,6 +31,7 @@ import { tryGetSessionControl } from "../../server/session-control";
 import { pinForUser } from "../../server/pins";
 import { getUiPrefs } from "../../server/ui-prefs";
 import { publishSessionChange } from "../../server/session-cache";
+import { STAGED_UPLOADS_DIR } from "../../server/uploads";
 import {
   getDefaultModel,
   providerFor,
@@ -87,7 +88,7 @@ async function activateLinkedSession(
   if (origin?.channel === channel && origin.messageTs === messageTs)
     return { status: "handled", message: "Opening message already accepted." };
   const attachments = files?.length
-    ? await downloadSlackImages(files)
+    ? await downloadSlackAttachments(files, STAGED_UPLOADS_DIR)
     : undefined;
   const res = await control.deliverToSession(
     sessionId,
@@ -99,6 +100,7 @@ async function activateLinkedSession(
       imageUrls: attachments?.images.map(
         (image) => `data:${image.mediaType};base64,${image.data}`,
       ),
+      ...(attachments?.files.length ? { files: attachments.files } : {}),
       slackReplyTo: { channel, threadTs, title: text },
       deliveryId: `slack:${channel}:${messageTs}`,
     },
