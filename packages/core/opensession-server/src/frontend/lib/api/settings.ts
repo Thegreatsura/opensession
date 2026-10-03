@@ -355,6 +355,24 @@ export async function savePersonalOutputStyle(
   });
 }
 
+export async function fetchYouShouldKnow(
+  user: string,
+): Promise<{ enabled: boolean }> {
+  return request(`/personal-you-should-know?user=${encodeURIComponent(user)}`, {
+    label: "Failed to fetch You should know",
+  });
+}
+
+export async function saveYouShouldKnow(
+  user: string,
+  enabled: boolean,
+): Promise<{ enabled: boolean }> {
+  return request("/personal-you-should-know", {
+    method: "PUT",
+    body: { user, enabled },
+  });
+}
+
 export async function fetchPersonalPrompt(
   user: string,
 ): Promise<{ prompt: string }> {

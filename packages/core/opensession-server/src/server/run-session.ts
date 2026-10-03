@@ -185,6 +185,7 @@ import {
   SESSIONS_DIR,
 } from "./session-cache";
 import { markRecapPendingIfUnwatched } from "./recap";
+import { noteYouShouldKnowStep } from "./you-should-know";
 import { scheduleSessionHistoryIndex } from "./session-index";
 import { broadcastToSession, sessionWatchers } from "./ws-hub";
 import { peekWorkspace } from "./workspaces";
@@ -3417,6 +3418,9 @@ async function runSessionPromptInner(
   // Tool calls seen this run — used to replenish the continuation budget only
   // while human messages are queued behind ongoing work.
   let toolUseCount = 0;
+  // Identifies this turn to the "You should know" side agent, which offers at
+  // most one suggestion per turn (you-should-know.ts).
+  const youShouldKnowTurn = startToken ?? crypto.randomUUID();
   // An incident this turn declares is recorded against the session, so the
   // incident's responder can find it (incident-declarations.ts).
   const recordIncidentDeclarations = createIncidentDeclarationRecorder(
@@ -3619,6 +3623,17 @@ async function runSessionPromptInner(
       }
       case "tool_use":
         toolUseCount++;
+        // Every sixth step of a watched turn, a side agent looks for the one
+        // thing the person might miss, if they turned it on. Interactive
+        // sessions only: an automation has nobody to tell.
+        if (!isAutomationSession)
+          void noteYouShouldKnowStep({
+            sessionId,
+            user: user || session.startedBy || undefined,
+            step: toolUseCount,
+            turnId: youShouldKnowTurn,
+            model: session.model,
+          });
         plainDiscussionToolUse(session.plainDiscussionId, event);
         broadcastToSession(sessionId, {
           type: "stream_tool_use",

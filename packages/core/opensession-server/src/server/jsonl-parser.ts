@@ -332,6 +332,26 @@ function harnessEntryFor(
         ]
       : [];
   }
+  // A "You should know" suggestion (transcriptLineYouShouldKnow, written by
+  // you-should-know.ts): title line plus explanation, rendered as a notice
+  // whose explanation sits behind the show toggle. The close tag is matched
+  // greedily so an explanation that quotes the marker still round-trips.
+  if (t.startsWith("<you-should-know>")) {
+    const body = t
+      .match(/<you-should-know>([\s\S]*)<\/you-should-know>/)?.[1]
+      ?.trim();
+    return body
+      ? [
+          {
+            id,
+            type: "system",
+            content: body,
+            timestamp: ts,
+            noticeKind: "you-should-know",
+          },
+        ]
+      : [];
+  }
   // A model-visible payload the harness injected into a prompt
   // (transcriptLineContextInjection in pi-transcript.ts, written by
   // context-log.ts): the "model-visible means logged" record. A system entry

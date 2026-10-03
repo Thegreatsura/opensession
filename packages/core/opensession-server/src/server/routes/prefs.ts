@@ -53,6 +53,7 @@ import {
   warmTemplateStatus,
 } from "../warm-template";
 import { REPOS } from "../worktree";
+import { getYouShouldKnow, setYouShouldKnow } from "../you-should-know";
 import { conditionalJsonResponse } from "../http-json";
 
 export async function handlePrefsRoutes(
@@ -228,6 +229,30 @@ export async function handlePrefsRoutes(
     return Response.json({
       outputStyle: setPersonalOutputStyle(user, body.outputStyle),
     });
+  }
+
+  // ── Per-user "You should know" side agent ──
+  // Opt-in: a side agent that flags the one thing a person might miss in a
+  // long turn (you-should-know.ts). Same identity key as the output style.
+  if (path === "/api/personal-you-should-know" && req.method === "GET") {
+    const user = requestUser(ctx, url.searchParams.get("user")) || "Anonymous";
+    return Response.json({ enabled: getYouShouldKnow(user) });
+  }
+
+  if (path === "/api/personal-you-should-know" && req.method === "PUT") {
+    const body = await req.json().catch(() => null);
+    if (
+      !body ||
+      typeof body.user !== "string" ||
+      typeof body.enabled !== "boolean"
+    ) {
+      return Response.json(
+        { error: "user (string) and enabled (boolean) are required" },
+        { status: 400 },
+      );
+    }
+    const user = requestUser(ctx, body.user) || "Anonymous";
+    return Response.json({ enabled: setYouShouldKnow(user, body.enabled) });
   }
 
   // ── Per-user personal system prompt ──

@@ -12,6 +12,8 @@ import {
   fetchRepos,
   request,
   savePersonalOutputStyle,
+  fetchYouShouldKnow,
+  saveYouShouldKnow,
   savePersonalPrompt,
   type ModelOption,
   type PersonalOutputStyle,
@@ -455,6 +457,68 @@ function PersonalOutputStyleRow() {
   );
 }
 
+/** Server-backed like the output style: the side agent runs on the server
+ * during a turn, so the choice has to be readable there. */
+function YouShouldKnowRow() {
+  const user = getCurrentUser();
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    fetchYouShouldKnow(user)
+      .then((result) => {
+        if (!alive) return;
+        setEnabled(result.enabled);
+        setError(null);
+      })
+      .catch(
+        (error) =>
+          alive &&
+          setError(errorMessage(error, "Failed to load You should know")),
+      );
+    return () => {
+      alive = false;
+    };
+  }, [user]);
+
+  async function change(next: boolean) {
+    const previous = enabled ?? false;
+    setEnabled(next);
+    setSaving(true);
+    setError(null);
+    try {
+      const saved = await saveYouShouldKnow(user, next);
+      setEnabled(saved.enabled);
+    } catch (error) {
+      const message = errorMessage(error, "Failed to save You should know");
+      setEnabled(previous);
+      setError(message);
+      toast(message, { variant: "error" });
+    }
+    setSaving(false);
+  }
+
+  return (
+    <SettingRow
+      title="You should know"
+      desc={
+        error ||
+        "A side agent flags important things you might miss during long turns."
+      }
+      control={
+        <Switch
+          aria-label="You should know"
+          checked={enabled ?? false}
+          disabled={enabled === null || saving}
+          onCheckedChange={change}
+        />
+      }
+    />
+  );
+}
+
 /** Settings → Personal prompt: a per-user standing-instructions block injected
  * into the system note of every interactive run the user starts (server-side:
  * personal-prompts.ts via memoryNoteFor). Automations never receive it. */
@@ -782,6 +846,7 @@ export function PreferencesPanel() {
           />
           <PersonalSandboxDefaultRow />
           <PersonalOutputStyleRow />
+          <YouShouldKnowRow />
         </SettingGroup>
         {/* The send key also determines which busy-turn gesture is available. */}
         <SettingGroup>
