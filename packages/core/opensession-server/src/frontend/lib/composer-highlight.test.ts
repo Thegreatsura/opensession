@@ -22,6 +22,17 @@ describe("composerHighlightHtml", () => {
     );
   });
 
+  test("quote lines", () => {
+    expect(composerHighlightHtml("> Heads up · `x`\n>\nwhy?\n")).toBe(
+      '<span class="cmp-quote"><span class="cmp-quote-mark">&gt;</span> Heads up · <span class="cmp-code">`x`</span></span>\n' +
+        '<span class="cmp-quote"><span class="cmp-quote-mark">&gt;</span></span>\n' +
+        "why?\n\u200b",
+    );
+    // A `>` mid-line, or inside a fence, is not a quote.
+    expect(composerHighlightHtml("a > b")).toBe("a &gt; b\u200b");
+    expect(composerHighlightHtml("```\n> no\n```")).not.toContain("cmp-quote");
+  });
+
   test("inline code", () => {
     expect(composerHighlightHtml("run `bun test` now")).toBe(
       'run <span class="cmp-code">`bun test`</span> now​',
@@ -273,6 +284,8 @@ describe("needsComposerHighlight", () => {
   test("a backtick, a finished mention, or a session id", () => {
     expect(needsComposerHighlight("plain")).toBe(false);
     expect(needsComposerHighlight("has `code`")).toBe(true);
+    expect(needsComposerHighlight("> quoted")).toBe(true);
+    expect(needsComposerHighlight("a > b")).toBe(false);
     expect(needsComposerHighlight("ask @Kent now", TEAM)).toBe(true);
     expect(needsComposerHighlight("ask @Kent now")).toBe(false);
     expect(needsComposerHighlight(`look at ${ID}`)).toBe(true);

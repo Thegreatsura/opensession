@@ -149,6 +149,15 @@
   corner-shape: var(--cs);
   color: #dde1f0;
 }
+/* A `>` line reads as the blockquote it becomes once sent: the quoted text
+   dims and the marker fades to the rule colour a sent quote draws. Colour
+   only, so the mirror keeps the field's exact glyph metrics. */
+.composer-hl .cmp-quote {
+  color: var(--text-dim);
+}
+.composer-hl .cmp-quote-mark {
+  color: var(--text-faint);
+}
 /* A finished @-mention of a teammate, the draft's counterpart to the
    `person-chip` a sent message renders. It reads as a pill without being one:
    the span may not take a pixel of padding, because the mirror has to stay

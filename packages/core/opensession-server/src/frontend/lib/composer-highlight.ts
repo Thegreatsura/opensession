@@ -334,9 +334,48 @@ function inlineCode(
   return out + chips(text, last, to, ranges);
 }
 
+/** A markdown quote line: optional indent, then `>`. */
+const QUOTE_LINE = /^( {0,3}>)/;
+
+/**
+ * Lines of a non-fence segment that start with `>` read as a quote, the way
+ * they will render once sent: dim text with a faint marker. Only colour
+ * changes, so the mirror stays glyph-identical to the field.
+ */
+function quoteLines(
+  text: string,
+  syntax: string,
+  from: number,
+  to: number,
+  ranges: DraftRange[],
+): string {
+  let out = "";
+  let at = from;
+  while (at < to) {
+    const nl = syntax.indexOf("\n", at);
+    const end = nl === -1 || nl >= to ? to : nl;
+    // Only a whole line can be a quote; a segment that starts mid-line (after
+    // a closing fence) is ordinary text up to its first newline.
+    const lineStart = at === 0 || syntax[at - 1] === "\n";
+    const marker = lineStart ? QUOTE_LINE.exec(syntax.slice(at, end)) : null;
+    if (marker) {
+      const body = at + marker[1].length;
+      out +=
+        `<span class="cmp-quote"><span class="cmp-quote-mark">${esc(text.slice(at, body))}</span>` +
+        `${inlineCode(text, syntax, body, end, ranges)}</span>`;
+    } else {
+      out += inlineCode(text, syntax, at, end, ranges);
+    }
+    if (end < to) out += esc(text.slice(end, end + 1));
+    at = end + 1;
+  }
+  return out;
+}
+
 /**
  * Render a composer draft to mirror HTML: ``` fences (closed, or open-ended
  * while still being typed) become .cmp-fence, `inline code` becomes .cmp-code,
+ * a line starting with `>` becomes .cmp-quote,
  * a finished @-mention becomes .cmp-mention, and a session id becomes
  * .cmp-session. Inline backticks inside a fence are left alone. A trailing
  * zero-width space keeps the mirror's last line from collapsing when the draft
@@ -354,11 +393,11 @@ export function composerHighlightHtml(
   const re = /```[\s\S]*?```|```[\s\S]*$/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(syntax))) {
-    out += inlineCode(text, syntax, last, m.index, ranges);
+    out += quoteLines(text, syntax, last, m.index, ranges);
     out += `<span class="cmp-fence">${esc(text.slice(m.index, m.index + m[0].length))}</span>`;
     last = m.index + m[0].length;
   }
-  out += inlineCode(text, syntax, last, text.length, ranges);
+  out += quoteLines(text, syntax, last, text.length, ranges);
   return out + "​";
 }
 
@@ -485,7 +524,7 @@ function hitTestPillHover(
 export const COMPOSER_HIGHLIGHT_MAX_CHARS = 8000;
 
 /** Only mount the mirror when the draft has something to paint — code markup,
- * a finished mention, or a session id. Plain drafts keep the stock opaque
+ * a quote line, a finished mention, or a session id. Plain drafts keep the stock opaque
  * textarea (zero desync risk). */
 export function needsComposerHighlight(
   text: string,
@@ -495,6 +534,7 @@ export function needsComposerHighlight(
   if (text.length > COMPOSER_HIGHLIGHT_MAX_CHARS) return false;
   return (
     text.includes("`") ||
+    /(^|\n) {0,3}>/.test(text) ||
     composerMentionRanges(text, people).length > 0 ||
     composerImageAttachmentRanges(text).length > 0 ||
     sessions.length > 0
