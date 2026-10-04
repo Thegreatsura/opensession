@@ -632,6 +632,17 @@ export function youShouldKnowRecordContent(
   return body ? `${title}\n${body}` : title;
 }
 
+/** Split a "You should know" notice title back into its tag and learn line.
+ *  A title without the separator is all line, under the default tag. */
+export function parseYouShouldKnowTitle(title: string): {
+  tag: string;
+  line: string;
+} {
+  const at = title.indexOf(" \u00b7 ");
+  if (at === -1) return { tag: "You should know", line: title.trim() };
+  return { tag: title.slice(0, at).trim(), line: title.slice(at + 3).trim() };
+}
+
 function parseLegacyAnsweredAsk(body: string): AnsweredAskData | undefined {
   const questions: AnsweredAskData["questions"] = [];
   let current: AnsweredAskData["questions"][number] | undefined;

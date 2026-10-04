@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
 import {
   classifyEntry,
   youShouldKnowRecordContent,
@@ -7,12 +9,25 @@ import { parseJsonlLines } from "./jsonl-parser";
 import { transcriptLineYouShouldKnow } from "./transcript-persistence";
 import {
   __resetYouShouldKnowForTest,
+  addKnownTopic,
+  getKnownTopics,
+  getYouShouldKnow,
+  setYouShouldKnow,
   isCheckStep,
   noteYouShouldKnowStep,
   parseYouShouldKnow,
   type YouShouldKnowDeps,
 } from "./you-should-know";
 import { youShouldKnowObserverPrompt } from "./you-should-know-prompt";
+
+const stateRoot = mkdtempSync(`${tmpdir()}/you-should-know-`);
+const previousRoot = process.env.OPENSESSION_STATE_DIR;
+process.env.OPENSESSION_STATE_DIR = stateRoot;
+afterAll(() => {
+  if (previousRoot === undefined) delete process.env.OPENSESSION_STATE_DIR;
+  else process.env.OPENSESSION_STATE_DIR = previousRoot;
+  rmSync(stateRoot, { recursive: true, force: true });
+});
 
 const SUGGESTION = [
   "learn: The main agent put multi-turn /ask behind a feature flag that's off by default, so users won't see it yet.",
@@ -85,7 +100,7 @@ describe("observer prompt", () => {
 describe("noteYouShouldKnowStep", () => {
   afterEach(() => __resetYouShouldKnowForTest());
 
-  function harness(answer: string | null = SUGGESTION) {
+  function harness(answer: string | null = SUGGESTION, known: string[] = []) {
     const prompts: string[] = [];
     const appended: string[] = [];
     const deps: YouShouldKnowDeps = {
@@ -99,6 +114,7 @@ describe("noteYouShouldKnowStep", () => {
       },
       isWatched: () => true,
       isEnabledFor: (user) => user === "ada",
+      knownTopics: () => known,
     };
     return { deps, prompts, appended };
   }
@@ -163,6 +179,54 @@ describe("noteYouShouldKnowStep", () => {
     await noteYouShouldKnowStep(step(12), deps);
     await first;
     expect(prompts).toHaveLength(1);
+  });
+});
+
+describe("preference and known topics", () => {
+  it("is on until the person turns it off", () => {
+    expect(getYouShouldKnow("Grace")).toBe(true);
+    expect(setYouShouldKnow("Grace", false)).toBe(false);
+    expect(getYouShouldKnow("grace")).toBe(false);
+    expect(setYouShouldKnow("Grace", true)).toBe(true);
+    expect(getYouShouldKnow("Grace")).toBe(true);
+  });
+
+  it("remembers what a person already knew, once", () => {
+    expect(getKnownTopics("Grace")).toEqual([]);
+    addKnownTopic("Grace", "Reads now pay a KMS round-trip.");
+    addKnownTopic("grace", "reads now pay a KMS round-trip");
+    expect(getKnownTopics("Grace")).toEqual([
+      "Reads now pay a KMS round-trip.",
+    ]);
+  });
+});
+
+describe("knew this already", () => {
+  afterEach(() => __resetYouShouldKnowForTest());
+
+  it("tells the observer and drops the topic if it comes back", async () => {
+    const line =
+      "The main agent put multi-turn /ask behind a feature flag that's off by default, so users won't see it yet.";
+    const prompts: string[] = [];
+    const appended: string[] = [];
+    await noteYouShouldKnowStep(
+      { sessionId: "s2", user: "ada", step: 6, turnId: "t" },
+      {
+        oneShot: async (prompt) => {
+          prompts.push(prompt);
+          return SUGGESTION;
+        },
+        transcriptTail: async () => "[1] user: hi",
+        append: async (_id, content) => {
+          appended.push(content);
+        },
+        isWatched: () => true,
+        isEnabledFor: () => true,
+        knownTopics: () => [line],
+      },
+    );
+    expect(prompts[0]).toContain(`- ${line}`);
+    expect(appended).toEqual([]);
   });
 });
 

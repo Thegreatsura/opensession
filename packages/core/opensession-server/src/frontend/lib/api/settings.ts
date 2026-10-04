@@ -373,6 +373,16 @@ export async function saveYouShouldKnow(
   });
 }
 
+export async function addYouShouldKnowTopic(
+  user: string,
+  line: string,
+): Promise<{ known: string[] }> {
+  return request("/personal-you-should-know/known", {
+    method: "POST",
+    body: { user, line },
+  });
+}
+
 export async function fetchPersonalPrompt(
   user: string,
 ): Promise<{ prompt: string }> {

@@ -53,7 +53,11 @@ import {
   warmTemplateStatus,
 } from "../warm-template";
 import { REPOS } from "../worktree";
-import { getYouShouldKnow, setYouShouldKnow } from "../you-should-know";
+import {
+  addKnownTopic,
+  getYouShouldKnow,
+  setYouShouldKnow,
+} from "../you-should-know";
 import { conditionalJsonResponse } from "../http-json";
 
 export async function handlePrefsRoutes(
@@ -232,7 +236,7 @@ export async function handlePrefsRoutes(
   }
 
   // ── Per-user "You should know" side agent ──
-  // Opt-in: a side agent that flags the one thing a person might miss in a
+  // On by default: a side agent that flags the one thing a person might miss in a
   // long turn (you-should-know.ts). Same identity key as the output style.
   if (path === "/api/personal-you-should-know" && req.method === "GET") {
     const user = requestUser(ctx, url.searchParams.get("user")) || "Anonymous";
@@ -253,6 +257,24 @@ export async function handlePrefsRoutes(
     }
     const user = requestUser(ctx, body.user) || "Anonymous";
     return Response.json({ enabled: setYouShouldKnow(user, body.enabled) });
+  }
+
+  // "Knew this already" on a suggestion: later checks skip the topic.
+  if (path === "/api/personal-you-should-know/known" && req.method === "POST") {
+    const body = await req.json().catch(() => null);
+    if (
+      !body ||
+      typeof body.user !== "string" ||
+      typeof body.line !== "string" ||
+      !body.line.trim()
+    ) {
+      return Response.json(
+        { error: "user (string) and line (string) are required" },
+        { status: 400 },
+      );
+    }
+    const user = requestUser(ctx, body.user) || "Anonymous";
+    return Response.json({ known: addKnownTopic(user, body.line) });
   }
 
   // ── Per-user personal system prompt ──

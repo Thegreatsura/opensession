@@ -505,7 +505,7 @@ function YouShouldKnowRow() {
       title="You should know"
       desc={
         error ||
-        "A side agent flags important things you might miss during long turns."
+        "A side agent flags important things you might miss during long turns. On by default."
       }
       control={
         <Switch

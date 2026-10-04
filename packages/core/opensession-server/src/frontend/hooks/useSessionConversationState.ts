@@ -53,6 +53,7 @@ import type { useNavigation } from "./useNavigation";
 import type { useSessionRuntime } from "./useSessionRuntime";
 import type { useSessionSocket } from "./useSessionSocket";
 import { useImageRegionComposer } from "./useSessionComposerController";
+import { useYouShouldKnowChat } from "../lib/you-should-know";
 import {
   commitSessionQueueReorder,
   discardSessionOutboxItem,
@@ -645,6 +646,8 @@ export function useSessionSendController({
     noEngine: message.identity.noEngine,
     handleSend,
   });
+  // "Chat in main session" on a You should know note quotes it in here.
+  useYouShouldKnowChat(message.identity.session.id, setPrefill);
   function discardOutbox(item: PromptOutboxItem) {
     discardSessionOutboxItem(item, message.runtime.setPending);
   }
