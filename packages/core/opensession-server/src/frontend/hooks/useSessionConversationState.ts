@@ -646,7 +646,7 @@ export function useSessionSendController({
     noEngine: message.identity.noEngine,
     handleSend,
   });
-  // "Chat in main session" on a You should know note quotes it in here.
+  // "Ask about this" on a You should know note quotes it in here.
   useYouShouldKnowChat(message.identity.session.id, setPrefill);
   function discardOutbox(item: PromptOutboxItem) {
     discardSessionOutboxItem(item, message.runtime.setPending);

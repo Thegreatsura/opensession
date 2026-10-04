@@ -16,9 +16,9 @@ import { getCurrentUser } from "./UserPicker";
 
 /**
  * A You should know note (server/you-should-know.ts) with the plugin's
- * answers: Learn more opens the explanation, Knew this already tells later
- * checks to skip the topic, Chat in main session quotes the note into the
- * composer, and Turn off (pressed twice, as in the plugin) switches the side
+ * answers: Learn more opens the explanation, Ask about this quotes the note
+ * into the composer (with the cursor there) so the main agent can answer,
+ * I knew this tells later checks to skip the topic, and Turn off (pressed twice, as in the plugin) switches the side
  * agent off for this person. The note itself is durable; what a button did is
  * remembered on the server, not on the card.
  */
@@ -37,14 +37,26 @@ export function YouShouldKnowNotice({
   const [offArmed, setOffArmed] = useState(false);
   const [off, setOff] = useState(false);
 
-  async function knew() {
+  async function remember(quiet = false) {
     setKnown(true);
     try {
       await addYouShouldKnowTopic(getCurrentUser(), line);
     } catch (error) {
       setKnown(false);
-      toast(errorMessage(error, "Failed to save"), { variant: "error" });
+      if (!quiet)
+        toast(errorMessage(error, "Failed to save"), { variant: "error" });
     }
+  }
+
+  // As in the plugin, asking about a note also counts as having seen it, so
+  // the same topic is not offered again.
+  function ask() {
+    if (!sessionId) return;
+    requestYouShouldKnowChat(
+      sessionId,
+      youShouldKnowChatText(tag, line, explanation),
+    );
+    if (!known) void remember(true);
   }
 
   async function turnOff() {
@@ -92,21 +104,14 @@ export function YouShouldKnowNotice({
               {open ? "Hide" : "Learn more"}
             </Button>
           )}
-          <Button size="sm" variant="ghost" disabled={known} onClick={knew}>
-            {known ? "Won't suggest again" : "Knew this already"}
-          </Button>
           {sessionId && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() =>
-                requestYouShouldKnowChat(
-                  sessionId,
-                  youShouldKnowChatText(tag, line, explanation),
-                )
-              }
-            >
-              Chat in main session
+            <Button size="sm" variant="soft" onClick={ask}>
+              Ask about this
+            </Button>
+          )}
+          {!known && (
+            <Button size="sm" variant="ghost" onClick={() => void remember()}>
+              I knew this
             </Button>
           )}
           {!off && (

@@ -17,9 +17,9 @@
  * The suggestion lands as a durable `you-should-know` notice. Its title is the
  * tag and the learn line, and the explanation sits behind the notice's show
  * toggle, which plays the plugin's "Learn more" role on every client. The web
- * adds the plugin's other answers: "Knew this already" (remembered per person
- * and handed to every later check as a topic to skip) and "Chat in main
- * session" (quotes the note into the composer).
+ * adds the plugin's other answers: "I knew this" (remembered per person and
+ * handed to every later check as a topic to skip) and "Ask about this"
+ * (quotes the note into the composer and also counts as known).
  *
  * On by default; a person can turn it off in Settings → Preferences or from
  * the note itself. Keyed like the output style so the choice follows a
@@ -75,7 +75,7 @@ export function setYouShouldKnow(
   return preferenceStore.set(user ?? "", enabled !== false);
 }
 
-// ── Topics a person already knew ("Knew this already") ──
+// ── Topics a person already knew ("I knew this") ──
 
 function cleanKnown(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];

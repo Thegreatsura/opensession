@@ -259,7 +259,7 @@ export async function handlePrefsRoutes(
     return Response.json({ enabled: setYouShouldKnow(user, body.enabled) });
   }
 
-  // "Knew this already" on a suggestion: later checks skip the topic.
+  // "I knew this" on a suggestion: later checks skip the topic.
   if (path === "/api/personal-you-should-know/known" && req.method === "POST") {
     const body = await req.json().catch(() => null);
     if (

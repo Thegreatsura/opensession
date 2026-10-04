@@ -2,7 +2,7 @@ import { useEffect, type Dispatch, type SetStateAction } from "react";
 import type { ComposerPrefill } from "./composer-types";
 
 /**
- * "Chat in main session" for a You should know note (server/you-should-know.ts):
+ * "Ask about this" on a You should know note (server/you-should-know.ts):
  * the note is quoted into the session's composer, the way Claude Code's plugin
  * fills its prompt box. A per-session listener rather than a prop because the
  * note renders deep inside the transcript while the composer belongs to the
@@ -26,7 +26,7 @@ export function youShouldKnowChatText(
     .split("\n")
     .map((row) => (row === "" ? ">" : `> ${row}`))
     .join("\n");
-  return `Here is a note offered by a side agent:\n\n${quoted}\n\n`;
+  return `About this note from the side agent:\n\n${quoted}\n\n`;
 }
 
 export function requestYouShouldKnowChat(
