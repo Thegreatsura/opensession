@@ -622,7 +622,7 @@ export function PrPanel({
     const actionTargetKey = loadTargetKey;
     confirmMerge({
       title: `Merge #${pr.number}?`,
-      description: `Squash “${pr.title}” into ${pr.baseRefName}.${pending.length ? " Pending review comments will not be submitted." : ""}`,
+      description: `Squash “${pr.title}” into ${pr.baseRefName}.${checkSummary.pending ? " Some checks are still running." : ""}${pending.length ? " Pending review comments will not be submitted." : ""}`,
       confirmLabel: "Squash and merge",
       onConfirm: () => {
         if (actionTargetKey !== activeLoadTargetRef.current) return;
@@ -1294,12 +1294,13 @@ export function PrPanel({
   // for this PR, including the states a badge cannot show at all: a conflict,
   // or checks still running.
   const statusMark = prStatusMark({ ...pr, checks: checkSummary });
+  // Running checks do not block a merge: the host still enforces required
+  // checks, and waiting on a slow optional check should not hide the button.
   const canMergeAfterReview =
     pr.state === "OPEN" &&
     !pr.isDraft &&
     pr.mergeable !== "CONFLICTING" &&
-    checkSummary.failed === 0 &&
-    checkSummary.pending === 0;
+    checkSummary.failed === 0;
   const phoneMergeAction =
     pr.state === "OPEN" && pr.isDraft ? (
       <Button
@@ -1319,7 +1320,7 @@ export function PrPanel({
         onClick={handleMerge}
         title={
           !canMergeAfterReview
-            ? "Resolve conflicts and wait for checks before merging"
+            ? "Resolve conflicts and fix failing checks before merging"
             : "Squash and merge"
         }
       >
