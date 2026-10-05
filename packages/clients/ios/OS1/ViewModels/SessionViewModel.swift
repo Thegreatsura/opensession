@@ -334,6 +334,10 @@ final class SessionViewModel {
     private var prTask: Task<Void, Never>?
     private var prLoadGeneration = 0
     private let prLoader: @MainActor (String) async throws -> PrDetails?
+    private let prReadyMarker: @MainActor (PrReadyTarget) async throws -> Void
+    /// PRs with a Ready for review request on the wire. Keyed by target so a
+    /// second tap on the same PR is dropped while another PR can still go.
+    private(set) var readyingPrTargets: Set<SessionPrTarget> = []
     private let slackComposerUndoer: @MainActor (String, String, String) async throws -> Void
     private var notesTask: Task<Void, Never>?
 
@@ -614,6 +618,9 @@ final class SessionViewModel {
         prLoader: @escaping @MainActor (String) async throws -> PrDetails? = {
             try await OS1API.pr(sessionId: $0)
         },
+        prReadyMarker: @escaping @MainActor (PrReadyTarget) async throws -> Void = {
+            try await OS1API.markPrReady($0)
+        },
         slackComposerUndoer: @escaping @MainActor (String, String, String) async throws -> Void = {
             try await SlackAPI.undoComposer(sessionId: $0, channelId: $1, ts: $2)
         },
@@ -627,6 +634,7 @@ final class SessionViewModel {
         self.conversationLoadTimeout = conversationLoadTimeout
         self.clock = clock
         self.prLoader = prLoader
+        self.prReadyMarker = prReadyMarker
         self.slackComposerUndoer = slackComposerUndoer
         self.workflowLoader = workflowLoader
         self.isRunning = session.safety == nil && (session.isRunning ?? false)
@@ -957,6 +965,39 @@ final class SessionViewModel {
     func closePr() async throws {
         try await OS1API.closePr(sessionId: session.id)
         await refreshPr()
+    }
+
+    /// The session's own PR as a target, when it has a branch to name.
+    var primaryPrTarget: SessionPrTarget? {
+        guard let branch = session.branch, !branch.isEmpty else { return nil }
+        return SessionPrTarget(repo: session.effectiveRepo, branch: branch)
+    }
+
+    /// Take one of this session's PRs out of draft. `nil` (or the primary
+    /// target) is the panel's own PR; any other target is an attached-repo or
+    /// series PR and goes out with its repo and branch. Returns false when the
+    /// same PR already has a request in flight. On success only that PR's
+    /// draft state is cleared, and only the panel's own PR is refetched.
+    @discardableResult
+    func markPrReady(_ target: SessionPrTarget? = nil) async throws -> Bool {
+        let primary = primaryPrTarget
+        let resolved = target ?? primary
+        let key = resolved ?? SessionPrTarget(repo: session.effectiveRepo, branch: "")
+        guard readyingPrTargets.insert(key).inserted else { return false }
+        defer { readyingPrTargets.remove(key) }
+
+        let isPrimary = target == nil || target == primary
+        try await prReadyMarker(
+            isPrimary
+                ? .session(id: session.id)
+                : .session(id: session.id, repo: key.repo, branch: key.branch)
+        )
+        if let resolved { session = session.markingPrReady(resolved) }
+        if isPrimary {
+            prDetails?.isDraft = false
+            await refreshPr()
+        }
+        return true
     }
 
     /// Called when the app returns to the foreground. iOS suspends the socket
