@@ -13,6 +13,10 @@ struct SettingsView: View {
     @State private var checkResult: String?
     @State private var copiedCode = false
     @State private var confirmingSignOut = false
+    #if DEBUG
+    @State private var opensNotificationsFixture =
+        ProcessInfo.processInfo.environment["OS1_OPEN_SETTINGS"] == "notifications"
+    #endif
 
     private var signIn: GitHubSignIn { .shared }
 
@@ -38,6 +42,13 @@ struct SettingsView: View {
                     : automationId == nil ? "Settings" : "Automations"
             )
             .inlineTitleBarCompat()
+            #if DEBUG
+            // Screenshot hook: `OS1_OPEN_SETTINGS=notifications` lands on the
+            // Notifications screen, two taps a scripted run cannot make.
+            .navigationDestination(isPresented: $opensNotificationsFixture) {
+                NotificationsSettingsView()
+            }
+            #endif
             #if os(macOS)
             .frame(minWidth: 620, minHeight: 640)
             #endif
