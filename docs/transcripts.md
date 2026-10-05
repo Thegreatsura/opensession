@@ -254,6 +254,32 @@ Legacy transcript migration and maintenance preserve the single-writer rule:
 The legacy parsers therefore remain for migration, external-session serving,
 and freshness recovery, not as a second store for Open Session-owned runs.
 
+## Conversation search
+
+The command menu's "search in conversations" reads a derived SQLite FTS5
+index (`transcript-text-index.ts`), stored in the history search database and
+owned by its worker thread, so neither indexing nor a query runs on the
+gateway.
+
+- **What is indexed:** user and assistant messages, summaries, and short tool
+  inputs, each capped. Tool output and injected context are left out; they
+  are most of every transcript's bytes and would drown the matches.
+- **Freshness:** the history timer that fires when a turn ends reads that one
+  session's changes since its cursor and applies them. The cursor is the
+  transcript's reset epoch plus the last change sequence applied, and every
+  apply is a compare-and-set on it. A reset, or a transcript recreated under
+  the same id, starts the session over. Deleting a session drops its rows.
+- **Recent turns:** the search route also scans the 25 most recently active
+  sessions directly, in a read-only child process, so a turn still running is
+  found before its index update lands.
+- **Existing history:** `bun scripts/backfill-transcript-index.ts` is an
+  offline operator job that indexes every actor database. It is safe to run
+  while the service is up and resumes where it stopped. The running service
+  never walks actor databases to fill the index.
+
+The index is derived. Rerunning the backfill brings any session whose cursor
+fell behind back up to date.
+
 ## Adjacent pieces
 
 - **Session metadata:** session JSON files are written through

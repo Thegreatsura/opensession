@@ -94,6 +94,7 @@ import { withSessionMutationLock } from "../session-mutation-lock";
 import { sessionIdForRequest } from "../session-request-id";
 import { suggestBranchName } from "../suggest-branch";
 import { removeFromSearchIndex } from "../session-index";
+import { callSearchIndex } from "../session-search-client";
 import { destroySessionSandbox } from "../session-sandbox";
 import { deleteSessionCheckpoint } from "../sandbox/checkpoint";
 import { withSessionLifecycleLane } from "../sandbox/lifecycle-lane";
@@ -870,9 +871,10 @@ async function searchStoredTranscripts(
       query,
       sessionIds,
       maxMatches: 50,
-      maxSessions: 250,
+      maxSessions: LIVE_TRANSCRIPT_SCAN_SESSIONS,
       maxRows: 6_000,
-      maxMs: 5_000,
+      // The index answers the rest; a slow scan must not hold up the page.
+      maxMs: 2_000,
     }),
   );
   proc.stdin.end();
@@ -917,6 +919,9 @@ async function searchStoredTranscripts(
     signal?.removeEventListener("abort", abort);
   }
 }
+
+/** Newest sessions scanned directly, ahead of their index update. */
+const LIVE_TRANSCRIPT_SCAN_SESSIONS = 25;
 
 async function ripgrepFiles(query: string, files: string[]): Promise<string[]> {
   const hits = new Set<string>();
@@ -1688,12 +1693,12 @@ export async function handleSessionsRoutes(
   }
 
   // Full-text search across session transcripts (the ⌘K palette's
-  // "search in conversations"). Owned sessions live in transcript v2 and no
-  // longer have mirror files, so their bounded rows are searched in a
-  // read-only child process. The most recent 1,000 sessions cover interactive
-  // recall without turning each keystroke into a scan of the 6+ GB database;
-  // `truncated` keeps that ceiling explicit for a future FTS cutover. Legacy
-  // transcripts retain the ripgrep pre-pass and clean-snippet validation.
+  // "search in conversations"). Every session's text lives in the derived
+  // FTS5 index on the search worker (transcript-text-index.ts), updated when
+  // each turn ends. The few most recent sessions are also scanned directly
+  // in a read-only child process, so a turn still running, or one that ended
+  // moments ago, is found before its index update lands. Legacy transcripts
+  // retain the ripgrep pre-pass and clean-snippet validation.
   if (path === "/api/sessions/search" && req.method === "GET") {
     const q = (url.searchParams.get("q") || "").trim();
     if (q.length < 2) return Response.json({ matches: [] });
@@ -1705,11 +1710,27 @@ export async function handleSessionsRoutes(
           (Date.parse(b.lastActivity || "") || 0) -
           (Date.parse(a.lastActivity || "") || 0),
       )
-      .slice(0, 1_000)
+      .slice(0, LIVE_TRANSCRIPT_SCAN_SESSIONS)
       .map((session) => session.id);
-    const stored = await searchStoredTranscripts(q, recentIds, req.signal);
+    const [stored, indexed] = await Promise.all([
+      searchStoredTranscripts(q, recentIds, req.signal),
+      callSearchIndex("searchTranscripts", q, { limit: 50 }).catch(
+        (error: unknown) => {
+          console.warn(
+            `[transcript-search] index unavailable: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return null;
+        },
+      ),
+    ]);
     const matches = stored.matches.slice(0, 50);
     const matchedIds = new Set(matches.map((match) => match.id));
+    for (const match of indexed ?? []) {
+      if (matches.length >= 50) break;
+      if (matchedIds.has(match.id)) continue;
+      matches.push(match);
+      matchedIds.add(match.id);
+    }
 
     const byPath = new Map<string, string>(); // transcriptPath → sessionId
     for (const session of sessions) {
@@ -1734,10 +1755,9 @@ export async function handleSessionsRoutes(
     }
     return Response.json({
       matches,
-      truncated:
-        stored.exhausted !== null ||
-        stored.searchedSessions < recentIds.length ||
-        (sessions.length > recentIds.length && matches.length < 50),
+      // An unavailable index searched only the newest sessions; a full page
+      // may have more behind it.
+      truncated: indexed === null || matches.length >= 50,
     });
   }
 
@@ -1975,6 +1995,9 @@ export async function handleSessionsRoutes(
       } catch {}
       try {
         await removeFromSearchIndex(`session:${id}`);
+      } catch {}
+      try {
+        await callSearchIndex("removeTranscript", id);
       } catch {}
     };
     // Every deletion step works on the record as it stands once the lifecycle

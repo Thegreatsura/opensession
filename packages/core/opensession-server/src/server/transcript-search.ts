@@ -49,12 +49,39 @@ export function transcriptEntryMatchSnippet(
       ? `${entry.content || ""}\n${safeStringify(entry.toolInput)}`
       : entry.content || "";
   const match = findQuery(hay.toLowerCase(), needle);
-  if (!match) return null;
-  const { index, length } = match;
+  return match ? snippetAround(hay, match, context) : null;
+}
+
+function snippetAround(
+  hay: string,
+  { index, length }: { index: number; length: number },
+  context: number,
+): string {
   const start = Math.max(0, index - context);
   const end = Math.min(hay.length, index + length + context);
   let snippet = hay.slice(start, end).replace(/\s+/g, " ").trim();
   if (start > 0) snippet = `…${snippet}`;
   if (end < hay.length) snippet = `${snippet}…`;
   return snippet;
+}
+
+/**
+ * A snippet of indexed text that the full-text index already matched. The
+ * index matches whole words in any order, so the whole query may not appear
+ * as written: fall back to its first word that does, then to the opening.
+ */
+export function textMatchSnippet(
+  text: string,
+  query: string,
+  context = 60,
+): string {
+  const lower = text.toLowerCase();
+  const needle = query.trim().toLowerCase();
+  const match = (needle ? findQuery(lower, needle) : null) ??
+    needle
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter(Boolean)
+      .map((word) => ({ index: lower.indexOf(word), length: word.length }))
+      .find((hit) => hit.index >= 0) ?? { index: 0, length: 0 };
+  return snippetAround(text, match, context);
 }

@@ -27,6 +27,7 @@ import {
 } from "./session-kernel";
 import { callSearchIndex } from "./session-search-client";
 import type { SearchHit, SearchRecord } from "./session-search-store";
+import { transcriptIndexRows } from "./transcript-text-index";
 import { mergedSessionTranscriptAsync } from "./sessions";
 import { oneShot } from "./one-shot";
 import type { TranscriptEntry, UnifiedSession } from "./types";
@@ -281,8 +282,72 @@ async function boundedIndexEntries(
   return mergedSessionTranscriptAsync(session);
 }
 
+const TRANSCRIPT_PAGE = 500;
+/** Changes one firing applies; a longer backlog continues next turn. */
+const TRANSCRIPT_MAX_CHANGES = 50_000;
+
+/**
+ * Bring one session's conversation index up to date: read its transcript
+ * changes since the stored cursor, one page at a time, and apply each page.
+ * A new reset epoch, or a transcript recreated under the same id, starts the
+ * session over. Reads only this session, through its actor.
+ */
+export async function indexSessionTranscript(
+  sessionId: string,
+  activityTs: number,
+): Promise<{ applied: number }> {
+  if (sessionId.startsWith("plain-")) return { applied: 0 };
+  const [epoch, lastChangeSeq] = await Promise.all([
+    transcript.getLastResetChangeSeq(sessionId),
+    transcript.getLastChangeSeq(sessionId),
+  ]);
+  let stored = await callSearchIndex("transcriptCursor", sessionId);
+  let cursor =
+    stored && stored.epoch === epoch && stored.changeSeq <= lastChangeSeq
+      ? stored.changeSeq
+      : 0;
+  let applied = 0;
+  let conflicts = 0;
+  while (applied < TRANSCRIPT_MAX_CHANGES) {
+    const page = await transcript.readChangesSince(
+      sessionId,
+      cursor,
+      TRANSCRIPT_PAGE,
+    );
+    const through = page.entries.reduce(
+      (max, entry) => Math.max(max, entry.changeSeq),
+      cursor,
+    );
+    if (page.entries.length === 0 && stored && cursor === stored.changeSeq)
+      break;
+    const ok = await callSearchIndex("applyTranscript", {
+      sessionId,
+      epoch,
+      fromChangeSeq: cursor,
+      throughChangeSeq: through,
+      activityTs,
+      rows: transcriptIndexRows(page.entries),
+    });
+    if (!ok) {
+      // Another writer (the offline backfill) moved the cursor: continue
+      // from where it left off, or give up after a few rounds.
+      if (++conflicts > 3) break;
+      stored = await callSearchIndex("transcriptCursor", sessionId);
+      cursor = stored && stored.epoch === epoch ? stored.changeSeq : 0;
+      continue;
+    }
+    stored = { epoch, changeSeq: through };
+    cursor = through;
+    applied += page.entries.length;
+    if (page.entries.length < TRANSCRIPT_PAGE) break;
+  }
+  return { applied };
+}
+
 export type SessionHistoryIndexResult =
-  | { kind: "missing" | "stale" | "ineligible" }
+  | { kind: "missing" | "stale" }
+  /** activityTs is 0 when the session has no usable activity time. */
+  | { kind: "ineligible"; activityTs: number }
   | {
       kind: "indexed";
       activityTs: number;
@@ -301,12 +366,14 @@ export async function indexSessionHistory(
   const session = await findSessionAsync(sessionId);
   if (!session) {
     await removeFromSearchIndex(`session:${sessionId}`);
+    await callSearchIndex("removeTranscript", sessionId);
     return { kind: "missing" };
   }
   const activityTs = Date.parse(
     session.lastActivity || session.createdAt || "",
   );
-  if (!activityTs || Number.isNaN(activityTs)) return { kind: "ineligible" };
+  if (!activityTs || Number.isNaN(activityTs))
+    return { kind: "ineligible", activityTs: 0 };
   if (
     options.expectedActivityTs !== undefined &&
     options.expectedActivityTs !== activityTs
@@ -321,13 +388,13 @@ export async function indexSessionHistory(
       now - activityTs < IDLE_MS ||
       activityTs < now - DISTILL_RECENT_DAYS * 86_400_000)
   )
-    return { kind: "ineligible" };
+    return { kind: "ineligible", activityTs };
 
   const extracted = extractSessionIndexTexts(
     await boundedIndexEntries(session),
   );
   if (extracted.totalChars < 120 && !session.title)
-    return { kind: "ineligible" };
+    return { kind: "ineligible", activityTs };
 
   const base = mechanicalRecord(session, extracted, activityTs);
   const distillable = extracted.totalChars >= MIN_DISTILL_CHARS;
@@ -441,6 +508,18 @@ async function handleSessionHistoryTimer(timer: DurableTimer): Promise<void> {
 
   if (payload.phase === "mechanical") {
     const result = await indexSessionHistory(timer.sessionId);
+    if (result.kind === "indexed" || result.kind === "ineligible") {
+      // The conversation index wants every session's words, including the
+      // short ones history distillation skips.
+      try {
+        await indexSessionTranscript(timer.sessionId, result.activityTs);
+      } catch (error) {
+        console.warn(
+          `[session-index] transcript index failed for ${timer.sessionId}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }
     if (result.kind !== "indexed" || !result.distillable) return;
     await scheduleDistillation(
       timer.sessionId,

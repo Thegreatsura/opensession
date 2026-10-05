@@ -13,6 +13,11 @@ export const SESSION_SEARCH_STORE_METHODS = [
   "indexState",
   "count",
   "search",
+  "transcriptCursor",
+  "applyTranscript",
+  "removeTranscript",
+  "searchTranscripts",
+  "transcriptStats",
 ] as const;
 
 export type SessionSearchStoreMethod =

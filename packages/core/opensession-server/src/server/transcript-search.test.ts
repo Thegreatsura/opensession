@@ -201,8 +201,8 @@ describe("transcript search", () => {
     expect(search).not.toContain("transcript.search");
     expect(search).toContain("signal?.addEventListener");
     expect(search).toContain("exhausted");
-    expect(route).toContain("stored.exhausted !== null");
-    expect(route).toContain("stored.searchedSessions < recentIds.length");
+    expect(route).toContain('callSearchIndex("searchTranscripts"');
+    expect(route).toContain(".slice(0, LIVE_TRANSCRIPT_SCAN_SESSIONS)");
   });
 
   test("builds one-line context around a match", () => {
