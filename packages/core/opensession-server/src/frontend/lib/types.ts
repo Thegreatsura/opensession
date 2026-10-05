@@ -367,17 +367,47 @@ export interface SessionSlackShare {
   announcementKey?: string;
 }
 
-/** A team note on a session: human-to-human, interleaved into the transcript
- *  by `ts`, and never shown to the agent. See src/server/session-notes.ts. */
-export interface SessionNote {
+/** Where an inline comment points: words in one transcript entry. See
+ *  src/server/comment-threads.ts and lib/comment-anchor.ts. */
+export interface TextAnchor {
+  entryId: string;
+  exact: string;
+  prefix: string;
+  suffix: string;
+}
+
+export interface ThreadComment {
   id: string;
   user: string;
   text: string;
   images?: string[];
   /** ms epoch */
   ts: number;
-  /** ms epoch of the last edit; absent on notes never edited. */
+  /** ms epoch of the last edit; absent on comments never edited. */
   editedAt?: number;
+  /** Written by the agent rather than a person. */
+  agent?: true;
+}
+
+/** A comment thread on a session: people talking to each other, never seen by
+ *  the agent's run. With an `anchor` it is an inline comment on a passage;
+ *  without one it is a team note in the timeline, ordered by `ts`. */
+export interface CommentThread {
+  id: string;
+  sessionId: string;
+  anchor?: TextAnchor;
+  status: "open" | "resolved";
+  createdBy: string;
+  /** ms epoch of the first comment. */
+  ts: number;
+  updatedAt: number;
+  resolvedBy?: string;
+  resolvedAt?: number;
+  assignee?: string;
+  assigneeTodoId?: string;
+  /** ms epoch the agent started answering in the thread. */
+  agentPendingSince?: number;
+  comments: ThreadComment[];
 }
 
 export interface SessionPrRef {
@@ -1088,14 +1118,13 @@ export type WSServerMessage =
   // change): tabs auto-reload after a short grace instead of waiting for a
   // click — see UpdatePill.
   | { type: "frontend_updated"; version: string; by?: string; force?: boolean }
-  // A team note posted on a session (agent-invisible; see SessionNote).
-  // Broadcast to every client, not just the session's watchers, so a client
-  // elsewhere can still tell that a session has new notes.
-  | { type: "session_note"; sessionId: string; note: SessionNote }
-  | { type: "session_note_deleted"; sessionId: string; noteId: string }
+  // A comment thread was created or changed (see CommentThread). Sent to
+  // the session's watchers.
+  | { type: "comment_thread"; sessionId: string; thread: CommentThread }
+  | { type: "comment_thread_deleted"; sessionId: string; threadId: string }
   // Somebody @-mentioned a teammate in a prompt or a note. Broadcast to
   // everyone and addressed by name — clients keep the ones for themselves
-  // (lib/mentions.ts) and ignore the rest, the same way session_note is
+  // (lib/mentions.ts) and ignore the rest, the same way notifications are
   // broadcast wide and filtered client-side.
   | { type: "mention"; user: string; mention: MentionRecord }
   // The mention was seen: one session when `sessionId` is set, otherwise all

@@ -23,13 +23,11 @@ import {
 } from "../lib/session-performance";
 import { AGENT_NAME, DEFAULT_DOC_TITLE } from "../lib/brand";
 import { withQuotes, type Quote } from "../lib/quotes";
-import { markNotesRead } from "../lib/note-reads";
 import { clearMention, onMentionsChanged } from "../lib/mentions";
 import { QuoteSelection } from "./QuoteSelection";
 import { plainThreadUrl } from "./PlainThreadPanel";
 import type {
   UnifiedSession,
-  SessionNote,
   SessionSlackShare,
   TranscriptEntry,
 } from "../lib/types";
@@ -64,8 +62,6 @@ import {
   fetchFileMentions,
   fetchMentionSuggestions,
   fetchSkillMentions,
-  fetchSessionNotesApi,
-  postSessionNoteApi,
   portalActionApi,
   type WorkspaceMediaItem,
 } from "../lib/api";
@@ -750,7 +746,7 @@ export function SessionViewer({
   const { overlayAssetPath, setOverlayAssetPath } = viewState.assets;
   const { closeAssetOverlay, promoteAssetToTab } = viewState.assets;
   const { openAssetFromTranscript } = viewState.assets;
-  const { sessionReports, sessionDatabases, notes, setNotes } = viewState.notes;
+  const { sessionReports, sessionDatabases, comments } = viewState.notes;
   const { noteMode, setNoteMode } = viewState.notes;
   const { addSessionAttachments, fileDragActive } = viewState.notes;
   // Intent-aware scrolling: stick to the live edge only while the reader is there,
@@ -1727,7 +1723,7 @@ export function SessionViewer({
               shouldMaintainEnd,
               reviewResult,
               sessionWalkthrough,
-              notes,
+              comments,
               safety,
             },
             content: {

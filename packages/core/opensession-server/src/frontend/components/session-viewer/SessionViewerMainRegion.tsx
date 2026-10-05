@@ -97,7 +97,12 @@ import {
   VIEWER_SUGGESTIONS_ROW,
   VIEWER_SUMMARY_STEP,
 } from "../../lib/session-viewer-classes";
-import type { UnifiedSession, SessionNote } from "../../lib/types";
+import type { UnifiedSession } from "../../lib/types";
+import type { SessionComments } from "../../lib/comment-threads";
+import { InlineComments } from "../comments/InlineComments";
+import { anchorFromRange } from "../../lib/comment-anchor";
+import { requestCommentDraft } from "../../lib/comment-draft";
+import { toast as showToast } from "../../ui/toast";
 import type { TypingPresence } from "../../lib/typing";
 import type { SessionViewerProps } from "../../lib/session-viewer-bindings";
 import type { QueueReceipt } from "../../lib/session-queue";
@@ -215,7 +220,9 @@ interface TranscriptState {
   shouldMaintainEnd: TranscriptProps["shouldMaintainEnd"];
   reviewResult: TranscriptProps["reviewResult"];
   sessionWalkthrough: TranscriptProps["walkthrough"];
-  notes: SessionNote[];
+  /** Every comment thread on the session, and the team notes among them
+   *  (threads with no passage) that the timeline interleaves. */
+  comments: SessionComments;
   safety: ComponentProps<typeof SessionSafetyNotice>["safety"] | undefined;
 }
 
@@ -499,7 +506,7 @@ export function SessionViewerMainRegion({
     shouldMaintainEnd,
     reviewResult,
     sessionWalkthrough,
-    notes,
+    comments: { threads, notes },
     safety,
   } = transcript.state;
   const {
@@ -854,6 +861,15 @@ export function SessionViewerMainRegion({
               }
               onClear={clearQuote}
               onInputIntent={focusComposerForQuote}
+              onComment={(range) => {
+                const anchor = anchorFromRange(range);
+                if (!anchor) {
+                  showToast("Select text inside one message to comment");
+                  return false;
+                }
+                requestCommentDraft(session.id, { anchor, range });
+                return true;
+              }}
             />
             <div
               className={cn(
@@ -1133,6 +1149,18 @@ export function SessionViewerMainRegion({
                 reply streams into the space below; sized by the scroll hook. */}
               <div ref={spacerRef} className={TURN_SPACER} aria-hidden="true" />
             </div>
+
+            {/* Comment highlights, margin cards and the comments list. A
+							    sibling of the scroller for the same reason as the rail. */}
+            {!loading && (
+              <InlineComments
+                key={session.id}
+                sessionId={session.id}
+                threads={threads}
+                containerRef={messagesRef}
+                isPhone={isPhone}
+              />
+            )}
 
             {/* Sibling of the scroller, not a child: a press on the rail
 							    must never reach the transcript container, whose scroll hook

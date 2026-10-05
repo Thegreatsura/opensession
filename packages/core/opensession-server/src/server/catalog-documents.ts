@@ -47,6 +47,9 @@ export const APPLICATION_CATALOG_NAMESPACES = [
   // (workflow-store.ts).
   "session-workflows",
   "open-workflows",
+  // Comment threads per session (comment-threads.ts). Imported once from
+  // their own export directory plus the legacy session-notes files.
+  "comment-threads",
 ] as const;
 
 export type ApplicationCatalogNamespace =
@@ -116,6 +119,16 @@ const DERIVED_IMPORT_SOURCES: Partial<
       .sessions,
   "open-workflows": async () =>
     (await (await import("./workflow-store")).workflowCatalogSeedRows()).open,
+};
+
+/** Namespaces whose first import reads something other than their own legacy
+ * directory, but which are still ordinary documents afterwards: exported to
+ * disk on every write, never repaired from another store. */
+const CUSTOM_IMPORT_SOURCES: Partial<
+  Record<ApplicationCatalogNamespace, () => Promise<CatalogDocumentSeedRow[]>>
+> = {
+  "comment-threads": async () =>
+    (await import("./comment-threads")).commentThreadSeedRows(),
 };
 
 /** Derived namespaces imported by THIS boot, with the time the import began.
@@ -217,6 +230,11 @@ export async function importApplicationCatalog(): Promise<void> {
       const startedAt = Date.now();
       await seedDerived(namespace, await derived());
       freshDerivedImports.set(namespace, startedAt);
+      continue;
+    }
+    const custom = CUSTOM_IMPORT_SOURCES[namespace];
+    if (custom) {
+      await seedDerived(namespace, await custom());
       continue;
     }
     const directory = await legacyCatalogDirectory(namespace);

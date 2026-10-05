@@ -13,6 +13,7 @@
  */
 
 import { z } from "zod";
+import { noteThreadLink } from "./thread-focus";
 import {
   DEFAULT_NOTIFICATION_ALERTS,
   fetchNotifications,
@@ -140,7 +141,9 @@ export function startNotifications(open: (url: string) => void): void {
   try {
     navigator.serviceWorker?.addEventListener("message", (event) => {
       const tap = pushTapSchema.safeParse(event.data);
-      if (tap.success) markNotificationRead(tap.data.id);
+      if (!tap.success) return;
+      markNotificationRead(tap.data.id);
+      if (tap.data.url) noteThreadLink(tap.data.url);
     });
   } catch {}
 }
@@ -148,6 +151,7 @@ export function startNotifications(open: (url: string) => void): void {
 const pushTapSchema = z.object({
   type: z.literal("os1-navigate"),
   id: z.string(),
+  url: z.string().optional(),
 });
 
 /** Refresh after a reconnect or a change on another device. Never alerts. */
@@ -249,6 +253,7 @@ export function markAllNotificationsRead(): void {
 /** Open a row: go where it points and mark it read. */
 export function openNotification(thread: NotificationThread): void {
   if (thread.unread) markNotifications([thread.id], { unread: false });
+  noteThreadLink(thread.url);
   openUrl(thread.url);
 }
 

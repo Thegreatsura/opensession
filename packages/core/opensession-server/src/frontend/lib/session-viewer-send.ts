@@ -2,7 +2,7 @@ import type { SessionSpeed } from "@tellahq/opensession-protocol/session";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import { getCurrentUser } from "../components/UserPicker";
 import type { SessionSocketSend } from "../hooks/useSessionSocket";
-import { postSessionNoteApi } from "./api";
+import { createThreadApi } from "./api";
 import { MAX_PROMPT_IMAGES } from "@tellahq/opensession-protocol/session";
 import { dropStagingAttachments } from "./attachments";
 import type { ComposerSendOptions } from "./composer-types";
@@ -112,19 +112,18 @@ export function sendSessionMessage(
     return false;
   }
 
-  // Note mode: post a team note on this session — never a prompt. The
-  // server broadcast echoes it back into `notes` for every viewer, so
+  // Note mode: post a team note (a session-level comment thread) — never a
+  // prompt. The server broadcast echoes it back into `threads` for every viewer, so
   // nothing is rendered optimistically here. Notes carry the quoted
   // selection too (as "> " lines, the same shape a prompt sends), and a
   // paste folded in behind a divider: a note has no attachment slot.
   if (!isolated && identity.noteMode) {
     if (!typed && images.length === 0 && pastedTexts.length === 0) return false;
-    return postSessionNoteApi(
-      identity.session.id,
-      composePastedText(text, pastedTexts),
-      getCurrentUser(),
+    return createThreadApi(identity.session.id, {
+      text: composePastedText(text, pastedTexts),
+      user: getCurrentUser(),
       images,
-    ).then(
+    }).then(
       () => {
         dropStagingAttachments(draft.draftKey);
         draft.setImages([]);

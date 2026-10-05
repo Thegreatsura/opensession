@@ -155,6 +155,11 @@ export const INTERNAL_MCP_CAPABILITIES = {
     guidance:
       "Show quantitative results as an interactive chart: pass a Vega-Lite spec (and optionally the rows) to make_chart, then paste the returned ```vega-lite fence into your reply. Prefer this to a hand-built HTML chart asset or a static image of a chart.",
   },
+  "opensession-comments": {
+    summary: "Comment threads people left on this session's transcript.",
+    guidance:
+      "When a comment thread is sent to you, answer back in it with reply_to_comment_thread.",
+  },
   "opensession-todos": {
     summary: "The user's Desk todo list.",
     guidance:

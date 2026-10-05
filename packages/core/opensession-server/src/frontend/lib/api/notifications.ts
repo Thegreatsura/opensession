@@ -11,6 +11,7 @@ export const NOTIFICATION_KINDS = [
   "mention",
   "collaborator",
   "reminder",
+  "comment",
 ] as const;
 
 export const notificationThreadSchema = z.object({

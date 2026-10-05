@@ -43,6 +43,7 @@ import { createTodosMcpServer } from "../agents/slack/todos-tools";
 import { createSearchMcpServer } from "../agents/slack/search-tools";
 import { createAssetsMcpServer } from "../agents/slack/assets-tools";
 import { createChartsMcpServer } from "./charts-mcp";
+import { createCommentsMcpServer } from "./comments-mcp";
 import { createDatabasesMcpServer } from "../agents/slack/databases-tools";
 import { createWorkflowsMcpServer } from "../agents/slack/workflow-tools";
 import { createSelfDeployMcpServer } from "./self-deploy";
@@ -489,6 +490,9 @@ export function interactiveMcpServers(
           // ```vega-lite fences render on their own; this compiles a spec
           // for the agent and offloads big data into the session's assets.
           "opensession-charts": () => createChartsMcpServer({ sessionId }),
+          // The comment threads people left on this session's transcript:
+          // read them, and reply in the one a person sent to this session.
+          "opensession-comments": () => createCommentsMcpServer({ sessionId }),
           // Named SQLite databases kept outside every repo (databases.ts),
           // browsed in the Databases view. Unscoped here: an interactive
           // session reaches every database, the way it reaches every

@@ -31,6 +31,7 @@ import {
   IconClock,
   IconEye,
   IconMail,
+  IconMessage,
   IconPeople,
   IconUndo,
 } from "../icons";
@@ -43,6 +44,7 @@ const KIND_ICON: Record<
   team_review_requested: { icon: <IconPeople />, ink: "text-dim" },
   review_done: { icon: <IconCheckCircle />, ink: "text-blue" },
   mention: { icon: <IconAtSign />, ink: "text-accent" },
+  comment: { icon: <IconMessage />, ink: "text-accent" },
   collaborator: { icon: <IconPeople />, ink: "text-accent" },
   reminder: { icon: <IconClock />, ink: "text-dim" },
 };

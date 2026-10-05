@@ -61,6 +61,7 @@ import { createScheduleMcpServer } from "./schedule-mcp";
 import { createScriptsMcpServer } from "./scripts-mcp";
 import { createPortalsMcpServer } from "./portals-mcp";
 import { createChartsMcpServer } from "./charts-mcp";
+import { createCommentsMcpServer } from "./comments-mcp";
 import { createDesktopMcpServer } from "./desktop-mcp";
 import { createSelfDeployMcpServer } from "./self-deploy";
 import { createWebMcpServer } from "./web-mcp";
@@ -450,6 +451,16 @@ export const MCP_SERVER_CATALOG: McpServerCatalogEntry[] = [
     condition:
       "Needs a session id. Held to the automation bar: its only write is offloaded chart data into the calling session's own assets.",
     build: () => createChartsMcpServer({ sessionId: SESSION_ID }),
+  },
+  {
+    name: "opensession-comments",
+    summary: INTERNAL_MCP_CAPABILITIES["opensession-comments"].summary,
+    source: "packages/core/opensession-server/src/server/comments-mcp.ts",
+    wiring: ["packages/core/opensession-server/src/server/interactive-mcp.ts"],
+    runClasses: ["interactive"],
+    condition:
+      "Needs a session id. Reads and replies only within the run's own session.",
+    build: () => createCommentsMcpServer({ sessionId: SESSION_ID }),
   },
   {
     name: "opensession-todos",

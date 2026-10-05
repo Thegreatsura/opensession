@@ -1,6 +1,6 @@
 import React, { useEffect, useEffectEvent, useRef } from "react";
 import type {
-  SessionNote,
+  CommentThread,
   SessionWalkthrough,
   TranscriptEntry,
 } from "../lib/types";
@@ -70,7 +70,7 @@ type RenderBlock =
       assets: string[];
     }
   | { kind: "walkthrough"; walkthrough: SessionWalkthrough }
-  | { kind: "note"; note: SessionNote }
+  | { kind: "note"; note: CommentThread }
   | {
       kind: "review-loop";
       blocks: RenderBlock[];
@@ -108,9 +108,10 @@ interface Props {
   /** Agent-published walkthrough — rendered inline where it was published.
    *  Pass a referentially stable object (see SessionViewer) so the memo holds. */
   walkthrough?: SessionWalkthrough;
-  /** Team notes (src/server/session-notes.ts) interleaved into the timeline
-   *  by timestamp. Agent-invisible; rendered as NoteBubbles. */
-  notes?: SessionNote[];
+  /** Session-level comment threads (team notes; src/server/comment-threads.ts)
+   *  interleaved into the timeline by timestamp. Agent-invisible; rendered as
+   *  NoteBubbles. */
+  notes?: CommentThread[];
   slackShare?: ShippedChangeComposerProps & {
     prNumber: number;
   };
@@ -674,7 +675,7 @@ const LoadedTranscriptBlocks = function LoadedTranscriptBlocks({
         ) : block.kind === "walkthrough" ? (
           <WalkthroughCard walkthrough={block.walkthrough} variant="session" />
         ) : block.kind === "note" ? (
-          <NoteBubble note={block.note} sessionId={sessionId} />
+          <NoteBubble thread={block.note} sessionId={sessionId} />
         ) : block.kind === "footer" ? (
           <TurnFooter
             entry={block.entry}
@@ -749,11 +750,11 @@ type IndexedTimelineAtom =
       /** Live turn entries that have not received durable seq values yet. */
       continuationEntryIds: string[];
       timestampMs: number;
-      notes: SessionNote[];
+      notes: CommentThread[];
       walkthrough?: SessionWalkthrough;
     }
   | { kind: "entry"; entry: TranscriptEntry; timestampMs: number }
-  | { kind: "note"; note: SessionNote; timestampMs: number }
+  | { kind: "note"; note: CommentThread; timestampMs: number }
   | {
       kind: "walkthrough";
       walkthrough: SessionWalkthrough;
@@ -1016,7 +1017,7 @@ function IndexedTranscriptBlocks(props: Props) {
         measure: true,
         content:
           item.kind === "note" ? (
-            <NoteBubble note={item.note} sessionId={props.sessionId} />
+            <NoteBubble thread={item.note} sessionId={props.sessionId} />
           ) : item.kind === "walkthrough" ? (
             <WalkthroughCard walkthrough={item.walkthrough} variant="session" />
           ) : item.kind === "entry" ? (
@@ -1189,7 +1190,7 @@ function indexedItemEntryIds(item: IndexedTimelineItem): string[] {
 
 function indexedItemNotes(
   item: IndexedTimelineItem,
-): SessionNote[] | undefined {
+): CommentThread[] | undefined {
   if (item.kind === "range") return item.notes.length ? item.notes : undefined;
   if (item.kind === "review") {
     const notes = item.atoms.flatMap((atom) =>

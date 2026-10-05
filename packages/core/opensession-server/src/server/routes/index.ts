@@ -20,7 +20,7 @@ import { handleLocalFilesRoutes } from "./local-files";
 import { handleForceMergeRoutes } from "./force-merge";
 import { handleScriptRoutes } from "./scripts";
 import { handleSessionAssetsRoutes } from "./session-assets";
-import { handleSessionNotesRoutes } from "./session-notes";
+import { handleCommentThreadRoutes } from "./comment-threads";
 import { handleSessionContextRoutes } from "./session-context";
 import { handleSessionVoiceRoutes } from "./session-voice";
 import { handleEffectiveConfigRoutes } from "./effective-config";
@@ -90,10 +90,10 @@ export const routeHandlers: RouteHandler[] = [
   handleLiveActivityRoutes,
   handleIngressRoutes,
   // Before the generic session routes: /api/sessions/:id/assets* and
-  // /api/sessions/:id/notes are inside their path family and must not be
+  // /api/sessions/:id/{threads,notes} are inside their path family and must not be
   // swallowed by broader matches.
   handleSessionAssetsRoutes,
-  handleSessionNotesRoutes,
+  handleCommentThreadRoutes,
   handleSessionContextRoutes,
   handleSessionVoiceRoutes,
   handleEffectiveConfigRoutes,

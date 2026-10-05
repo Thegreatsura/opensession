@@ -63,6 +63,7 @@ touches an in-process tool:
 | [`opensession-workflows`](#opensession-workflows) | 8 | interactive, automation | Automation runs get it ONLY with the human-set `workflows` flag. |
 | [`opensession-assets`](#opensession-assets) | 4 | interactive | Needs a session id. Works in read-only Ask mode — assets land outside the checkout. |
 | [`opensession-charts`](#opensession-charts) | 1 | interactive, automation | Needs a session id. Held to the automation bar: its only write is offloaded chart data into the calling session's own assets. |
+| [`opensession-comments`](#opensession-comments) | 2 | interactive | Needs a session id. Reads and replies only within the run's own session. |
 | [`opensession-todos`](#opensession-todos) | 5 | interactive | Needs a session id. |
 | [`opensession-schedule`](#opensession-schedule) | 3 | interactive | Needs a session id. |
 | [`opensession-papercuts`](#opensession-papercuts) | 2 | interactive, automation | Dropped when the session's repo opted out (Settings → Papercuts). |
@@ -75,7 +76,7 @@ touches an in-process tool:
 | [`opensession-github`](#opensession-github) | 4 | Slack loop | – |
 | [`opensession-goal-self`](#opensession-goal-self) | 6 | goal wake | Only on a session that carries a goalId. |
 
-34 servers, 167 tools.
+35 servers, 169 tools.
 
 ## opensession-sessions
 
@@ -1080,6 +1081,27 @@ Validate a Vega-Lite spec and get the ```vega-lite fence that renders as an inte
 `mcp__opensession-charts__make_chart` · input: `spec` (object | string, required), `data` (any[]), `title` (string), `name` (string)
 
 Turn a Vega-Lite spec into the ```vega-lite fence that renders as an interactive chart (tooltips, zoom, brushing) in this session. Compiles the spec with the same library the client uses and returns errors with their paths instead of a silent code block; large inline data is moved to a session asset the chart loads from. Paste the returned fence verbatim into your reply, on its own lines. Keep specs small and readable: aggregate first, use `data.values` (or the data argument) rather than external URLs, and omit width so the chart fills the column.
+
+## opensession-comments
+
+Comment threads people left on this session's transcript.
+
+- **Source** `packages/core/opensession-server/src/server/comments-mcp.ts`
+- **Wired in** `packages/core/opensession-server/src/server/interactive-mcp.ts`
+- **Runs** interactive
+- **Condition** Needs a session id. Reads and replies only within the run's own session.
+
+### `list_comment_threads`
+
+`mcp__opensession-comments__list_comment_threads` · input: `includeResolved` (boolean)
+
+List the comment threads people left on this session's transcript, with the passage each one is attached to and its comments. Open threads only unless `includeResolved` is set.
+
+### `reply_to_comment_thread`
+
+`mcp__opensession-comments__reply_to_comment_thread` · input: `threadId` (string, required), `text` (string, required), `resolve` (boolean)
+
+Post a reply in one of this session's comment threads, as the agent. Use it to report back in a thread that was sent to you: what you found or what you changed. Keep it short; the people in the thread are notified.
 
 ## opensession-todos
 

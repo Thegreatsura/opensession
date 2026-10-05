@@ -5,6 +5,7 @@ export * from "./api/request";
 export * from "./api/reports";
 export * from "./api/databases";
 export * from "./api/sessions";
+export * from "./api/threads";
 export * from "./api/prs";
 export * from "./api/issues";
 export * from "./api/previews";

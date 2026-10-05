@@ -158,6 +158,17 @@ body {
   background: color-mix(in srgb, var(--accent) 32%, transparent);
 }
 
+/* Passages with an open comment thread, and the one whose thread is open
+   (or being written). Registered by InlineComments, which paints them with
+   Custom Highlights so the transcript's own markup is never touched. Yellow,
+   like the team-note tint the threads grew out of. */
+::highlight(comment) {
+  background: color-mix(in srgb, var(--yellow) 24%, transparent);
+}
+::highlight(comment-active) {
+  background: color-mix(in srgb, var(--yellow) 50%, transparent);
+}
+
 /* Text the user may legitimately want to select and copy: supporting copy,
    message rows and their prose, names, system text, code, diffs, inputs. The
    row wrapper is included on purpose — a drag has to be able to start in a

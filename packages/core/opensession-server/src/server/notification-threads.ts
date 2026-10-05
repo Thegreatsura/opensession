@@ -26,6 +26,7 @@ export const NOTIFICATION_KINDS = [
   "mention",
   "collaborator",
   "reminder",
+  "comment",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
@@ -33,7 +34,7 @@ export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 export const ALERT_GROUPS = {
   reviews: ["review_requested", "review_done"],
   teamReviews: ["team_review_requested"],
-  mentions: ["mention"],
+  mentions: ["mention", "comment"],
   collaborators: ["collaborator"],
   reminders: ["reminder"],
 } as const satisfies Record<string, readonly NotificationKind[]>;
