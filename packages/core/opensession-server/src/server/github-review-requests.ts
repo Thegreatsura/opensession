@@ -10,6 +10,8 @@ import { fetchWithTimeout } from "./shared/fetch-with-timeout";
 export interface ReviewRequestRef {
   login?: string;
   slug?: string;
+  /** A team's display name ("Super Developers"). */
+  name?: string;
 }
 
 interface ReviewTeamCacheEntry {
@@ -149,4 +151,52 @@ export function reviewRequestPersonKeys(
   return expandReviewRequestLogins(requests, teamLoginsBySlug, authorLogin)
     .map((login) => githubLoginToPersonKey(login))
     .filter((person): person is string => !!person);
+}
+
+/**
+ * Logins asked only because they belong to a requested team (a CODEOWNERS
+ * team, say), mapped to the team's name. Anyone also asked by name is left
+ * out: the request by name is the one that counts.
+ */
+export function teamOnlyReviewRequestLogins(
+  requests: ReviewRequestRef[],
+  teamLoginsBySlug: ReadonlyMap<string, readonly string[]>,
+  authorLogin?: string,
+): Map<string, string> {
+  const author = authorLogin?.toLowerCase();
+  const direct = new Set(
+    requests.flatMap((request) =>
+      request.login ? [request.login.toLowerCase()] : [],
+    ),
+  );
+  const teams = new Map<string, string>();
+  for (const request of requests) {
+    if (request.login || !request.slug) continue;
+    const team = request.name?.trim() || normalizeReviewTeamSlug(request.slug);
+    for (const login of teamLoginsBySlug.get(request.slug.toLowerCase()) ||
+      []) {
+      const lower = login.toLowerCase();
+      if (!lower || lower === author || direct.has(lower)) continue;
+      if (!teams.has(lower)) teams.set(lower, team);
+    }
+  }
+  return teams;
+}
+
+/** `teamOnlyReviewRequestLogins` keyed by person key. */
+export function teamReviewRequestPersonKeys(
+  requests: ReviewRequestRef[],
+  teamLoginsBySlug: ReadonlyMap<string, readonly string[]>,
+  authorLogin?: string,
+): Record<string, string> {
+  const teams: Record<string, string> = {};
+  for (const [login, team] of teamOnlyReviewRequestLogins(
+    requests,
+    teamLoginsBySlug,
+    authorLogin,
+  )) {
+    const person = githubLoginToPersonKey(login);
+    if (person && !teams[person]) teams[person] = team;
+  }
+  return teams;
 }

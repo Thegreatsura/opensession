@@ -106,7 +106,8 @@ struct NotificationsSettingsView: View {
     /// Saved to the account, so the same switches show on the web and every
     /// other device. Same rows as the web's Settings → Notifications.
     static let alertRows: [(group: InboxAlerts.Group, title: String, detail: String)] = [
-        (.reviews, "Reviews", "Someone asks for your review, or finishes one you asked for"),
+        (.reviews, "Reviews", "Someone asks you for a review, or finishes one you asked for"),
+        (.teamReviews, "Team review requests", "A team you're on is asked to review, like code owners"),
         (.mentions, "Mentions", "Someone tags you"),
         (.collaborators, "Added to a workspace", "Someone adds you as a collaborator"),
         (.reminders, "Reminders", "Desk task reminders"),

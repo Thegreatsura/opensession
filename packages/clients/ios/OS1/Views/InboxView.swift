@@ -186,6 +186,7 @@ private struct InboxRow: View {
         switch kind {
         case .reviewRequested: "eye"
         case .reviewDone: "checkmark.circle"
+        case .teamReviewRequested: "person.2"
         case .mention: "at"
         case .collaborator: "person.2"
         case .reminder: "clock"
@@ -197,7 +198,7 @@ private struct InboxRow: View {
         switch kind {
         case .reviewRequested, .reviewDone: OS1VisualStyle.blue
         case .mention, .collaborator: OS1VisualStyle.accent
-        case .reminder, nil: OS1VisualStyle.textDim
+        case .teamReviewRequested, .reminder, nil: OS1VisualStyle.textDim
         }
     }
 }

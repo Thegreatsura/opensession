@@ -40,6 +40,7 @@ const KIND_ICON: Record<
   { icon: React.ReactNode; ink: string }
 > = {
   review_requested: { icon: <IconEye />, ink: "text-blue" },
+  team_review_requested: { icon: <IconPeople />, ink: "text-dim" },
   review_done: { icon: <IconCheckCircle />, ink: "text-blue" },
   mention: { icon: <IconAtSign />, ink: "text-accent" },
   collaborator: { icon: <IconPeople />, ink: "text-accent" },

@@ -88,7 +88,7 @@ final class NotificationInboxTests: XCTestCase {
           {"id":"pr:acme/app#main","kind":"some_future_kind","reason":"Something new","url":"/pr/acme%2Fapp/main",
            "updatedAt":"not a number","unread":"yes"},
           42
-        ],"unread":1,"alerts":{"reviews":false,"mentions":"maybe"}}
+        ],"unread":1,"alerts":{"reviews":false,"teamReviews":false,"mentions":"maybe"}}
         """#
         let payload = try JSONDecoder().decode(InboxPayload.self, from: Data(json.utf8))
         XCTAssertEqual(payload.threads.map(\.id), ["session:os-1", "pr:x", "pr:acme/app#main"])
@@ -104,6 +104,7 @@ final class NotificationInboxTests: XCTestCase {
         XCTAssertEqual(future.updatedAt, 0)
         XCTAssertFalse(future.unread)
         XCTAssertFalse(payload.alerts.reviews)
+        XCTAssertFalse(payload.alerts.teamReviews)
         XCTAssertTrue(payload.alerts.mentions)
         XCTAssertTrue(payload.alerts.reminders)
     }
