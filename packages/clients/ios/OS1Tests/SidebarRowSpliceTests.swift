@@ -34,7 +34,7 @@ final class SidebarRowSpliceTests: XCTestCase {
             mode: "code",
             model: nil,
             effort: nil,
-            fastMode: false,
+            speed: .standard,
             startedBy: "Alex",
             workspaceId: workspaceId
         )

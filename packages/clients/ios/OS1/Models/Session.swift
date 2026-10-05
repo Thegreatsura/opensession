@@ -32,7 +32,12 @@ struct Session: Identifiable, Decodable, Equatable, Hashable {
     var mode: String?
     var model: String?
     var effort: String?
+    /// Legacy mirror of `speed != "standard"`; older records carry only this.
     var fastMode: Bool?
+    /// "fast" | "ultrafast" (absent = Standard, or a server that predates
+    /// it). Kept raw so a value this build cannot name survives a round trip;
+    /// read it through `speedSetting`.
+    var speed: String?
     /// The provider account pinned for this conversation with `/account`;
     /// nil = automatic (personal first, shared pool fallback).
     var accountId: String?
@@ -558,6 +563,9 @@ struct SessionPrRef: Decodable, Equatable, Hashable {
 }
 
 extension Session {
+    /// The run speed this session is set to.
+    var speedSetting: SpeedSetting { SpeedSetting(speed: speed, fastMode: fastMode) }
+
     /// Locally-built placeholder for a session the server just created but
     /// hasn't persisted to the list yet — rendered (and opened) immediately
     /// instead of polling until `GET /api/sessions` includes it.
@@ -569,7 +577,7 @@ extension Session {
         mode: String,
         model: String?,
         effort: String?,
-        fastMode: Bool,
+        speed: SessionSpeed,
         startedBy: String,
         workspaceId: String? = nil
     ) -> Session {
@@ -586,7 +594,8 @@ extension Session {
         session.mode = mode
         session.model = model
         session.effort = effort
-        session.fastMode = fastMode ? true : nil
+        session.fastMode = speed.fastMode ? true : nil
+        session.speed = speed == .standard ? nil : speed.rawValue
         session.isRunning = true
         session.runStartedAt = ISO8601DateFormatter().string(from: .now)
         session.createdAt = session.runStartedAt

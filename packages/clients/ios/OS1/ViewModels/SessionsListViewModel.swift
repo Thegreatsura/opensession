@@ -691,7 +691,7 @@ final class SessionsListViewModel {
             mode: old.mode ?? "code",
             model: old.model,
             effort: old.effort,
-            fastMode: old.fastMode ?? false,
+            speed: old.speedSetting.speed,
             startedBy: old.startedBy ?? "",
             // Keep the workspace: a session created into one stays in its row
             // (and its tab strip) across the create resolving, instead of

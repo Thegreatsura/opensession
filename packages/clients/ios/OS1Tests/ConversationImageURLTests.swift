@@ -64,4 +64,25 @@ final class ConversationImageURLTests: XCTestCase {
     func testRelativeSourceWithoutAServerHasNoURL() {
         XCTAssertNil(OS1API.conversationImageURL(source: "/media?path=x", base: nil))
     }
+
+    /// An SVG an agent wrote to disk and announced: the server serves it from
+    /// /media like any picture, and it joins the same way. The bytes, not the
+    /// URL, are what make it SVG (see `SVGImageTests`).
+    func testLocalMediaSVGJoinsTheServer() {
+        let url = OS1API.conversationImageURL(
+            source: "/media?path=%2Ftmp%2Fchart.svg",
+            base: base
+        )
+        XCTAssertEqual(url?.absoluteString, "https://os.example.dev/media?path=%2Ftmp%2Fchart.svg")
+    }
+
+    func testUploadedSVGJoinsTheServer() {
+        let url = OS1API.conversationImageURL(
+            source: "/media?path=%2Fhome%2Facme%2F.opensession%2Fuploads%2Fos-1%2Flogo.svg",
+            base: base
+        )
+        XCTAssertEqual(url?.host, "os.example.dev")
+        XCTAssertEqual(url?.scheme, "https")
+        XCTAssertTrue(url?.absoluteString.hasSuffix("logo.svg") ?? false)
+    }
 }
