@@ -98,3 +98,10 @@ test("the command menu lists an archived workspace by its name", () => {
     archivedResults("t4", pool, new Set(["ws-t4"]), new Map())[0],
   ).toMatchObject({ type: "session" });
 });
+
+test("a hyphenated query finds a title written with spaces", () => {
+  const s = row({ title: "Explore Pi Durable objects", branch: "explore" });
+  expect(
+    searchArchived("pi-durable", [s], new Map()).map((h) => h.session),
+  ).toEqual([s]);
+});

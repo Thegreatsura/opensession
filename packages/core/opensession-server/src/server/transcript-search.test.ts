@@ -5,7 +5,10 @@ import { dirname, join } from "path";
 import { tmpdir } from "os";
 import { TranscriptStore } from "./transcript-store";
 import { transcriptEntryMatchSnippet } from "./transcript-search";
-import { searchStoredTranscripts } from "./transcript-search-worker";
+import {
+  searchStoredTranscripts,
+  transcriptPrefilter,
+} from "./transcript-search-worker";
 import { sessionKernelSessionDbPath } from "./session-kernel/store";
 import type { TranscriptEntry } from "./types";
 
@@ -70,7 +73,11 @@ describe("transcript search", () => {
       Array.from({ length: 60 }, (_, i) =>
         entry(
           `deep-${i}`,
-          i === 10 ? "older needle survives paging" : `ordinary row ${i}`,
+          i === 10
+            ? "older needle survives paging"
+            : // Holds both words, so it passes the SQL prefilter and still
+              // costs a candidate row, but not the phrase.
+              `needle then older, row ${i}`,
         ),
       ),
     );
@@ -82,6 +89,34 @@ describe("transcript search", () => {
     });
     expect(result.matches).toMatchObject([{ id: "deep" }]);
     expect(result.candidateRows).toBeGreaterThan(24);
+  });
+
+  test("rows that cannot match do not spend the row budget", () => {
+    append(
+      "long-unrelated",
+      Array.from({ length: 50 }, (_, i) => entry(`u-${i}`, `ordinary ${i}`)),
+    );
+    append("match", [entry("answer", "Cloudflare shipped Pi Durable")]);
+    const result = searchStoredTranscripts({
+      isolatedRoot: root,
+      query: "pi-durable",
+      sessionIds: ["long-unrelated", "match"],
+      maxRows: 10,
+    });
+    expect(result).toMatchObject({
+      matches: [{ id: "match" }],
+      searchedSessions: 2,
+      candidateRows: 1,
+      exhausted: null,
+    });
+  });
+
+  test("the prefilter keeps ASCII words and skips other scripts", () => {
+    expect(transcriptPrefilter("pi-durable Pi")).toEqual({
+      sql: " AND data LIKE ? AND data LIKE ?",
+      params: ["%pi%", "%durable%"],
+    });
+    expect(transcriptPrefilter("café")).toEqual({ sql: "", params: [] });
   });
 
   test("skips actor databases whose transcript schema is not initialized", () => {
@@ -178,5 +213,23 @@ describe("transcript search", () => {
         12,
       ),
     ).toMatch(/^….*Needle after$/);
+  });
+
+  test("lets punctuation and spacing between query words vary", () => {
+    const text = entry("a", "Cloudflare integrated Pi Durable in the SDK");
+    expect(transcriptEntryMatchSnippet(text, "pi-durable")).toContain(
+      "Pi Durable",
+    );
+    expect(transcriptEntryMatchSnippet(text, "pi_durable")).toContain(
+      "Pi Durable",
+    );
+    expect(
+      transcriptEntryMatchSnippet(
+        entry("b", "the pi-durable branch"),
+        "pi durable",
+      ),
+    ).toContain("pi-durable");
+    expect(transcriptEntryMatchSnippet(text, "pi-doorable")).toBeNull();
+    expect(transcriptEntryMatchSnippet(text, "durable-pi")).toBeNull();
   });
 });

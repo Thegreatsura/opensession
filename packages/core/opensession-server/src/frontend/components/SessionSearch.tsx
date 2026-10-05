@@ -1,6 +1,6 @@
 import { repoLabel } from "../lib/repo-label";
 import { FALLBACK_REPO, sessionRepoOr } from "../lib/session-repo";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useDeferredValue, useEffect, useRef, useState } from "react";
 import type { UnifiedSession } from "../lib/types";
 import {
   fetchOpenPrs,
@@ -26,7 +26,14 @@ import {
   sessionUsesPrLink,
 } from "../lib/session-prs";
 import { usePeople } from "../lib/people";
-import { fuzzyMatch, fuzzyScore } from "../../shared/fuzzy-match";
+import {
+  fuzzyMatchPrepared,
+  fuzzyScorePrepared,
+  prepareFuzzyQuery,
+  prepareFuzzyText,
+  type FuzzyQuery,
+  type FuzzyText,
+} from "../../shared/fuzzy-match";
 import {
   canonicalNames,
   sessionHasOwner,
@@ -142,10 +149,36 @@ function haystack(s: UnifiedSession): string {
     .toLowerCase();
 }
 
-/** The two per-session values the result list reads, derived once per pool. */
+/** A session's searchable fields, normalized for the fuzzy matcher. */
+interface PreparedSession {
+  title: FuzzyText;
+  hay: FuzzyText;
+  workspace: FuzzyText | null;
+}
+
+/** The per-session values the result list reads, derived once per pool. */
 export interface SessionSearchIndex {
   hay: Map<UnifiedSession, string>;
   activityAt: Map<UnifiedSession, number>;
+  prepared: Map<UnifiedSession, PreparedSession>;
+}
+
+function prepareSession(
+  s: UnifiedSession,
+  hay: string = haystack(s),
+): PreparedSession {
+  return {
+    title: prepareFuzzyText(s.title || ""),
+    hay: prepareFuzzyText(hay),
+    workspace: s.workspaceName ? prepareFuzzyText(s.workspaceName) : null,
+  };
+}
+
+function preparedOf(
+  s: UnifiedSession,
+  index?: SessionSearchIndex,
+): PreparedSession {
+  return index?.prepared.get(s) ?? prepareSession(s);
 }
 
 /**
@@ -154,18 +187,40 @@ export interface SessionSearchIndex {
  * metadata (twice, since the snippet check called haystack again), and the
  * sort allocated two Date objects per comparison on top.
  *
- * Keyed on the session objects, which the sessions poll replaces rather than
- * mutates, and rebuilt only when the pool array itself changes.
+ * The fuzzy matcher's normalized text and word lists live here too. With the
+ * archive in the pool that is tens of thousands of sessions, and each entry is
+ * cached on its session object: the React Compiler can't memoize the index
+ * (the pool flows into calls it must assume mutate it), so the palette calls
+ * this on every render, and re-deriving every entry per keystroke is what
+ * made typing stall. The sessions poll replaces objects rather than mutating
+ * them, so a cached entry never goes stale.
  */
 export function sessionSearchIndex(pool: UnifiedSession[]): SessionSearchIndex {
   const hay = new Map<UnifiedSession, string>();
   const activityAt = new Map<UnifiedSession, number>();
+  const prepared = new Map<UnifiedSession, PreparedSession>();
   for (const session of pool) {
-    hay.set(session, haystack(session));
-    activityAt.set(session, new Date(session.lastActivity).getTime());
+    let entry = indexEntries.get(session);
+    if (!entry) {
+      const text = haystack(session);
+      entry = {
+        hay: text,
+        activityAt: new Date(session.lastActivity).getTime(),
+        prepared: prepareSession(session, text),
+      };
+      indexEntries.set(session, entry);
+    }
+    hay.set(session, entry.hay);
+    activityAt.set(session, entry.activityAt);
+    prepared.set(session, entry.prepared);
   }
-  return { hay, activityAt };
+  return { hay, activityAt, prepared };
 }
+
+const indexEntries = new WeakMap<
+  UnifiedSession,
+  { hay: string; activityAt: number; prepared: PreparedSession }
+>();
 
 /**
  * Most-recently-active first: the same order the sidebar defaults to.
@@ -193,19 +248,44 @@ const SECONDARY_WEIGHT = 0.75;
  * How well `query` matches an item: its best score on a primary field (a
  * session title, an action label, a PR title), or a discounted score on all
  * its fields joined, which is what lets a query spanning fields ("composer
- * michiel") still land. 0 means no match.
+ * michiel") still land. 0 means no match. `joined` must contain every
+ * primary field.
  */
 export function matchScore(
   query: string,
   primary: ReadonlyArray<string | null | undefined>,
   joined: string,
 ): number {
-  const direct = fuzzyMatch(query, primary);
-  if (direct >= 100) return direct;
-  return Math.max(
-    direct,
-    Math.round(fuzzyScore(query, joined) * SECONDARY_WEIGHT),
+  return matchScorePrepared(
+    prepareFuzzyQuery(query),
+    primary.filter((value): value is string => !!value).map(prepareFuzzyText),
+    prepareFuzzyText(joined),
   );
+}
+
+/** `matchScore` for text prepared ahead of time. */
+function matchScorePrepared(
+  query: FuzzyQuery,
+  primary: ReadonlyArray<FuzzyText>,
+  joined: FuzzyText,
+): number {
+  // The joined text holds every primary field, so a miss there is a miss on
+  // all of them. Most of a long list misses; this halves the work for it.
+  const secondary = fuzzyScorePrepared(query, joined);
+  if (secondary === 0) return 0;
+  return Math.max(
+    fuzzyMatchPrepared(query, primary),
+    Math.round(secondary * SECONDARY_WEIGHT),
+  );
+}
+
+/** Whether `title` matches at all. */
+function titleMatches(
+  query: FuzzyQuery,
+  s: UnifiedSession,
+  index?: SessionSearchIndex,
+): boolean {
+  return fuzzyScorePrepared(query, preparedOf(s, index).title) > 0;
 }
 
 /** One workspace in the palette: its name and its live sessions. */
@@ -226,8 +306,10 @@ export interface WorkspaceHit {
 export function matchWorkspaces(
   query: string,
   pool: UnifiedSession[],
+  index?: SessionSearchIndex,
 ): WorkspaceHit[] {
   if (!query.trim()) return [];
+  const q = prepareFuzzyQuery(query);
   const byId = new Map<string, WorkspaceHit | null>();
   for (const s of pool) {
     if (!s.workspaceId || !s.workspaceName) continue;
@@ -236,7 +318,9 @@ export function matchWorkspaces(
       seen?.sessions.push(s);
       continue;
     }
-    const score = fuzzyScore(query, s.workspaceName);
+    const name =
+      preparedOf(s, index).workspace ?? prepareFuzzyText(s.workspaceName);
+    const score = fuzzyScorePrepared(q, name);
     byId.set(
       s.workspaceId,
       score > 0
@@ -278,16 +362,18 @@ export function searchArchived(
   query: string,
   pool: UnifiedSession[],
   snippets: ReadonlyMap<string, string>,
+  index: SessionSearchIndex = sessionSearchIndex(pool),
 ): Array<{ session: UnifiedSession; metaMatch: boolean }> {
   const terms = query.split(/\s+/).filter(Boolean);
   if (terms.length === 0) return [];
-  const index = sessionSearchIndex(pool);
+  const q = prepareFuzzyQuery(query);
   const scores = new Map<UnifiedSession, number>();
   const hits = pool.filter((s) => {
-    const hay = index.hay.get(s)!;
+    const prepared = preparedOf(s, index);
     const score = sessionUsesPrLink(s, query)
       ? 100
-      : matchScore(query, [s.title], hay) || (snippets.has(s.id) ? 10 : 0);
+      : matchScorePrepared(q, [prepared.title], prepared.hay) ||
+        (snippets.has(s.id) ? 10 : 0);
     scores.set(s, score);
     return score > 0;
   });
@@ -296,8 +382,9 @@ export function searchArchived(
     .map((session) => ({
       session,
       metaMatch:
-        terms.every((t) => index.hay.get(session)!.includes(t)) ||
-        sessionUsesPrLink(session, query),
+        terms.every((t) =>
+          (index.hay.get(session) ?? haystack(session)).includes(t),
+        ) || sessionUsesPrLink(session, query),
     }));
 }
 
@@ -312,14 +399,11 @@ export function archivedResults(
   pool: UnifiedSession[],
   liveWorkspaceIds: ReadonlySet<string | null | undefined>,
   snippets: ReadonlyMap<string, string>,
+  index: SessionSearchIndex = sessionSearchIndex(pool),
 ): PaletteResult[] {
-  const recent = pool
-    .slice()
-    .sort(
-      (a, b) =>
-        new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime(),
-    );
-  const workspaces = matchWorkspaces(query, recent)
+  const recent = sortByRecentActivity(pool.slice(), index);
+  const q = prepareFuzzyQuery(query);
+  const workspaces = matchWorkspaces(query, recent, index)
     .filter((hit) => !liveWorkspaceIds.has(hit.id))
     .slice(0, 8);
   const shown = new Map(workspaces.map((hit) => [hit.id, hit.name]));
@@ -329,10 +413,11 @@ export function archivedResults(
       const shownAs = s.workspaceId ? shown.get(s.workspaceId) : undefined;
       return (
         shownAs === undefined ||
-        (shownAs !== s.title && fuzzyScore(query, s.title) > 0)
+        (shownAs !== s.title && titleMatches(q, s, index))
       );
     }),
     snippets,
+    index,
   );
   return [
     ...workspaces.map((workspace): PaletteResult => ({
@@ -551,6 +636,11 @@ export function SessionSearch({
   const archivedPool = sessions.filter((s) => s.archived);
 
   const searchIndex = sessionSearchIndex(pool);
+  const archivedIndex = sessionSearchIndex(archivedPool);
+  // The field echoes every keystroke at once; the result list follows at a
+  // lower priority, so a slow pass over a large archive can be interrupted by
+  // the next key instead of blocking it.
+  const deferredQuery = useDeferredValue(query);
 
   // Workspace members only. `startedBy` is a free-text name that also carries
   // workers, goals, integration senders and unmapped Slack ids, so the team
@@ -604,7 +694,8 @@ export function SessionSearch({
   // Commands, PRs, and sessions share one flat result list so arrow-key navigation
   // crosses group boundaries the way a command menu should.
   const results = (() => {
-    const q = query.trim().toLowerCase();
+    const q = deferredQuery.trim().toLowerCase();
+    const fq = prepareFuzzyQuery(q);
     const terms = q.split(/\s+/).filter(Boolean);
     const hasQuery = terms.length > 0;
     // The command menu is a search surface, not a second full list page. Keep
@@ -675,6 +766,7 @@ export function SessionSearch({
     // Falls back to deriving the text for a session the index hasn't seen, so
     // a pool and an index that are momentarily out of step still search.
     const hayOf = (s: UnifiedSession) => searchIndex.hay.get(s) ?? haystack(s);
+    const preparedHit = (s: UnifiedSession) => preparedOf(s, searchIndex);
     const passesFilters = (s: UnifiedSession) => {
       if (person !== "all" && !sessionHasOwner(s, person, canonical))
         return false;
@@ -688,7 +780,7 @@ export function SessionSearch({
     );
     // Workspaces come first: a workspace is what the sidebar names, so its
     // name is the first thing a person types.
-    const workspaceHits = matchWorkspaces(q, filtered).slice(0, 8);
+    const workspaceHits = matchWorkspaces(q, filtered, searchIndex).slice(0, 8);
     const workspaceRows: PaletteResult[] = workspaceHits.map((workspace) => ({
       type: "workspace",
       category: "Workspaces",
@@ -708,15 +800,17 @@ export function SessionSearch({
         : undefined;
       if (
         shownAs !== undefined &&
-        (shownAs === s.title || fuzzyScore(q, s.title) === 0)
+        (shownAs === s.title || !titleMatches(fq, s, searchIndex))
       )
         return false;
       // A session shows if its metadata matches every term, the pasted PR link
       // belongs to it, or the query turned up inside its conversation. A
       // conversation-only hit ranks below any match on what the row shows.
+      const prepared = preparedHit(s);
       const score = sessionUsesPrLink(s, q)
         ? 100
-        : matchScore(q, [s.title], hayOf(s)) || (snippets.has(s.id) ? 10 : 0);
+        : matchScorePrepared(fq, [prepared.title], prepared.hay) ||
+          (snippets.has(s.id) ? 10 : 0);
       scores.set(s, score);
       return score > 0;
     });
@@ -750,6 +844,7 @@ export function SessionSearch({
           archivedPool.filter(passesFilters),
           new Set(pool.map((s) => s.workspaceId).filter(Boolean)),
           snippets,
+          archivedIndex,
         )
       : [];
     return [

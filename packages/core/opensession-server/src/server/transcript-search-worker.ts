@@ -53,6 +53,31 @@ function bounded(
   return Math.min(Math.max(1, Math.floor(value ?? fallback)), ceiling);
 }
 
+/**
+ * A SQL prefilter every row the snippet matcher could accept passes: each
+ * run of ASCII letters and digits in the query must appear in the stored
+ * JSON. SQLite's LIKE folds ASCII case, and JSON escaping never touches those
+ * characters, so it only drops rows that cannot match. A query with other
+ * characters gets no prefilter, since case folding them is not ASCII's.
+ *
+ * Without it every stored row was parsed in JS and counted against the row
+ * budget, so a few long sessions that did not mention the query spent the
+ * whole budget and the search stopped after the newest handful of sessions.
+ */
+export function transcriptPrefilter(query: string): {
+  sql: string;
+  params: string[];
+} {
+  const needle = query.trim().toLowerCase();
+  // oxlint-disable-next-line no-control-regex
+  if (/[^\x00-\x7f]/.test(needle)) return { sql: "", params: [] };
+  const words = Array.from(new Set(needle.split(/[^a-z0-9]+/).filter(Boolean)));
+  return {
+    sql: words.map(() => " AND data LIKE ?").join(""),
+    params: words.map((word) => `%${word}%`),
+  };
+}
+
 /** Search bounded rows across bounded read-only actor database handles. */
 export function searchStoredTranscripts(
   input: StoredTranscriptSearchInput,
@@ -83,6 +108,7 @@ export function searchStoredTranscripts(
     return { matches, searchedSessions, candidateRows, exhausted };
 
   const startedAt = now();
+  const prefilter = transcriptPrefilter(query);
   const ids = input.sessionIds.slice(0, maxSessions);
   sessionLoop: for (const id of ids) {
     if (now() - startedAt >= maxMs) {
@@ -124,10 +150,10 @@ export function searchStoredTranscripts(
         const rows = db
           .query(`
           SELECT seq, data FROM transcript_events
-          WHERE session_id = ? AND seq < ?
+          WHERE session_id = ? AND seq < ?${prefilter.sql}
           ORDER BY seq DESC LIMIT ?
         `)
-          .all(id, beforeSeq, limit) as CandidateRow[];
+          .all(id, beforeSeq, ...prefilter.params, limit) as CandidateRow[];
         candidateRows += rows.length;
         let matched = false;
         for (const row of rows) {
