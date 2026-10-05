@@ -44,28 +44,6 @@ import {
 } from "./github-credential";
 import { conditionalJsonResponse } from "../http-json";
 
-function validDiffGroupingInput(body: any): {
-  files: Array<{
-    path: string;
-    additions: number;
-    deletions: number;
-  }>;
-  patch: string;
-} | null {
-  if (!Array.isArray(body?.files) || typeof body?.patch !== "string")
-    return null;
-  const files = body.files.filter(
-    (file: any) =>
-      typeof file?.path === "string" &&
-      file.path.length <= 1000 &&
-      typeof file.additions === "number" &&
-      typeof file.deletions === "number",
-  );
-  return files.length === body.files.length
-    ? { files, patch: body.patch }
-    : null;
-}
-
 async function prApiResponse(
   load: () => Promise<unknown>,
   fallback?: unknown,
@@ -196,22 +174,35 @@ export async function handlePrRoutes(
       repo?: string;
       prId?: string;
       path?: string;
+      paths?: unknown;
       viewed?: boolean;
       user?: string;
     };
-    if (!body.prId || !body.path || typeof body.viewed !== "boolean")
+    const paths = Array.isArray(body.paths)
+      ? body.paths.filter(
+          (entry): entry is string => typeof entry === "string" && !!entry,
+        )
+      : body.path
+        ? [body.path]
+        : [];
+    if (
+      !body.prId ||
+      !paths.length ||
+      paths.length > 3000 ||
+      typeof body.viewed !== "boolean"
+    )
       return Response.json(
-        { error: "prId, path and viewed required" },
+        { error: "prId, paths and viewed required" },
         { status: 400 },
       );
-    const { setPrFileViewed } = await import("../pr-viewed");
+    const { setPrFilesViewed } = await import("../pr-viewed");
     try {
-      await setPrFileViewed(
+      await setPrFilesViewed(
         ctx,
         requestUser(ctx, body.user),
         (body.repo ? getRepo(body.repo) : defaultRepo()).ghRepo,
         body.prId,
-        body.path,
+        paths,
         body.viewed,
       );
       return Response.json({ ok: true });
@@ -385,34 +376,6 @@ export async function handlePrRoutes(
     );
   }
 
-  // AI-powered file categories for the PR Changes view. Kept separate from
-  // the diff endpoint so loading a review never blocks on model generation.
-  if (
-    path.match(/^\/api\/sessions\/(.+)\/pr-diff-groups$/) &&
-    req.method === "POST"
-  ) {
-    const sessionId = decodeURIComponent(
-      path.match(/^\/api\/sessions\/(.+)\/pr-diff-groups$/)![1],
-    );
-    const session = await findPrSessionAsync(sessionId);
-    if (!session)
-      return Response.json({ error: "Session not found" }, { status: 404 });
-    const target = resolvePrTarget(
-      session,
-      url.searchParams.get("repo"),
-      url.searchParams.get("branch"),
-    );
-    if (!target) return Response.json({ groups: null });
-    const body = await req.json().catch(() => ({}));
-    const { getDiffFileGroups } = await import("../diff-groups");
-    const input = validDiffGroupingInput(body);
-    if (!input)
-      return Response.json({ error: "Invalid diff metadata" }, { status: 400 });
-    return Response.json({
-      groups: await getDiffFileGroups(target.ghRepo, input.files, input.patch),
-    });
-  }
-
   // Link a PR to the session (a follow-up PR, or one in another repo/branch).
   // Body: { url } or { repo, number } or { repo, branch }.
   if (path.match(/^\/api\/sessions\/(.+)\/link-pr$/) && req.method === "POST") {
@@ -575,21 +538,6 @@ export async function handlePrRoutes(
     return codeFlowApiResponse(() =>
       loadPrCodeFlow(repo, branch, hostRepoId(repo)),
     );
-  }
-  if (path === "/api/pr-preview-diff-groups" && req.method === "POST") {
-    const repo = getRepo(url.searchParams.get("repo") || undefined);
-    const body = await req.json().catch(() => ({}));
-    const input = validDiffGroupingInput(body);
-    if (!input)
-      return Response.json({ error: "Invalid diff metadata" }, { status: 400 });
-    const { getDiffFileGroups } = await import("../diff-groups");
-    return Response.json({
-      groups: await getDiffFileGroups(
-        hostRepoId(repo),
-        input.files,
-        input.patch,
-      ),
-    });
   }
   // Session-less review guide for the preview's Guide tab — getReviewGuide
   // only needs branch+repo (same generation/cache as the session route).

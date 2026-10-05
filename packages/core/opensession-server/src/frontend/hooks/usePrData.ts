@@ -10,7 +10,6 @@ import {
   fetchPr,
   fetchPrCodeFlow,
   fetchPrDiff,
-  fetchPrDiffGroups,
   fetchPrPreview,
   fetchPrPreviewCodeFlow,
   fetchPrPreviewDiff,
@@ -24,7 +23,6 @@ import { pollWhileVisible, PR_WEBHOOK_FALLBACK_POLL_MS } from "../lib/poll";
 import { reviewDiffLoadPolicy } from "../lib/review-diff";
 import type {
   CodeFlowResult,
-  DiffFileGroup,
   GitStatusInfo,
   PrDetails,
   PrDiffResponse,
@@ -43,7 +41,8 @@ interface UsePrDataOptions {
   loadBranch?: string;
   loadLinked?: boolean;
   addHandler?: (handler: (message: WSServerMessage) => void) => () => void;
-  showingGuide: boolean;
+  /** The Guide lens is open, or the Changes view groups files by the guide. */
+  wantGuide: boolean;
   showingFlow: boolean;
   onCodeViewChange: (view: CodeView) => void;
   onTargetReset: () => void;
@@ -59,7 +58,7 @@ export function usePrData({
   loadBranch,
   loadLinked,
   addHandler,
-  showingGuide,
+  wantGuide,
   showingFlow,
   onCodeViewChange,
   onTargetReset,
@@ -73,12 +72,6 @@ export function usePrData({
     diff?.patch.length ?? 0,
     pr?.changedFiles ?? 0,
   );
-  const [diffGroups, setDiffGroups] = useState<{
-    oid: string;
-    groups: DiffFileGroup[] | null;
-  } | null>(null);
-  const [diffGroupsLoading, setDiffGroupsLoading] = useState(false);
-  const [diffGroupsRetry, setDiffGroupsRetry] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [diffLoading, setDiffLoading] = useState(true);
@@ -296,64 +289,21 @@ export function usePrData({
     pr?.headRefName,
   ]);
 
-  const loadDiffGroups = useEffectEvent(() => {
-    const files = pr?.files || [];
-    if (!diff?.patch || files.length < 3 || !diffLoadPolicy.groupFiles) {
-      setDiffGroups(null);
-      setDiffGroupsLoading(false);
-      return;
-    }
-    setDiffGroups(null);
-    setDiffGroupsLoading(true);
-    let live = true;
-    let retryTimer: ReturnType<typeof setTimeout> | undefined;
-    const retryLater = () => {
-      retryTimer = setTimeout(
-        () => setDiffGroupsRetry((attempt) => attempt + 1),
-        125_000,
-      );
-    };
-    fetchPrDiffGroups(sessionId, files, diff.patch, loadRepo, loadBranch)
-      .then((result) => {
-        if (!live) return;
-        setDiffGroups({ oid: diff.headRefOid, groups: result.groups });
-        if (!result.groups) retryLater();
-      })
-      .catch(() => {
-        if (!live) return;
-        setDiffGroups({ oid: diff.headRefOid, groups: null });
-        retryLater();
-      })
-      .finally(() => {
-        if (live) setDiffGroupsLoading(false);
-      });
-    return () => {
-      live = false;
-      if (retryTimer) clearTimeout(retryTimer);
-    };
-  });
-  useEffect(
-    () => loadDiffGroups(),
-    [
-      sessionId,
-      loadRepo,
-      loadBranch,
-      diff?.headRefOid,
-      diffLoadPolicy.groupFiles,
-      pr?.files?.length,
-      diffGroupsRetry,
-    ],
-  );
-
   // A guide belongs to one target's head commit: the key is what makes a
   // guide from the PR the panel just left read as absent rather than current.
   const guideKey = diff ? `${loadTargetKey}\0${diff.headRefOid}` : "";
-  const loadGuide = async () => {
+  /**
+   * `quiet` refreshes a stale guide in place: the outdated guide stays on
+   * screen, and a failure keeps it rather than replacing it with an error.
+   */
+  const loadGuide = async (quiet = false) => {
     if (!guideKey) return;
     const generation = ++guideGenerationRef.current;
     const isCurrent = () => generation === guideGenerationRef.current;
-    setGuideLoading(true);
-    setGuideFailed(false);
+    if (!quiet) {
+      setGuideLoading(true);
+      setGuideFailed(false);
+    }
     try {
       const data =
         previewRepo && previewBranch
@@ -361,12 +311,12 @@ export function usePrData({
           : await fetchReviewGuide(sessionId, loadRepo, loadBranch);
       if (isCurrent()) {
         if (data) setGuide({ key: guideKey, data });
-        else setGuideFailed(true);
+        else if (!quiet) setGuideFailed(true);
       }
     } catch {
-      if (isCurrent()) setGuideFailed(true);
+      if (isCurrent() && !quiet) setGuideFailed(true);
     }
-    if (isCurrent()) setGuideLoading(false);
+    if (isCurrent() && !quiet) setGuideLoading(false);
   };
   const loadGuideForEffect = useEffectEvent(loadGuide);
 
@@ -429,12 +379,12 @@ export function usePrData({
   }, [guideKey]);
 
   useEffect(() => {
-    if (!showingGuide || !diff?.patch || !guideKey) return;
+    if (!wantGuide || !diff?.patch || !guideKey) return;
     if (guideLoading || guideFailed) return;
     if (guide?.key === guideKey) return;
     void loadGuideForEffect();
   }, [
-    showingGuide,
+    wantGuide,
     diff?.patch,
     guideKey,
     guide,
@@ -446,6 +396,24 @@ export function usePrData({
     loadRepo,
     loadBranch,
   ]);
+
+  // After a push the server answers at once with the previous guide marked
+  // stale and updates it in the background. Ask again until the update lands,
+  // for a few minutes at most, so a failing update can't poll forever.
+  const staleGuide =
+    guide?.key === guideKey && guide.data.stale ? guide.data : null;
+  const staleChecksRef = useRef({ key: "", count: 0 });
+  useEffect(() => {
+    if (!wantGuide || !staleGuide || guideLoading) return;
+    if (staleChecksRef.current.key !== guideKey)
+      staleChecksRef.current = { key: guideKey, count: 0 };
+    if (staleChecksRef.current.count >= 12) return;
+    const timer = setTimeout(() => {
+      staleChecksRef.current.count += 1;
+      void loadGuideForEffect(true);
+    }, 15_000);
+    return () => clearTimeout(timer);
+  }, [wantGuide, staleGuide, guideKey, guideLoading]);
 
   const changeCodeView = useEffectEvent(onCodeViewChange);
   useEffect(() => {
@@ -502,8 +470,6 @@ export function usePrData({
     diff,
     diffOutOfDate,
     diffLoadPolicy,
-    diffGroups,
-    diffGroupsLoading,
     loading,
     loadError,
     diffLoading,

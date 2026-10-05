@@ -21,6 +21,8 @@ interface BuildWorkspacePaneTabsInput {
   reviewOpen: ReadonlySet<string>;
   reviewClosed: ReadonlySet<string>;
   reviewDotClass: string | null;
+  /** The PR the Review tab is about; shown in its label as "Review #123". */
+  reviewPrNumber?: number | null;
   conversationThreadId: string | null;
   conversationClosed: ReadonlySet<string>;
   videoLabel: string | null;
@@ -42,6 +44,7 @@ export function buildWorkspacePaneTabs({
   reviewOpen,
   reviewClosed,
   reviewDotClass,
+  reviewPrNumber,
   conversationThreadId,
   conversationClosed,
   videoLabel,
@@ -62,7 +65,7 @@ export function buildWorkspacePaneTabs({
   ) {
     tabs.push({
       id: `review:${workspaceKey}`,
-      label: "Review",
+      label: reviewPrNumber != null ? `Review #${reviewPrNumber}` : "Review",
       active: activeViewTab === "review",
       dotClass: reviewDotClass,
     });

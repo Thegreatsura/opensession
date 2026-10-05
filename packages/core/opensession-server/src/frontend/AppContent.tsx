@@ -866,16 +866,7 @@ export function AppContent({
       showToast,
       dropStalePins,
     },
-    view: {
-      activeViewTab: appViewState.activeViewTab,
-      setActiveViewTabState: appViewState.setActiveViewTabState,
-      subagentSelected: appViewState.subagentSelected,
-      openSubagentPath: appViewState.openSubagentPath,
-      closeSubagentTab: appViewState.closeSubagentTab,
-      splitDropSide: appViewState.splitDropSide,
-      setSplitDropSide: appViewState.setSplitDropSide,
-      suppressWsSeedRef: appViewState.suppressWsSeedRef,
-    },
+    view: appViewState,
     panes: {
       state: {
         routeWorkspaceId: workspacePanes.routeWorkspaceId,

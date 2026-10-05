@@ -85,6 +85,17 @@ describe("buildWorkspacePaneTabs", () => {
     ]);
   });
 
+  test("labels the Review tab with its PR number", () => {
+    const open = new Set(["workspace-1"]);
+    expect(build({ reviewCapable: true, reviewOpen: open })[0]?.label).toBe(
+      "Review",
+    );
+    expect(
+      build({ reviewCapable: true, reviewOpen: open, reviewPrNumber: 1234 })[0]
+        ?.label,
+    ).toBe("Review #1234");
+  });
+
   test("honors explicit closes of default panes", () => {
     const closed = new Set(["workspace-1"]);
     expect(

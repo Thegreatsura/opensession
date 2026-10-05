@@ -4,6 +4,7 @@
  */
 import { createHash } from "crypto";
 import { oneShot } from "./one-shot";
+import { fitPatchToBudget } from "./review-patch-budget";
 
 const GROUP_MODEL = process.env.DIFF_GROUP_MODEL || "claude-haiku-4-5";
 const MAX_FILES = 250;
@@ -133,10 +134,9 @@ async function generate(
   const hit = cache.get(key);
   if (hit && (hit.data || Date.now() - hit.ts < FAILURE_TTL)) return hit.data;
 
-  const modelPatch =
-    patch.length > MAX_PATCH_CHARS
-      ? `${patch.slice(0, MAX_PATCH_CHARS)}\n\n[diff truncated]`
-      : patch;
+  // Every file keeps a share of the budget, so files late in a large diff
+  // are grouped from their content rather than guessed from their path.
+  const modelPatch = fitPatchToBudget(patch, MAX_PATCH_CHARS).patch;
   const prompt = [
     "Changed file metadata:",
     JSON.stringify({ repo, files }, null, 2),

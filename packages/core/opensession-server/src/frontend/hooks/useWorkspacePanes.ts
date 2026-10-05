@@ -26,7 +26,12 @@ import {
 import { findPrWorkspaceId } from "../lib/pr-workspace";
 import { markRead } from "../lib/reads";
 import type { ReviewQueueItem } from "../lib/review-queue";
-import { sessionCarriesPr, sessionHasPr } from "../lib/session-prs";
+import {
+  sessionCarriesPr,
+  sessionHasPr,
+  sessionPrPresentation,
+  sessionPrRefs,
+} from "../lib/session-prs";
 import { PR_DOT_TONE } from "../lib/session-tab-classes";
 import type { ViewTab } from "../lib/session-tabs-types";
 import { sessionHasWorkspace } from "../lib/session-workspace";
@@ -483,6 +488,12 @@ export function useWorkspacePanes({
       ? PR_DOT_TONE.CONFLICT
       : (PR_DOT_TONE[currentSession.prState] ?? null)
     : null;
+  // The PR the Review tab is about, so its label reads "Review #123".
+  const reviewPrNumber =
+    (currentSession
+      ? (sessionPrPresentation(sessionPrRefs(currentSession)).primary?.number ??
+        currentSession.prNumber)
+      : undefined) ?? wsRecord?.prNumber;
   const paneViewTabs: ViewTab[] = buildWorkspacePaneTabs({
     workspaceKey: wsKey,
     sessionId: currentSession?.id,
@@ -492,6 +503,7 @@ export function useWorkspacePanes({
     reviewOpen,
     reviewClosed,
     reviewDotClass,
+    reviewPrNumber,
     conversationThreadId,
     conversationClosed,
     videoLabel: videoPanel?.label ?? null,
