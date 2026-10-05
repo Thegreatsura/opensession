@@ -1832,9 +1832,13 @@ private struct WorkspaceMediaFrame: View {
     private func imageData() async throws -> Data {
         switch item.source {
         case .conversation:
-            return try await OS1API.conversationImage(source: item.src, sessionId: item.sessionId)
+            return try await DisplayableImageData.prepared(
+                OS1API.conversationImage(source: item.src, sessionId: item.sessionId)
+            )
         case .asset:
-            return try await OS1API.assetData(sessionId: item.sessionId, path: item.src)
+            return try await DisplayableImageData.prepared(
+                OS1API.assetData(sessionId: item.sessionId, path: item.src)
+            )
         }
     }
 
