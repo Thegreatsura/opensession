@@ -133,6 +133,73 @@ describe("announcesNextAction", () => {
     ).toBe(false);
   });
 
+  test("a question anywhere in the closing paragraph waits on the human (os-01a10b94)", () => {
+    expect(
+      announcesNextAction(
+        "That's almost exactly what Metronome already did before the PR.\n\n" +
+          "Should I trim PR #8098 down to those two fixes? Pushing it would " +
+          "start one more automated review round.",
+      ),
+    ).toBe(false);
+    expect(
+      announcesNextAction(
+        "Want me to fold the retry into this PR? Either way, CI is green.",
+      ),
+    ).toBe(false);
+    // A short tag line after the question paragraph still counts as closing.
+    expect(
+      announcesNextAction(
+        "Should I push the trimmed version to #8098?\n\nPushing starts another review round.",
+      ),
+    ).toBe(false);
+  });
+
+  test("handoffs without a question mark wait on the human", () => {
+    expect(
+      announcesNextAction("Tell me which option you prefer and I'll apply it."),
+    ).toBe(false);
+    expect(
+      announcesNextAction(
+        "I can make that change if you want it. Let me know and I'll start.",
+      ),
+    ).toBe(false);
+    expect(
+      announcesNextAction("It's your call. I'll leave the branch as is."),
+    ).toBe(false);
+  });
+
+  test("a gerund that is a sentence subject describes a consequence", () => {
+    expect(
+      announcesNextAction(
+        "Pushing it would start one more automated review round.",
+      ),
+    ).toBe(false);
+    expect(
+      announcesNextAction("Merging this means the old flag goes away."),
+    ).toBe(false);
+    // ...but a subordinate clause's verb doesn't make it one.
+    expect(
+      announcesNextAction(
+        "Checking the logs to see why the build is failing on main.",
+      ),
+    ).toBe(true);
+  });
+
+  test("questions inside code or URLs don't block a real announcement", () => {
+    expect(
+      announcesNextAction(
+        "The filter is `?state=open`. Let me fetch https://example.test/pulls?state=open next.",
+      ),
+    ).toBe(true);
+  });
+
+  test("conditional steps are options, not announcements", () => {
+    expect(
+      announcesNextAction("If you approve, I'll rebase the other branches."),
+    ).toBe(false);
+    expect(announcesNextAction("Once CI is green I'll merge it.")).toBe(false);
+  });
+
   test("ignores empty and trivial tails", () => {
     expect(announcesNextAction("")).toBe(false);
     expect(announcesNextAction("Done.")).toBe(false);
