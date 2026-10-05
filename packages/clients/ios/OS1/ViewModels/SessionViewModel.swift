@@ -403,8 +403,15 @@ final class SessionViewModel {
     private(set) var model: String
     /// Reasoning effort; rides every send and persists server-side. "" = unset.
     var effort: String
-    /// OpenAI fast-mode flag; rides every send like effort.
-    var fastMode: Bool
+    /// Run speed (Standard / Fast / Ultrafast); rides every send like
+    /// effort. Setting it drops any server value this build could not name.
+    var speed: SessionSpeed {
+        get { speedSetting.speed }
+        set { speedSetting = SpeedSetting(newValue) }
+    }
+    /// The stored speed with its wire form, so a send echoes back exactly
+    /// what the server holds until the person picks something else.
+    private(set) var speedSetting: SpeedSetting
     /// Provider account pinned with `/account` ("" = automatic routing). The
     /// server owns it; this follows its `subscription_changed` broadcasts.
     private(set) var accountId: String
@@ -683,7 +690,7 @@ final class SessionViewModel {
         self.usage = session.usage
         self.model = session.model ?? ""
         self.effort = session.effort ?? ""
-        self.fastMode = session.fastMode ?? false
+        self.speedSetting = session.speedSetting
         self.accountId = session.accountId ?? ""
         quickReplies.send = { [weak self] text in self?.sendQuickReply(text) }
         quickReplies.fill = { [weak self] text in self?.fillComposer(with: text) }
@@ -776,7 +783,7 @@ final class SessionViewModel {
         }
         model = session.model ?? ""
         effort = session.effort ?? ""
-        fastMode = session.fastMode ?? false
+        speedSetting = session.speedSetting
         accountId = session.accountId ?? ""
     }
 
@@ -1267,7 +1274,8 @@ final class SessionViewModel {
             content: text,
             images: images,
             effort: effort.isEmpty ? nil : effort,
-            fastMode: fastMode ? true : nil,
+            fastMode: speedSetting.wireFastMode,
+            speed: speedSetting.wireSpeed,
             busyMode: busyMode,
             user: ServerConfig.shared.userName
         ) else {
@@ -1301,7 +1309,8 @@ final class SessionViewModel {
             sessionId: session.id,
             content: text,
             effort: effort.isEmpty ? nil : effort,
-            fastMode: fastMode ? true : nil,
+            fastMode: speedSetting.wireFastMode,
+            speed: speedSetting.wireSpeed,
             busyMode: busyMode,
             user: ServerConfig.shared.userName
         ) else {
@@ -1543,13 +1552,16 @@ final class SessionViewModel {
 
     /// Switch this session's model via the `/model` slash command — handled
     /// server-side (persists, notices, broadcasts) without reaching the engine.
-    func changeModel(to id: String) {
+    /// `option` is the catalog row for `id`: Fast survives onto a model that
+    /// has it and Ultrafast onto the one model that serves it, as on the web.
+    func changeModel(to id: String, option: ModelOption? = nil) {
         guard !id.isEmpty, id != model, let socket else { return }
         model = id
-        // A model family switch invalidates the old effort/fast picks; reset
-        // to server defaults rather than carrying them across.
+        // A model family switch invalidates the old effort pick; reset to
+        // the server default rather than carrying it across.
         effort = ""
-        fastMode = false
+        let nextSpeed = SpeedChoices.afterModelChange(speed, next: option)
+        if nextSpeed != speed { speed = nextSpeed }
         socket.prompt(
             sessionId: session.id,
             content: "/model \(id)",
@@ -1564,13 +1576,24 @@ final class SessionViewModel {
         let next = account?.id ?? ""
         guard next != accountId, let socket else { return }
         accountId = next
-        // Fast mode is a subscription feature; an API key cannot carry it.
-        if account?.kind == "api_key" { fastMode = false }
+        // Faster tiers are subscription features: an API key carries none,
+        // and only a Pro $500 login serves Ultrafast.
+        let nextSpeed = SpeedChoices.afterPin(speed, account: account)
+        if nextSpeed != speed { speed = nextSpeed }
         socket.prompt(
             sessionId: session.id,
             content: next.isEmpty ? "/account auto" : "/account \(next)",
             user: ServerConfig.shared.userName
         )
+    }
+
+    /// Pick a speed from the model menu. On Auto, a faster tier pins the
+    /// login that will actually serve it, the way the web menu does.
+    func selectSpeed(_ next: SessionSpeed, choices: SpeedChoices) {
+        if let pin = choices.pin(for: next, accountId: accountId) {
+            pinAccount(pin)
+        }
+        speed = next
     }
 
     func answer(question: AskQuestion, answers: [String: String]?) {

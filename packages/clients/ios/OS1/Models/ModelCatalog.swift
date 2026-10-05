@@ -13,6 +13,9 @@ struct ModelOption: Decodable, Identifiable, Hashable, Sendable {
     /// Reasoning-effort variants this model supports (may be empty — presets).
     var efforts: [String]?
     var fastModeSupported: Bool?
+    /// The ChatGPT backend also serves the Ultrafast tier for this model
+    /// (Pro $500 logins only). Absent on servers that predate it.
+    var ultrafastSupported: Bool?
     /// The subscription pool this model spends from ("claude", "codex",
     /// "xai"), or nil for a model without a managed account pool.
     var accountProvider: String?

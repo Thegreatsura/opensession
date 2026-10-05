@@ -9,7 +9,7 @@ import SwiftUI
 /// reachable only by opening the worktree details sheet.
 ///
 /// Its own view struct for the reason `SessionActionsMenu` is: it reads
-/// `effort`, `fastMode` and `usage`, and reading those inside
+/// `effort`, `speed` and `usage`, and reading those inside
 /// `SessionView.body` re-evaluates the whole body, transcript included, every
 /// time one of them moves.
 struct ModelSettingsMenu: View {
@@ -37,7 +37,7 @@ struct ModelSettingsMenu: View {
                 ForEach(catalog.presets + catalog.regular) { option in
                     let routed = ModelCatalog.routedID(option.id, engine: currentEngine)
                     Button {
-                        if let routed { viewModel.changeModel(to: routed) }
+                        if let routed { viewModel.changeModel(to: routed, option: option) }
                     } label: {
                         if option.id == ModelCatalog.baseID(currentModel) {
                             Label(option.displayLabel, systemImage: "checkmark")
@@ -55,7 +55,11 @@ struct ModelSettingsMenu: View {
                     ForEach(engineChoices) { engine in
                         let routed = ModelCatalog.routedID(currentModel, engine: engine.id)
                         Button {
-                            if let routed { viewModel.changeModel(to: routed) }
+                            if let routed {
+                                viewModel.changeModel(
+                                    to: routed, option: catalog.option(for: currentModel)
+                                )
+                            }
                         } label: {
                             if engine.id == currentEngine {
                                 Label(engine.label, systemImage: "checkmark")
@@ -91,24 +95,22 @@ struct ModelSettingsMenu: View {
                 Label("Effort · \(EffortLevel.label(effectiveEffort))", systemImage: "brain")
             }
         }
-        if catalog?.option(for: currentModel)?.fastModeSupported == true {
+        if !speedChoices.isEmpty {
+            let effective = speedChoices.effective(viewModel.speed)
             Menu {
-                ForEach([false, true], id: \.self) { fast in
+                ForEach(speedChoices.options) { option in
                     Button {
-                        viewModel.fastMode = fast
+                        viewModel.selectSpeed(option, choices: speedChoices)
                     } label: {
-                        if viewModel.fastMode == fast {
-                            Label(Self.speedLabel(fast), systemImage: "checkmark")
+                        if effective == option {
+                            Label(option.label, systemImage: "checkmark")
                         } else {
-                            Text(Self.speedLabel(fast))
+                            Text(option.label)
                         }
                     }
                 }
             } label: {
-                Label(
-                    "Speed · \(Self.speedLabel(viewModel.fastMode))",
-                    systemImage: "bolt"
-                )
+                Label("Speed · \(effective.label)", systemImage: effective.symbol)
             }
         }
         Section {
@@ -238,10 +240,17 @@ struct ModelSettingsMenu: View {
 
     // MARK: Model settings
 
-    /// Fast mode reads as a speed, so it sits beside Effort as a value rather
-    /// than as a switch of its own. Same wording as the web menu.
-    private static func speedLabel(_ fast: Bool) -> String {
-        fast ? "Fast" : "Standard"
+    /// Speeds this model, pin and pool can run at. Ultrafast needs the one
+    /// model that serves it and a Pro $500 login: the pinned one, or on Auto
+    /// any usable one, which the server routes Ultrafast turns to.
+    private var speedChoices: SpeedChoices {
+        SpeedChoices(
+            model: catalog?.option(for: currentModel),
+            accounts: SpeedChoices.pool(
+                for: currentModel, catalog: catalog, accounts: accounts, viewer: viewer
+            ),
+            accountId: viewModel.accountId
+        )
     }
 
     private var currentModel: String {
@@ -285,7 +294,8 @@ struct ModelSettingsMenu: View {
         let defaultModel = catalog?.defaultModel ?? ""
         let onDefaultModel =
             viewModel.model.isEmpty || defaultModel.isEmpty || viewModel.model == defaultModel
-        return onDefaultModel && viewModel.effort.isEmpty && !viewModel.fastMode
+        return onDefaultModel && viewModel.effort.isEmpty
+            && speedChoices.effective(viewModel.speed) == .standard
             && viewModel.accountId.isEmpty
     }
 
@@ -315,12 +325,12 @@ struct ModelSettingsMenu: View {
         // its own picker, but the slash command takes an id — so this pins the
         // default id. The next run resolves to the same model either way.
         if let defaultModel = catalog?.defaultModel, !defaultModel.isEmpty {
-            viewModel.changeModel(to: defaultModel)
+            viewModel.changeModel(to: defaultModel, option: catalog?.option(for: defaultModel))
         }
         // `changeModel` clears both itself, but it no-ops when the model is
         // already the default, which is the common case for a reset.
         viewModel.effort = ""
-        viewModel.fastMode = false
+        viewModel.speed = .standard
         viewModel.pinAccount(nil)
     }
 }
