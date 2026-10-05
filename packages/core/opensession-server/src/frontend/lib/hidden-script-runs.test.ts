@@ -9,9 +9,8 @@ Object.assign(globalThis, {
   },
 });
 
-const { hiddenScriptRunIds, hideScriptRun } = await import(
-  "./hidden-script-runs"
-);
+const { hiddenScriptRunIds, hideScriptRun } =
+  await import("./hidden-script-runs");
 const DAY = 24 * 60 * 60_000;
 
 beforeEach(() => store.clear());
