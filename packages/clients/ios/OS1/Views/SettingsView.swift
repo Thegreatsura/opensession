@@ -14,6 +14,8 @@ struct SettingsView: View {
     @State private var copiedCode = false
     @State private var confirmingSignOut = false
     #if DEBUG
+    @State private var opensKeychainFixture =
+        ProcessInfo.processInfo.environment["OS1_OPEN_SETTINGS"] == "keychain"
     @State private var opensNotificationsFixture =
         ProcessInfo.processInfo.environment["OS1_OPEN_SETTINGS"] == "notifications"
     #endif
@@ -47,6 +49,10 @@ struct SettingsView: View {
             // Notifications screen, two taps a scripted run cannot make.
             .navigationDestination(isPresented: $opensNotificationsFixture) {
                 NotificationsSettingsView()
+            }
+            // Same for `OS1_OPEN_SETTINGS=keychain`.
+            .navigationDestination(isPresented: $opensKeychainFixture) {
+                KeychainSettingsView()
             }
             #endif
             #if os(macOS)
