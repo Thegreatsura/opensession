@@ -93,16 +93,21 @@ export function createPrReviewNotifier(
         if (deps.shouldSuppress?.(pr, reviewer)) continue;
         const user = deps.resolveUser(reviewer);
         if (!user) continue;
+        // A team request (usually CODEOWNERS) reaches every member; say so,
+        // and file it under its own kind so it can be switched off alone.
+        const team = pr.reviewRequestedTeams?.[reviewer];
         sends.push(
           deps.notify(user, {
-            kind: "review_requested",
+            kind: team ? "team_review_requested" : "review_requested",
             subject: {
               type: "pr",
               id: `${pr.repo}#${pr.number}`,
               title: pr.title,
               context: `${pr.repo} #${pr.number}`,
             },
-            reason: "Review requested on GitHub",
+            reason: team
+              ? `Review requested from ${team}`
+              : "Review requested from you",
             body: `Opened by ${pr.author}`,
             url: `/pr/${encodeURIComponent(pr.repo)}/${encodeURIComponent(pr.branch)}`,
           }),

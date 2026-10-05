@@ -135,6 +135,20 @@ describe("notification threads", () => {
     expect(
       shouldAlert({ threads: [], alerts: { reviews: false } }, "review_done"),
     ).toBe(false);
+    // Team requests (code owners) switch off apart from requests by name.
+    expect(shouldAlert(null, "team_review_requested")).toBe(true);
+    expect(
+      shouldAlert(
+        { threads: [], alerts: { teamReviews: false } },
+        "team_review_requested",
+      ),
+    ).toBe(false);
+    expect(
+      shouldAlert(
+        { threads: [], alerts: { teamReviews: false } },
+        "review_requested",
+      ),
+    ).toBe(true);
     expect(
       shouldAlert(
         { threads: [], alerts: { collaborators: false } },

@@ -93,7 +93,12 @@ const ALERT_ROWS: {
   {
     group: "reviews",
     title: "Reviews",
-    desc: "Someone asks for your review, or finishes one you asked for",
+    desc: "Someone asks you for a review, or finishes one you asked for",
+  },
+  {
+    group: "teamReviews",
+    title: "Team review requests",
+    desc: "A team you're on is asked to review, like code owners",
   },
   { group: "mentions", title: "Mentions", desc: "Someone tags you" },
   {

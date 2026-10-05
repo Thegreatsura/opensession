@@ -37,6 +37,15 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   row stays findable and its menu offers "Restore to my sidebar". An open
   teammate, automation, or spawned session can also be claimed from its native
   action surface with "Add to sidebar", sharing `/api/lanes` with the web.
+  A row's menu also adds or removes workspace collaborators
+  (`/api/workspaces/:id/collaborators`): a collaborator gets the workspace in
+  their own lanes and teammate lens, its review requests are not asks of them,
+  and they are never offered "Add to sidebar" for it. Rows in Inbox's Active
+  section can be dragged or moved up and down into the account's
+  `active-order` ui-pref, and tinted with a swatch stored as `row:<row key>`
+  in the shared `/api/tab-colors` map, drawn in the platform's system colours.
+  Next chat jumps only to your own unread work, and PR review runs
+  (`bks-ghpr-…-review` / `-adversarial`) take no tab unless opened directly.
   A claim, snooze or hide made on another client lands here without a
   foreground: the server's `user_map_changed` frame names the map, the
   matching store re-reads it (`UserMapSync`), and the list refetches its rows.

@@ -13,6 +13,8 @@ import Foundation
 /// (questions, failed or finished runs) is not an inbox event.
 enum InboxKind: String, CaseIterable, Sendable {
     case reviewRequested = "review_requested"
+    /// Asked only through a team the person is on (code owners, say).
+    case teamReviewRequested = "team_review_requested"
     case reviewDone = "review_done"
     case mention
     case collaborator
@@ -132,6 +134,7 @@ struct InboxThread: Decodable, Equatable, Identifiable, Sendable {
 /// lands in the inbox either way.
 struct InboxAlerts: Equatable, Sendable, Decodable {
     var reviews = true
+    var teamReviews = true
     var mentions = true
     var collaborators = true
     var reminders = true
@@ -139,13 +142,14 @@ struct InboxAlerts: Equatable, Sendable, Decodable {
     static let defaults = InboxAlerts()
 
     enum Group: String, CaseIterable, Sendable {
-        case reviews, mentions, collaborators, reminders
+        case reviews, teamReviews, mentions, collaborators, reminders
     }
 
     subscript(group: Group) -> Bool {
         get {
             switch group {
             case .reviews: reviews
+            case .teamReviews: teamReviews
             case .mentions: mentions
             case .collaborators: collaborators
             case .reminders: reminders
@@ -154,6 +158,7 @@ struct InboxAlerts: Equatable, Sendable, Decodable {
         set {
             switch group {
             case .reviews: reviews = newValue
+            case .teamReviews: teamReviews = newValue
             case .mentions: mentions = newValue
             case .collaborators: collaborators = newValue
             case .reminders: reminders = newValue
@@ -169,6 +174,7 @@ struct InboxAlerts: Equatable, Sendable, Decodable {
             ((try? c.decodeIfPresent(Bool.self, forKey: key)) ?? nil) ?? true
         }
         reviews = flag(.reviews)
+        teamReviews = flag(.teamReviews)
         mentions = flag(.mentions)
         collaborators = flag(.collaborators)
         reminders = flag(.reminders)
@@ -177,7 +183,7 @@ struct InboxAlerts: Equatable, Sendable, Decodable {
 
 extension InboxAlerts.Group {
     enum CodingKeys: String, CodingKey {
-        case reviews, mentions, collaborators, reminders
+        case reviews, teamReviews, mentions, collaborators, reminders
     }
 }
 

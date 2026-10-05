@@ -40,6 +40,33 @@ enum ArchivedPresentation {
         return nil
     }
 
+    /// Lowercased, with branch-style separators read as spaces, so "t4 gpus"
+    /// finds the branch `how-many-t4-gpus` (`searchText` in the web's
+    /// Archived.tsx).
+    static func searchText(_ text: String) -> String {
+        text.lowercased()
+            .replacingOccurrences(of: "[-_/\\s]+", with: " ", options: .regularExpression)
+    }
+
+    /// Whether an archived row matches the search box: every word must appear
+    /// somewhere in its workspace name, title, repo, branch, owner, automation
+    /// or id, so words can come from different fields and a pasted session id
+    /// finds its row (`archivedMatchesSearch` in the web's Archived.tsx).
+    static func matchesSearch(_ session: Session, query: String) -> Bool {
+        let terms = searchText(query).split(separator: " ")
+        guard !terms.isEmpty else { return true }
+        let haystack = searchText([
+            session.workspaceName,
+            session.displayTitle,
+            session.effectiveRepo,
+            session.branch,
+            session.startedBy,
+            session.automation?.name,
+            session.id,
+        ].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " "))
+        return terms.allSatisfy { haystack.contains($0) }
+    }
+
     /// What the Owner picker wears for a selection: the two fixed lenses by
     /// name, a teammate by the roster's spelling, and a key the roster no
     /// longer answers to as itself rather than as nothing.

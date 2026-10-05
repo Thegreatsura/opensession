@@ -87,6 +87,8 @@ enum NativePreferences {
                 ?? SidebarTools.defaultHiddenJSON
             prefs[SidebarFeeds.prefKey] = defaults.string(forKey: SidebarFeeds.storageKey)
                 ?? "[]"
+            prefs[ActiveOrder.prefKey] = defaults.string(forKey: ActiveOrder.storageKey)
+                ?? "[]"
         }
         let previousIdentity = defaults.string(forKey: identityKey)
         let previousBucket = defaults.string(forKey: bucketKey)
@@ -194,6 +196,16 @@ enum NativePreferences {
             validatedIdList(prefs["repo-order"]),
             default: "[]",
             key: "os1.sidebar.repoOrder",
+            resetMissing: true,
+            in: defaults
+        )
+        // The Active section's manual order, dragged here or in the browser.
+        // The account's, like repo order, so a missing value means "no
+        // manual order". Keys this device has no row for are kept verbatim.
+        set(
+            ActiveOrder.validated(prefs[ActiveOrder.prefKey]),
+            default: "[]",
+            key: ActiveOrder.storageKey,
             resetMissing: true,
             in: defaults
         )
