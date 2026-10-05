@@ -1145,12 +1145,23 @@ export const Sidebar = React.forwardRef<SidebarHandle, Props>(function Sidebar(
     const rowSessionIds = new Set(
       wsRows.flatMap((r) => r.sessions.map((c) => c.id)),
     );
-    const pinnedLoose = pins
+    const loosePinIds = pins
       .filter((e) => !e.startsWith("workspace:"))
-      .filter((id) => !rowSessionIds.has(id))
-      .map((id) =>
-        sessions.find((s) => s.id === id || s.aliasIds?.includes(id)),
-      )
+      .filter((id) => !rowSessionIds.has(id));
+    // One pass over the sessions, not one per pin: stale pins never match
+    // and would each scan the whole list, on every sidebar render.
+    const sessionByPinId = new Map<string, UnifiedSession>();
+    if (loosePinIds.length > 0) {
+      const wanted = new Set(loosePinIds);
+      for (const s of sessions) {
+        for (const id of [s.id, ...(s.aliasIds ?? [])]) {
+          if (wanted.has(id) && !sessionByPinId.has(id))
+            sessionByPinId.set(id, s);
+        }
+      }
+    }
+    const pinnedLoose = loosePinIds
+      .map((id) => sessionByPinId.get(id))
       // An archived session must never surface in Pinned — its pin is
       // stale (archiving drops it server-side, but a resurrected or
       // legacy pin can still point at it). Skip it so it can't render

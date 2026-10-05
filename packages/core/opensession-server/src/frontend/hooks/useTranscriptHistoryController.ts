@@ -1,10 +1,6 @@
 import { useRef, useState } from "react";
 import type { RefObject } from "react";
-import {
-  cacheTranscriptView,
-  peekCachedTranscriptView,
-  type CachedTranscriptView,
-} from "../components/session-viewer/transcript-cache";
+import { type CachedTranscriptView } from "../components/session-viewer/transcript-cache";
 import {
   pickScrollAnchor,
   readFollowingLive,
@@ -153,9 +149,7 @@ export function startTranscriptHistoryHold(
 
 export function handleTranscriptHistoryScroll(
   viewport: {
-    sessionId: string;
     messagesRef: RefObject<HTMLDivElement | null>;
-    followingLive: RefObject<boolean>;
   },
   history: {
     lastScrollTopRef: RefObject<number>;
@@ -165,7 +159,6 @@ export function handleTranscriptHistoryScroll(
   },
   actions: {
     onScroll: () => void;
-    scheduleAnchorCapture: () => void;
     loadEarlierHistory: () => void;
   },
 ) {
@@ -174,17 +167,6 @@ export function handleTranscriptHistoryScroll(
   const current = container?.scrollTop ?? previous;
   history.lastScrollTopRef.current = current;
   actions.onScroll();
-  const cached = peekCachedTranscriptView(viewport.sessionId);
-  // Only the cheap fields here: a scroll event must not walk the
-  // transcript. The anchor follows once the reader settles.
-  if (container && cached) {
-    cacheTranscriptView(viewport.sessionId, {
-      ...cached,
-      scrollTop: current,
-      following: viewport.followingLive.current,
-    });
-    actions.scheduleAnchorCapture();
-  }
   if (
     container &&
     scrolledTowardHistory(previous, current) &&

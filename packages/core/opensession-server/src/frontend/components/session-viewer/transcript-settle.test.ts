@@ -141,12 +141,12 @@ test("SessionViewer delegates transcript history ownership without moving callba
   );
 
   const scrollCallback = readerController.match(
-    /const handleMessagesScroll = useCallback\([\s\S]*?\n  \]\);/,
+    /const handleMessagesScroll = useCallback\([\s\S]*?\]\);/,
   )?.[0];
   expect(scrollCallback).toContain("handleTranscriptHistoryScroll(");
   expect(historyController).toContain("shouldConsumeHistoryGesture({");
   expect(scrollCallback).toContain(
-    "followingLive,\n    loadEarlierHistory,\n    messagesRef,",
+    "[loadEarlierHistory, messagesRef, onScroll]",
   );
 });
 

@@ -787,7 +787,6 @@ export function SessionViewer({
     shouldMaintainEnd,
     relayout,
     onScroll,
-    scheduleAnchorCapture,
   } = readerLayout.scroll;
   const {
     tailActionNeedsLayoutScrollRef,
@@ -1009,7 +1008,6 @@ export function SessionViewer({
       leaveLatest,
       relayout,
       onScroll,
-      scheduleAnchorCapture,
       endTurn,
     },
     runtime: { queued, steered, pending, ask, isBusy },

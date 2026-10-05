@@ -16,10 +16,6 @@ export type CachedTranscriptView = {
   historyStart: number | null;
   index: TranscriptIndexEntry[] | null;
   indexEpoch: number | null;
-  scrollTop: number;
-  following: boolean;
-  anchorEid: string | null;
-  anchorTop: number | null;
 };
 
 // SessionViewer remounts on navigation. Keep a small LRU of the expensive
