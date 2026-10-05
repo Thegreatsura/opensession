@@ -30,6 +30,9 @@ struct TranscriptRow: View {
     var onDeleteNote: ((SessionNote) async throws -> Void)?
     var onForkMessage: ((TranscriptEntry) -> Void)?
     var failureContinuation: FailureContinuationAction? = nil
+    /// Gives a You should know note its answers. Without it (a surface with
+    /// no composer) the note reads as an ordinary notice.
+    var youShouldKnow: YouShouldKnowAction? = nil
 
     var body: some View {
         switch block {
@@ -43,6 +46,13 @@ struct TranscriptRow: View {
                 // that predates `notice.ask`.
                 if notice.kind == "ask", let ask = notice.ask ?? entry.ask {
                     AnsweredAskCard(ask: ask)
+                } else if notice.kind == YouShouldKnowNote.kind, let youShouldKnow {
+                    YouShouldKnowNoticeView(
+                        entry: entry,
+                        note: YouShouldKnowNote(title: notice.title, explanation: entry.text),
+                        state: expansionState("notice-\(entry.id)", false),
+                        action: youShouldKnow
+                    )
                 } else {
                     NoticeRow(
                         entry: entry,
