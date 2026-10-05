@@ -1385,7 +1385,13 @@ export function Composer({
           minimized ? composerBoxMinimized : composerBoxExpanded,
           "isolate before:pointer-events-none before:absolute before:inset-0 before:z-0 before:rounded-[inherit] before:[corner-shape:inherit] before:bg-[var(--composer-note-bg)] before:opacity-0 before:transition-opacity before:duration-150 before:ease-[cubic-bezier(0.32,0.72,0,1)] [&>*]:relative [&>*]:z-[1]",
           noteMode && "before:opacity-100",
-          dictationClipping && "overflow-hidden",
+          // The pills' shadows reach past the box, so phone dictation skips it.
+          dictationClipping && !(dictating && isPhone) && "overflow-hidden",
+          // Phone dictation draws its own pills, so the box steps out of the
+          // way: no surface, and the toolbar under the clear overlay hides.
+          dictating &&
+            isPhone &&
+            "!border-transparent !bg-transparent !shadow-none before:!opacity-0 [&>*:not(:first-child)]:invisible",
           disabled && "opacity-60",
         )}
         style={surfaceStyle}
