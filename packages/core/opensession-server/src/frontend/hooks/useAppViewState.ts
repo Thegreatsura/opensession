@@ -198,10 +198,11 @@ export function useAppViewState({
   // when closing a view tab replaces the workspace URL — see onCloseView).
   const suppressWsSeedRef = useRef(false);
 
-  // Set for the render right after opening a workspace from the sidebar, so the
-  // session it lands on autofocuses its composer (you picked the workspace to
-  // type in it). Reset immediately after — a one-shot pulse, not a mode — so
-  // sessions opened by any other means don't grab focus.
+  // Set for the render right after opening a workspace from the sidebar or
+  // clicking a session tab, so the session it lands on autofocuses its
+  // composer (you picked it to type in it). Reset immediately after — a
+  // one-shot pulse, not a mode — so sessions opened by any other means don't
+  // grab focus.
   const [focusComposerOnOpen, setFocusComposerOnOpen] = useState(false);
   const [sessionComposerPrefills, setSessionComposerPrefills] = useState<
     Record<string, { seq: number; text: string }>
