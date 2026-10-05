@@ -5,41 +5,59 @@ import SwiftUI
 // where a preference follows a person between devices. Device alerts stay local.
 
 struct NotificationsSettingsView: View {
-    @AppStorage("os1.notifications.pushAlerts") private var pushAlerts = false
-    @AppStorage("os1.notifications.completionSound") private var completionSound = "default"
-    @AppStorage("os1.notifications.whenToNotify") private var whenToNotify = "background"
-    @AppStorage("os1.notifications.needsInput") private var needsInputAlerts = true
-    @AppStorage("os1.notifications.runComplete") private var runCompleteAlerts = true
+    // This device: whether banners show here, their sound, when they may
+    // interrupt, and the icon badge.
+    @AppStorage(NativeNotifications.bannersKey) private var banners = false
+    @AppStorage(NativeNotifications.soundKey) private var sound = "default"
+    @AppStorage(NativeNotifications.whenKey) private var whenToNotify = "background"
+    @AppStorage(NativeNotifications.badgeEnabledKey) private var unreadBadge = false
     #if os(iOS)
-    @AppStorage("os1.notifications.unreadBadge") private var unreadBadge = false
     @AppStorage(LiveActivityCoordinator.preferenceKey) private var liveActivities = false
     #endif
+    @State private var alertError: String?
+
+    private var inbox: NotificationInboxStore { .shared }
 
     var body: some View {
         Form {
             Section {
-                Toggle("Push alerts on this device", isOn: $pushAlerts)
-                #if os(iOS)
-                Toggle("Badge unread sessions", isOn: $unreadBadge)
-                #endif
-                Picker("Completion sound", selection: $completionSound) {
+                Toggle("Banners on this device", isOn: $banners)
+                Toggle("Badge unread notifications", isOn: $unreadBadge)
+                Picker("Sound", selection: $sound) {
                     Text("Default").tag("default")
                     Text("None").tag("none")
                 }
                 Picker("When to notify", selection: $whenToNotify) {
                     Text("Always").tag("always")
-                    Text("When \(AppBrand.productName) is in the background").tag("background")
+                    Text("In the background").tag("background")
                     Text("Never").tag("never")
                 }
             } header: {
-                Text("Alerts")
+                Text("This device")
             } footer: {
-                Text("These notification preferences apply only to this native \(AppBrand.productName) app and device.")
+                Text("Banners show while \(AppBrand.productName) is connected. These choices stay on this device.")
             }
 
-            Section("Events") {
-                Toggle("Session needs input", isOn: $needsInputAlerts)
-                Toggle("Session run completes", isOn: $runCompleteAlerts)
+            Section {
+                ForEach(Self.alertRows, id: \.group) { row in
+                    Toggle(isOn: alertBinding(row.group)) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(row.title)
+                            Text(row.detail)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .disabled(!inbox.hasLoaded)
+                }
+            } header: {
+                Text("Notify me when")
+            } footer: {
+                if let alertError {
+                    Text(alertError).foregroundStyle(.red)
+                } else {
+                    Text("Everything still lands in your inbox. These choose what also sends a banner and a sound, on every device.")
+                }
             }
 
             #if os(iOS)
@@ -53,16 +71,16 @@ struct NotificationsSettingsView: View {
             #endif
         }
         .navigationTitle("Notifications")
-        .onChange(of: pushAlerts) { _, enabled in
+        .task { await inbox.hydrate() }
+        .onChange(of: banners) { _, enabled in
             Task {
                 if enabled, !(await NativeNotifications.requestAuthorization()) {
-                    pushAlerts = false
+                    banners = false
                 } else {
                     NativeNotifications.refreshBadge()
                 }
             }
         }
-        #if os(iOS)
         .onChange(of: unreadBadge) { _, enabled in
             Task {
                 if enabled, !(await NativeNotifications.requestBadgeAuthorization()) {
@@ -72,6 +90,7 @@ struct NotificationsSettingsView: View {
                 }
             }
         }
+        #if os(iOS)
         .onChange(of: liveActivities) { _, enabled in
             Task {
                 if enabled {
@@ -82,6 +101,31 @@ struct NotificationsSettingsView: View {
             }
         }
         #endif
+    }
+
+    /// Saved to the account, so the same switches show on the web and every
+    /// other device. Same rows as the web's Settings → Notifications.
+    static let alertRows: [(group: InboxAlerts.Group, title: String, detail: String)] = [
+        (.reviews, "Reviews", "Someone asks for your review, or finishes one you asked for"),
+        (.mentions, "Mentions", "Someone tags you"),
+        (.collaborators, "Added to a workspace", "Someone adds you as a collaborator"),
+        (.reminders, "Reminders", "Desk task reminders"),
+    ]
+
+    private func alertBinding(_ group: InboxAlerts.Group) -> Binding<Bool> {
+        Binding(
+            get: { inbox.alerts[group] },
+            set: { on in
+                alertError = nil
+                Task {
+                    do {
+                        try await inbox.setAlert(group, on)
+                    } catch {
+                        alertError = "Couldn't save that setting."
+                    }
+                }
+            }
+        )
     }
 
     #if os(iOS)

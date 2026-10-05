@@ -6,11 +6,37 @@ import UIKit
 import AppKit
 #endif
 
+/// This device's side of notifications: whether banners show here, their
+/// sound, when they may interrupt, and the app icon badge. What happened and
+/// what is read or done belongs to the server inbox (`NotificationInboxStore`);
+/// nothing in this file decides that something is news.
+///
+/// A banner is only ever raised for a live `notification` frame the server
+/// marked as alerting, so a reconnect, a relaunch or an account switch cannot
+/// replay one. The app watches no session runs or questions for alerts.
 @MainActor
 enum NativeNotifications {
-    private static let badgeCountKey = "os1.notifications.unreadBadgeCount"
-    private static let badgeEnabledKey = "os1.notifications.unreadBadge"
-    private static let pushAlertsKey = "os1.notifications.pushAlerts"
+    nonisolated static let bannersKey = "os1.notifications.pushAlerts"
+    nonisolated static let soundKey = "os1.notifications.completionSound"
+    nonisolated static let whenKey = "os1.notifications.whenToNotify"
+    nonisolated static let badgeEnabledKey = "os1.notifications.unreadBadge"
+    nonisolated private static let badgeCountKey = "os1.notifications.unreadBadgeCount"
+
+    /// Event switches from before the server inbox. Agent activity no longer
+    /// notifies anyone, and which people events alert is an account setting.
+    nonisolated static let retiredKeys = [
+        "os1.notifications.needsInput",
+        "os1.notifications.runComplete",
+    ]
+
+    /// Seams for tests: where a banner goes, and whether the app is in front.
+    static var deliver: (UNNotificationRequest) -> Void = { request in
+        UNUserNotificationCenter.current().add(request)
+    }
+    static var withdraw: ([String]) -> Void = { identifiers in
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: identifiers)
+    }
+    static var isAppActive: () -> Bool = { applicationIsActive }
 
     static func requestAuthorization() async -> Bool {
         let granted = (try? await UNUserNotificationCenter.current().requestAuthorization(
@@ -21,62 +47,157 @@ enum NativeNotifications {
     }
 
     static func requestBadgeAuthorization() async -> Bool {
+        #if canImport(UIKit)
         let granted = (try? await UNUserNotificationCenter.current().requestAuthorization(
             options: [.badge]
         )) == true
         refreshBadge()
         return granted
+        #else
+        // The Dock tile needs no permission.
+        refreshBadge()
+        return true
+        #endif
     }
 
-    /// Keep the Home Screen and Dock icon in step with the unread session state.
-    /// The badge has its own device-local switch, so it can stay on without
-    /// enabling banners or sounds.
+    static func retireLegacyPreferences(_ defaults: UserDefaults = .standard) {
+        for key in retiredKeys { defaults.removeObject(forKey: key) }
+    }
+
+    /// Keep the Home Screen and Dock icon on the inbox's unread count, the
+    /// same number the bell shows. The badge has its own device-local switch,
+    /// so it can stay on without banners or sounds.
     static func syncBadgeCount(_ count: Int) {
-        UserDefaults.standard.set(max(0, count), forKey: badgeCountKey)
+        let defaults = UserDefaults.standard
+        let next = max(0, count)
+        guard defaults.object(forKey: badgeCountKey) as? Int != next else { return }
+        defaults.set(next, forKey: badgeCountKey)
         refreshBadge()
     }
 
     static func refreshBadge() {
-        #if canImport(UIKit)
         let defaults = UserDefaults.standard
         let count = defaults.bool(forKey: badgeEnabledKey)
             ? defaults.integer(forKey: badgeCountKey)
             : 0
+        #if canImport(UIKit)
         Task {
             try? await UNUserNotificationCenter.current().setBadgeCount(count)
         }
+        #else
+        NSApp?.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
         #endif
     }
 
-    static func post(event: String, title: String, body: String) {
+    /// One OS notification per inbox row, the same tag the server uses for
+    /// Web Push: a newer event on a row replaces its banner instead of
+    /// stacking, and reading the row takes it away.
+    static func identifier(for threadId: String) -> String {
+        "os-notification-\(threadId)"
+    }
+
+    /// Whether this device shows a banner right now, from its own choices.
+    static func allowsBanner(
+        defaults: UserDefaults = .standard,
+        active: Bool
+    ) -> Bool {
+        guard defaults.bool(forKey: bannersKey) else { return false }
+        switch defaults.string(forKey: whenKey) ?? "background" {
+        case "never": return false
+        case "always": return true
+        default: return !active
+        }
+    }
+
+    /// Show a banner for an inbox row the server said should alert.
+    static func present(_ thread: InboxThread, scope: InboxScope) {
         let defaults = UserDefaults.standard
-        guard defaults.bool(forKey: pushAlertsKey),
-              defaults.object(forKey: "os1.notifications.\(event)") == nil
-                || defaults.bool(forKey: "os1.notifications.\(event)")
-        else { return }
-
-        let when = defaults.string(forKey: "os1.notifications.whenToNotify") ?? "background"
-        guard when != "never", when == "always" || !applicationIsActive else { return }
-
+        guard allowsBanner(defaults: defaults, active: isAppActive()) else { return }
         let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = body
-        if defaults.string(forKey: "os1.notifications.completionSound") != "none" {
+        content.title = thread.reason.isEmpty ? thread.subject.title : thread.reason
+        content.body = thread.reason.isEmpty ? thread.body : thread.bannerBody
+        content.threadIdentifier = thread.id
+        content.userInfo = NotificationTap.userInfo(thread: thread, scope: scope)
+        if defaults.string(forKey: soundKey) != "none" {
             content.sound = .default
         }
-        let request = UNNotificationRequest(
-            identifier: "os1-\(event)-\(UUID().uuidString)",
+        deliver(UNNotificationRequest(
+            identifier: identifier(for: thread.id),
             content: content,
             trigger: nil
-        )
-        UNUserNotificationCenter.current().add(request)
+        ))
+    }
+
+    /// Take banners down once their rows are read or done, here or elsewhere.
+    static func withdraw(threadIds: [String]) {
+        guard !threadIds.isEmpty else { return }
+        withdraw(threadIds.map(identifier(for:)))
     }
 
     private static var applicationIsActive: Bool {
         #if canImport(UIKit)
         UIApplication.shared.applicationState == .active
         #else
-        NSApp.isActive
+        NSApp?.isActive ?? false
         #endif
+    }
+}
+
+/// What a banner carries so a tap can open its row, and the delegate that
+/// routes the tap. The account travels with it: a banner tapped after an
+/// account switch must not open, or mark, a row in the wrong inbox.
+enum NotificationTap {
+    static func userInfo(thread: InboxThread, scope: InboxScope) -> [String: String] {
+        [
+            "threadId": thread.id,
+            "server": scope.server,
+            "user": scope.user,
+        ]
+    }
+
+    struct Target: Equatable, Sendable {
+        let threadId: String
+        let scope: InboxScope
+    }
+
+    static func target(from userInfo: [AnyHashable: Any]) -> Target? {
+        guard let threadId = userInfo["threadId"] as? String,
+              let server = userInfo["server"] as? String,
+              let user = userInfo["user"] as? String
+        else { return nil }
+        return Target(threadId: threadId, scope: InboxScope(server: server, user: user))
+    }
+}
+
+final class NotificationTapRouter: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
+    static let shared = NotificationTapRouter()
+
+    @MainActor
+    static func install() {
+        UNUserNotificationCenter.current().delegate = shared
+    }
+
+    // The app only posts while it decided a banner is wanted (see
+    // `NativeNotifications.allowsBanner`), so a foreground banner is one the
+    // person asked for with "Always".
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .list, .sound]
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier,
+              let target = NotificationTap.target(
+                from: response.notification.request.content.userInfo
+              )
+        else { return }
+        await MainActor.run {
+            NotificationInboxStore.shared.openTapped(target)
+        }
     }
 }

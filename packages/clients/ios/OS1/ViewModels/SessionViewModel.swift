@@ -2200,7 +2200,6 @@ final class SessionViewModel {
             #endif
             session.safety = safety
             let effectiveRunning = safety == nil && running
-            let completed = isRunning && !effectiveRunning
             if effectiveRunning {
                 // Keep the earliest known anchor across resync re-sends.
                 if runStartedAt == nil {
@@ -2210,13 +2209,6 @@ final class SessionViewModel {
                 runStartedAt = nil
             }
             isRunning = effectiveRunning
-            if completed {
-                NativeNotifications.post(
-                    event: "runComplete",
-                    title: session.displayTitle,
-                    body: "The session finished running."
-                )
-            }
             if !effectiveRunning {
                 streamEnded = true
                 isStreaming = false
@@ -2345,16 +2337,8 @@ final class SessionViewModel {
             )
 
         case .askQuestion(let id, let question) where id == session.id:
-            let isNewQuestion = pendingQuestion?.id != question.id
             pendingQuestion = question
             if sentAskAnswer?.id != question.id { sentAskAnswer = nil }
-            if isNewQuestion {
-                NativeNotifications.post(
-                    event: "needsInput",
-                    title: session.displayTitle,
-                    body: "The session needs your input."
-                )
-            }
 
         case .askResolved(let id, let questionId) where id == session.id:
             if pendingQuestion?.id == questionId { pendingQuestion = nil }
