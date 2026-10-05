@@ -354,14 +354,13 @@ export function sortByMatch(
 const ARCHIVED_LIMIT = 20;
 
 /**
- * Archived sessions matching `query`, best match first and most recent
- * activity breaking ties. A conversation-only hit ranks below any match on
- * what the row shows, as it does for live sessions.
+ * Archived sessions whose metadata matches `query`, best match first and most
+ * recent activity breaking ties. Conversation-only hits are listed by
+ * `conversationResults` instead.
  */
 export function searchArchived(
   query: string,
   pool: UnifiedSession[],
-  snippets: ReadonlyMap<string, string>,
   index: SessionSearchIndex = sessionSearchIndex(pool),
 ): Array<{ session: UnifiedSession; metaMatch: boolean }> {
   const terms = query.split(/\s+/).filter(Boolean);
@@ -372,8 +371,7 @@ export function searchArchived(
     const prepared = preparedOf(s, index);
     const score = sessionUsesPrLink(s, query)
       ? 100
-      : matchScorePrepared(q, [prepared.title], prepared.hay) ||
-        (snippets.has(s.id) ? 10 : 0);
+      : matchScorePrepared(q, [prepared.title], prepared.hay);
     scores.set(s, score);
     return score > 0;
   });
@@ -416,7 +414,6 @@ export function archivedResults(
         (shownAs !== s.title && titleMatches(q, s, index))
       );
     }),
-    snippets,
     index,
   );
   return [
@@ -432,6 +429,38 @@ export function archivedResults(
       snippet: metaMatch ? undefined : snippets.get(session.id),
     })),
   ];
+}
+
+/** How many conversation-only hits the palette lists. */
+const CONVERSATION_LIMIT = 20;
+
+/**
+ * Sessions found only inside their conversation, live and archived together,
+ * in the server's relevance order (the order `snippets` was filled in). They
+ * used to join the live and archived groups at one flat score, sorted by
+ * recency, so the best conversation match in the archive sat below every
+ * passing mention in a live session. Skips sessions `listed` already shows.
+ * Exported for tests.
+ */
+export function conversationResults(
+  snippets: ReadonlyMap<string, string>,
+  candidates: UnifiedSession[],
+  listed: ReadonlySet<string>,
+): PaletteResult[] {
+  const byId = new Map(candidates.map((s) => [s.id, s]));
+  const rows: PaletteResult[] = [];
+  for (const [id, snippet] of snippets) {
+    if (rows.length >= CONVERSATION_LIMIT) break;
+    const session = byId.get(id);
+    if (!session || listed.has(`session:${id}`)) continue;
+    rows.push({
+      type: "session",
+      category: "In conversations",
+      session,
+      snippet,
+    });
+  }
+  return rows;
 }
 
 /**
@@ -803,14 +832,12 @@ export function SessionSearch({
         (shownAs === s.title || !titleMatches(fq, s, searchIndex))
       )
         return false;
-      // A session shows if its metadata matches every term, the pasted PR link
-      // belongs to it, or the query turned up inside its conversation. A
-      // conversation-only hit ranks below any match on what the row shows.
+      // A session shows here if its metadata matches or the pasted PR link
+      // belongs to it. Conversation-only hits get their own group below.
       const prepared = preparedHit(s);
       const score = sessionUsesPrLink(s, q)
         ? 100
-        : matchScorePrepared(fq, [prepared.title], prepared.hay) ||
-          (snippets.has(s.id) ? 10 : 0);
+        : matchScorePrepared(fq, [prepared.title], prepared.hay);
       scores.set(s, score);
       return score > 0;
     });
@@ -836,22 +863,38 @@ export function SessionSearch({
           score: scores.get(s) ?? 1,
         };
       });
-    // Archived matches come last whatever they score: live work is what the
-    // palette is for, and the archive is where a person looks when it isn't.
+    // Archived title matches come last whatever they score: live work is
+    // what the palette is for, and the archive is where a person looks when
+    // it isn't.
+    const archivedCandidates = hasQuery
+      ? archivedPool.filter(passesFilters)
+      : [];
     const archivedRows: PaletteResult[] = hasQuery
       ? archivedResults(
           q,
-          archivedPool.filter(passesFilters),
+          archivedCandidates,
           new Set(pool.map((s) => s.workspaceId).filter(Boolean)),
           snippets,
           archivedIndex,
         )
       : [];
-    return [
+    const listed = [
       ...workspaceRows,
       ...orderGroupsByScore([actionResults, prResults, sessionRows]),
-      ...archivedRows,
     ];
+    const conversationRows = hasQuery
+      ? conversationResults(
+          snippets,
+          [
+            ...filtered.filter(
+              (s) => !s.workspaceId || !shownWorkspaces.has(s.workspaceId),
+            ),
+            ...archivedCandidates,
+          ],
+          new Set([...listed, ...archivedRows].map(resultKey)),
+        )
+      : [];
+    return [...listed, ...conversationRows, ...archivedRows];
   })();
   const keyedActive = results.findIndex(
     (result) => resultKey(result) === activeKey,

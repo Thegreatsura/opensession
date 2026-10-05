@@ -1,7 +1,11 @@
 import { expect, test } from "bun:test";
 import type { UnifiedSession } from "../lib/types";
 import { archivedMatchesSearch } from "./Archived";
-import { archivedResults, searchArchived } from "./SessionSearch";
+import {
+  archivedResults,
+  conversationResults,
+  searchArchived,
+} from "./SessionSearch";
 
 function row(over: Partial<UnifiedSession> = {}): UnifiedSession {
   // SAFETY: the matchers under test read only the fields set here.
@@ -37,30 +41,37 @@ test("archive search reads branch separators as spaces and matches every word", 
   expect(archivedMatchesSearch(s, "t4 billing")).toBe(false);
 });
 
-test("the command menu finds archived sessions by branch and conversation", () => {
+test("the command menu finds archived sessions by branch", () => {
   const byBranch = row();
-  const byTranscript = row({
-    id: "os-0002-acme",
-    title: "Billing export",
-    branch: "billing-export",
-  });
   const unrelated = row({ id: "os-0003-acme", title: "Docs", branch: "docs" });
-  const pool = [byBranch, byTranscript, unrelated];
-
-  expect(searchArchived("t4", pool, new Map())).toEqual([
+  expect(searchArchived("t4", [byBranch, unrelated])).toEqual([
     { session: byBranch, metaMatch: true },
   ]);
-  const hits = searchArchived(
-    "t4",
-    pool,
-    new Map([["os-0002-acme", "…about t4 capacity…"]]),
-  );
-  expect(hits.map((h) => h.session.id)).toEqual([
-    "os-0001-acme",
-    "os-0002-acme",
+  expect(searchArchived("", [byBranch, unrelated])).toEqual([]);
+});
+
+test("conversation hits keep the server's order across live and archived", () => {
+  const live = row({ id: "os-live", title: "Live work", archived: false });
+  const archived = row({ id: "os-archived", title: "Explore Cloudflare" });
+  const listed = row({ id: "os-listed", title: "Already shown" });
+  const snippets = new Map([
+    ["os-archived", "…Pi Durable in the agents SDK…"],
+    ["os-listed", "…pi durable…"],
+    ["os-gone", "…not in the pool…"],
+    ["os-live", "…durable pi…"],
   ]);
-  expect(hits[1].metaMatch).toBe(false);
-  expect(searchArchived("", pool, new Map())).toEqual([]);
+  const rows = conversationResults(
+    snippets,
+    [live, archived, listed],
+    new Set(["session:os-listed"]),
+  );
+  expect(
+    rows.map((r) => (r.type === "session" ? [r.session.id, r.snippet] : r)),
+  ).toEqual([
+    ["os-archived", "…Pi Durable in the agents SDK…"],
+    ["os-live", "…durable pi…"],
+  ]);
+  expect(rows.every((r) => r.category === "In conversations")).toBe(true);
 });
 
 test("archive search matches the workspace name the sidebar showed", () => {
@@ -101,7 +112,5 @@ test("the command menu lists an archived workspace by its name", () => {
 
 test("a hyphenated query finds a title written with spaces", () => {
   const s = row({ title: "Explore Pi Durable objects", branch: "explore" });
-  expect(
-    searchArchived("pi-durable", [s], new Map()).map((h) => h.session),
-  ).toEqual([s]);
+  expect(searchArchived("pi-durable", [s]).map((h) => h.session)).toEqual([s]);
 });
