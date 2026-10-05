@@ -97,7 +97,12 @@ struct MediaFigureView: View {
             guard data == nil else { return }
             failed = false
             do {
-                data = try await OS1API.conversationImage(source: figure.source, sessionId: resolvedSessionId)
+                let fetched = try await OS1API.conversationImage(source: figure.source, sessionId: resolvedSessionId)
+                guard let shown = await DisplayableImageData.prepare(fetched) else {
+                    failed = true
+                    return
+                }
+                data = shown
             } catch {
                 failed = true
             }

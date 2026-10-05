@@ -435,6 +435,22 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   device. The orb's level is sampled off the realtime audio threads at ~15Hz
   rather than pushed per buffer, and honors Reduce Motion.
 
+## SVG images
+
+Transcript SVGs (an `OPENSESSION_IMAGE` file, an upload, a local path the
+server serves from `/media`) are untrusted markup. `DisplayableImageData`
+sniffs them before any image decoder runs and `SVGSanitizer` rebuilds them from
+an allowlist: no script, `foreignObject`, event handlers, external `href`s,
+outside `url()`s, stylesheet imports or entity declarations. The Mac then hands
+the clean markup to `NSImage`, which draws SVG itself. `UIImage` cannot, so the
+phone's `SVGRasterizer` draws it as an `<img>` (WebKit's no-script, no-fetch
+image mode) in a throwaway web view that also has JavaScript off, a
+`data:`-only CSP, a content rule list blocking every network and file scheme,
+a non-persistent store and one permitted navigation, and snapshots it to PNG.
+Raster images pass through untouched. Thumbnails, figures, compare sliders,
+walkthrough stills, the info filmstrip and the full-screen viewer all go
+through it, so each keeps its own caching and retry tile.
+
 ## Mermaid diagrams
 
 A ```mermaid fence in an assistant message renders as a drawn diagram, the same
@@ -566,6 +582,8 @@ OS1/
     Native*SettingsViews.swift  Native Tools, Personal, Workspace panels
     MacSettings.swift        macOS settings window
     Glass · ImageAttachments · UserAvatar · WebIcon  smaller shared views
+    SVGImage.swift           SVG sniffing, allowlist sanitizer, displayable bytes
+    SVGRasterizer.swift      Sandboxed WebKit SVG-to-PNG for the phone
   Mermaid/
     MermaidSegmenter.swift   Splits ```mermaid fences out of message markdown
     MermaidHostPage.swift    Locates the bundled renderer page
