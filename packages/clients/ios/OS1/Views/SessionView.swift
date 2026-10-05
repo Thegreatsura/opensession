@@ -286,6 +286,7 @@ struct SessionView: View {
     /// board), and it reads from the top.
     private var tailId: String? {
         if let receipt = viewModel.slackComposeReceipt { return "slack-receipt-\(receipt.id)" }
+        if viewModel.actionCards.hasCards { return "action-cards" }
         if let ask = viewModel.pendingQuestion { return "ask-\(ask.id)" }
         if let sent = viewModel.sentAskAnswer { return "ask-sent-\(sent.id)" }
         // While work is in flight the run clock IS the last row.
@@ -597,6 +598,10 @@ struct SessionView: View {
                         .onChange(of: viewModel.pendingQuestion) {
                             // A question needs eyes even if they've scrolled away.
                             scrollToBottom(proxy, animated: true)
+                        }
+                        .onChange(of: viewModel.actionCards.attentionKey) { _, key in
+                            // A card that waits on a person needs eyes too.
+                            if !key.isEmpty { scrollToBottom(proxy, animated: true) }
                         }
                         .onChange(of: viewModel.slackComposeReceipt) {
                             // The composer closes into this durable receipt.
@@ -962,6 +967,9 @@ struct SessionView: View {
                 // get exercised.
                 if ProcessInfo.processInfo.environment["OS1_SHOW_ASK_FIXTURE"] == "1" {
                     viewModel.showAskForScreenshot()
+                }
+                if let cards = ProcessInfo.processInfo.environment["OS1_SHOW_ACTION_CARDS"] {
+                    viewModel.showActionCardsForScreenshot(cards)
                 }
                 if ProcessInfo.processInfo.environment["OS1_SHOW_MERMAID_FIXTURE"] == "1" {
                     Task { await viewModel.showMermaidFixturesForScreenshot() }
@@ -1603,6 +1611,11 @@ struct SessionView: View {
                 .id("ask-sent-\(sent.id)")
                 .transcriptTail(true)
         }
+        if viewModel.actionCards.hasCards {
+            SessionActionCardsStack(model: viewModel.actionCards)
+                .id("action-cards")
+                .transcriptTail(tailId == "action-cards")
+        }
         if let receipt = viewModel.slackComposeReceipt {
             SlackComposeReceiptRow(
                 receipt: receipt,
@@ -1719,7 +1732,8 @@ struct SessionView: View {
             onForkMessage: canForkSession ? { entry in
                 forkState.enter(messageId: entry.id)
             } : nil,
-            failureContinuation: continuation
+            failureContinuation: continuation,
+            youShouldKnow: YouShouldKnowAction(viewModel: viewModel)
         )
         .id(block.id)
         .transcriptTail(block.id == tailId)
@@ -3425,6 +3439,15 @@ private struct SessionInputBar: View {
                 inputFocused = true
             }
             #endif
+        }
+        // Ask about this on a You should know note quotes it into the draft;
+        // the cursor goes there so the reply is one keystroke away.
+        // The caret goes to the end: focusing a field that holds text would
+        // otherwise select all of it on the Mac, and the next key would
+        // replace the draft the quote was appended under.
+        .onChange(of: viewModel.composerFocusRequest) {
+            inputSelection = TextSelection(insertionPoint: projectedDraft.wrappedValue.endIndex)
+            inputFocused = true
         }
         // Leaving the session must not leave the mic or typing status open.
         .onDisappear {

@@ -220,6 +220,15 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
 - **Agent runs**: the Agents panel reads every workflow a session started and
   updates each run immediately from `workflow_update` socket frames. A 3-second
   poll remains while a run is live for compatibility with older servers.
+- **Action cards** — when the agent needs a person, the session ends with a
+  card: register a keychain credential (the secret goes straight to the
+  keychain over HTTP, never to the agent), answer a keychain ask for a
+  credential you own, or confirm a force merge (only the driver confirms, with
+  a second confirmation; anyone signed in may cancel). Script runs show state,
+  credential call counts, a polled output tail and Stop. `SessionActionCardsModel`
+  owns them per session and re-reads all of them on every handshake. A You
+  should know note offers Learn more, Ask about this (quotes it under the
+  draft), I knew this and Turn off (press twice); Preferences has the toggle.
 - **Changes** — every file the worktree has touched, and the diff of any one of
   them, reached from the overflow menu or the workspace sheet (whose file rows
   open that file directly, and whose "Show all N files" replaces what used to
@@ -608,6 +617,12 @@ OS1/
 - When Settings → Personal → Preferences → Live typing is on, `stream_text`
   deltas render immediately. It defaults off; otherwise each durable part
   appears through `transcript_append`.
+- `credential_registration_request`, `keychain_asks_changed` and
+  `force_merge_request` carry no viewer identity, so they only trigger a
+  re-read of `/api/keychain/registrations`, `/api/keychain/asks` and
+  `/api/force-merge`, which answer with this viewer's permissions. The
+  `*_resolved` frames clear the matching card, and a read that started before
+  a resolution cannot bring it back. `script_runs` replaces the run list.
 - `reply_suggestions` carries a session id and optional `{label,text}` choices.
   A JSON `null` suggestion payload clears the current row; a new stream or send
   clears it locally so stale replies cannot follow the next turn.
