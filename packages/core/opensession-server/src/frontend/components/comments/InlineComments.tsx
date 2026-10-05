@@ -60,6 +60,8 @@ interface Geometry {
    *  summary popover's left edge when it sits over the margin. */
   marginRight: number;
   regionWidth: number;
+  /** Visible height of the transcript scroller: the tallest a card gets. */
+  viewHeight: number;
   /** Scroller top within the region. */
   scrollerTop: number;
 }
@@ -200,11 +202,14 @@ export function InlineComments({
         columnRight,
         marginRight,
         regionWidth: regionRect.width,
+        viewHeight: container.clientHeight,
         scrollerTop: scrollerRect.top - regionRect.top,
       });
       const layer = layerRef.current;
-      if (layer)
+      if (layer) {
         layer.style.transform = `translateY(${scrollerRect.top - regionRect.top - container.scrollTop}px)`;
+        layer.style.setProperty("--comment-scroll", `${container.scrollTop}px`);
+      }
     });
   }, [containerRef, shown, draft]);
 
@@ -238,6 +243,8 @@ export function InlineComments({
         container.getBoundingClientRect().top -
         overlay.getBoundingClientRect().top;
       layer.style.transform = `translateY(${offset - container.scrollTop}px)`;
+      // Cards size themselves to the room below their top on screen.
+      layer.style.setProperty("--comment-scroll", `${container.scrollTop}px`);
     };
     container.addEventListener("scroll", onScroll, { passive: true });
     return () => {
@@ -441,13 +448,27 @@ export function InlineComments({
     });
   }, []);
 
-  // Wheel over a margin card scrolls the transcript, as it would over the
-  // margin itself, unless the card's own content can scroll.
-  const forwardWheel = (event: React.WheelEvent) => {
+  // Wheel over a margin card scrolls the card while a long thread has more
+  // to show in that direction, then the transcript, as it would over the
+  // margin itself. Never both at once.
+  const forwardWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     const container = containerRef.current;
     if (!container) return;
+    const card = event.currentTarget;
+    const canScroll =
+      event.deltaY > 0
+        ? card.scrollTop + card.clientHeight < card.scrollHeight - 1
+        : event.deltaY < 0 && card.scrollTop > 0;
+    if (canScroll) return;
     container.scrollBy({ top: event.deltaY });
   };
+  // A card never runs past the bottom of the visible transcript: a long
+  // answer scrolls inside it, so its end and the reply box stay reachable.
+  // The room below a card's top changes as the transcript scrolls, which
+  // the layer tracks in --comment-scroll without re-rendering.
+  const viewHeight = geometry?.viewHeight ?? 600;
+  const cardMaxHeight = (top: number) =>
+    `clamp(200px, calc(${viewHeight - top - 16}px + var(--comment-scroll, 0px)), ${Math.max(200, viewHeight - 24)}px)`;
 
   async function postDraft(text: string): Promise<boolean> {
     if (!draft) return false;
@@ -521,6 +542,7 @@ export function InlineComments({
                 top={card.top}
                 left={card.left}
                 width={cardWidth}
+                maxHeight={cardMaxHeight(card.top)}
                 active={isActive}
                 onHeight={reportHeight}
                 onActivate={() => {
@@ -624,6 +646,7 @@ function MarginCard({
   top,
   left,
   width,
+  maxHeight,
   active,
   onHeight,
   onActivate,
@@ -634,10 +657,12 @@ function MarginCard({
   top: number;
   left: number;
   width: number;
+  /** A CSS length; see cardMaxHeight. */
+  maxHeight: string;
   active: boolean;
   onHeight: (id: string, height: number) => void;
   onActivate: () => void;
-  onWheel: (event: React.WheelEvent) => void;
+  onWheel: (event: React.WheelEvent<HTMLDivElement>) => void;
   children: React.ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -660,10 +685,10 @@ function MarginCard({
       onPointerDown={onActivate}
       onWheel={onWheel}
       className={cn(
-        "pointer-events-auto absolute rounded-xl bg-popup p-3 [--smooth-ring-color:var(--popup-ring)] motion-safe:transition-[top,box-shadow] motion-safe:duration-150",
+        "pointer-events-auto absolute overflow-y-auto overscroll-contain rounded-xl bg-popup p-3 [--smooth-ring-color:var(--popup-ring)] motion-safe:transition-[top,box-shadow] motion-safe:duration-150",
         active ? "z-[2] smooth-shadow-ring-md" : "smooth-shadow-ring-sm",
       )}
-      style={{ top, left, width }}
+      style={{ top, left, width, maxHeight }}
     >
       {children}
     </motion.div>
