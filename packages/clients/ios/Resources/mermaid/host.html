@@ -85,8 +85,12 @@
        * Draws one diagram and reports the size it came out at, or an error the
        * caller turns back into a plain code fence — the same fallback the web uses
        * for source that doesn't parse.
+       *
+       * `repaired` is Swift's one retry (MermaidRepair.swift, a port of the web's
+       * mermaid-repair.ts), or null: tried only when `source` itself does not
+       * parse, and never more than once.
        */
-      async function render(source, theme, font, bg) {
+      async function render(source, repaired, theme, font, bg) {
         document.body.style.background = bg;
         if (!started || current !== theme) {
           init(theme, font);
@@ -96,10 +100,12 @@
         host.innerHTML = "";
         // parse() first: render() on bad input both throws AND leaves an error bomb
         // in the document, which the next snapshot would happily capture.
-        const ok = await mermaid
-          .parse(source, { suppressErrors: true })
-          .catch(() => false);
-        if (!ok) return { error: "parse" };
+        const parses = (text) =>
+          mermaid.parse(text, { suppressErrors: true }).catch(() => false);
+        if (!(await parses(source))) {
+          if (!repaired || !(await parses(repaired))) return { error: "parse" };
+          source = repaired;
+        }
         const id = "m" + ++seq;
         let svg;
         try {

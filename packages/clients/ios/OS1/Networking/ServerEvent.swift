@@ -60,6 +60,14 @@ enum ServerEvent: Sendable {
     case askResolved(sessionId: String, questionId: String)
     case mention(user: String, mention: MentionRecord)
     case mentionsCleared(user: String, sessionId: String?)
+    /// The server recorded something new in this person's inbox. `thread` is
+    /// nil when this build cannot read the row; the inbox refreshes instead.
+    /// `alert` is the server's verdict from the person's alert settings:
+    /// only a live frame like this one may raise a banner, never a refresh.
+    case notification(user: String, thread: InboxThread?, alert: Bool)
+    /// This person's inbox changed elsewhere (a read or done mark, an alert
+    /// setting): re-read it.
+    case notificationsChanged(user: String)
     /// One of this person's sidebar maps was written from any client, theirs
     /// or another device. Sent only to that person's sockets and carries no
     /// entries: the receiver re-reads the named map (see `UserMapSync`).
@@ -70,6 +78,20 @@ enum ServerEvent: Sendable {
     /// A dynamic workflow snapshot changed. The session view model owns the
     /// run list so an update is not lost when the Agents panel is closed.
     case workflowUpdate(sessionId: String, run: WorkflowRun)
+    /// The agent asked the driver to register a keychain credential, or the
+    /// request was withdrawn (`pending` false). The frame names no viewer, so
+    /// the card re-reads `/api/keychain/registrations` for its permissions.
+    case credentialRegistrationRequest(sessionId: String, pending: Bool)
+    case credentialRegistrationResolved(sessionId: String, requestId: String)
+    /// A keychain ask from this session was made or settled. Carries nothing
+    /// about it: only the credential's owner gets the asks on a re-read.
+    case keychainAsksChanged(sessionId: String)
+    /// A force merge is waiting on the driver, or was withdrawn.
+    case forceMergeRequest(sessionId: String, pending: Bool)
+    case forceMergeResolved(sessionId: String, requestId: String)
+    /// Every script run of the session, whenever one starts, ends, or its
+    /// credential call counts move. Output is fetched over HTTP.
+    case scriptRuns(sessionId: String, runs: [ScriptRun])
     /// This session published local commits. Its PR surfaces should re-read now.
     case gitPushed(sessionId: String, repo: String?)
     /// A git-host webhook changed PR, review, or check state for this branch.
@@ -197,6 +219,16 @@ enum ServerEvent: Sendable {
         case "mentions_cleared":
             guard let user = frame.user else { return .ignored }
             return .mentionsCleared(user: user, sessionId: frame.sessionId)
+        case "notification":
+            guard let user = frame.user else { return .ignored }
+            return .notification(
+                user: user,
+                thread: frame.notification?.thread,
+                alert: frame.alert ?? false
+            )
+        case "notifications_changed":
+            guard let user = frame.user else { return .ignored }
+            return .notificationsChanged(user: user)
         case "user_map_changed":
             // A map this build does not keep is not an error, it is a newer
             // server: ignore the frame like any other unknown one.
@@ -236,6 +268,26 @@ enum ServerEvent: Sendable {
         case "workflow_update":
             guard let id = frame.sessionId, let run = frame.run else { return .ignored }
             return .workflowUpdate(sessionId: id, run: run)
+        case "credential_registration_request":
+            guard let id = frame.sessionId else { return .ignored }
+            return .credentialRegistrationRequest(
+                sessionId: id, pending: frame.credentialRequest != nil
+            )
+        case "credential_registration_resolved":
+            guard let id = frame.sessionId, let requestId = frame.requestId else { return .ignored }
+            return .credentialRegistrationResolved(sessionId: id, requestId: requestId)
+        case "keychain_asks_changed":
+            guard let id = frame.sessionId else { return .ignored }
+            return .keychainAsksChanged(sessionId: id)
+        case "force_merge_request":
+            guard let id = frame.sessionId else { return .ignored }
+            return .forceMergeRequest(sessionId: id, pending: frame.forceMergeRequest != nil)
+        case "force_merge_request_resolved":
+            guard let id = frame.sessionId, let requestId = frame.requestId else { return .ignored }
+            return .forceMergeResolved(sessionId: id, requestId: requestId)
+        case "script_runs":
+            guard let id = frame.sessionId else { return .ignored }
+            return .scriptRuns(sessionId: id, runs: frame.runs?.items ?? [])
         case "git_pushed":
             guard let id = frame.sessionId else { return .ignored }
             return .gitPushed(sessionId: id, repo: frame.repo)
@@ -458,6 +510,15 @@ struct QueueItem: Identifiable, Equatable, Sendable {
 }
 
 /// Superset of every server frame's fields; individual events pick what they need.
+/// A `notification` frame's row, decoded without ever failing the frame: a
+/// row this build cannot read still tells the inbox to refresh.
+private struct LossyInboxThread: Decodable {
+    let thread: InboxThread?
+    init(from decoder: Decoder) throws {
+        thread = try? InboxThread(from: decoder)
+    }
+}
+
 private struct RawFrame: Decodable {
     struct WireQueueItem: Decodable {
         /// The `files` payload's shape varies by client (staged-path refs,
@@ -475,6 +536,11 @@ private struct RawFrame: Decodable {
         let editable: Bool?
         let contextSessions: [String]?
         let steeredAt: Double?
+    }
+
+    /// Decodes any non-null JSON value without reading it.
+    struct PresenceProbe: Decodable {
+        init(from decoder: Decoder) throws {}
     }
 
     struct WireSlackChannel: Decodable {
@@ -515,6 +581,8 @@ private struct RawFrame: Decodable {
     let user: String?
     let map: String?
     let mention: MentionRecord?
+    let notification: LossyInboxThread?
+    let alert: Bool?
     let suggestions: [ReplySuggestion]?
     let request: SlackComposeRequest?
     let requestId: String?
@@ -523,6 +591,11 @@ private struct RawFrame: Decodable {
     let permalink: String?
     let ts: String?
     let run: WorkflowRun?
+    /// Only whether these are present matters: `null` retires the card, and
+    /// anything else means "re-read it" (the frames carry no permissions).
+    let credentialRequest: PresenceProbe?
+    let forceMergeRequest: PresenceProbe?
+    let runs: LossyList<ScriptRun>?
     let repo: String?
     let branch: String?
     let message: String?

@@ -74,7 +74,15 @@ struct MacSettingsView: View {
         }
     }
 
-    @State private var selection: Pane? = .preferences
+    @State private var selection: Pane? = {
+        #if DEBUG
+        // Screenshot hook, like the iPhone's `OS1_OPEN_SETTINGS`.
+        if ProcessInfo.processInfo.environment["OS1_OPEN_SETTINGS"] == "notifications" {
+            return .notifications
+        }
+        #endif
+        return .preferences
+    }()
     @State private var automationId: String?
     @State private var authenticationMessage: String?
     @State private var config = ServerConfig.shared
