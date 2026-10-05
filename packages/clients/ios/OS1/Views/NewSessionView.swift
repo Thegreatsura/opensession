@@ -83,7 +83,10 @@ struct NewSessionView: View {
     @State private var catalog: ModelCatalog?
     @State private var model = ""
     @State private var effort = ""
-    @State private var fastMode = false
+    @State private var speed: SessionSpeed = .standard
+    /// Subscription pools as last fetched, which decide whether Ultrafast is
+    /// on offer. Seeded from cache so the chip is right on first frame.
+    @State private var accountPools = SettingsAPI.cachedProviderAccountPools()
     @State private var images: [AttachedImage]
     @State private var files: [AttachedFile]
     @State private var stagingFileIDs: Set<String> = []
@@ -206,6 +209,7 @@ struct NewSessionView: View {
             }
             #endif
             .task { await load() }
+            .task { accountPools = await SettingsAPI.providerAccountPools() }
             .task { await stagePendingFiles() }
             // The library is a detail of composing this session, so it pushes
             // onto the sheet's own stack: back is where you were, with the
@@ -672,9 +676,26 @@ struct NewSessionView: View {
         selectedModelOption?.efforts ?? []
     }
 
-    private var fastSupported: Bool {
-        selectedModelOption?.fastModeSupported == true
+    /// Speeds this model and the viewer's pool can run at. A new session
+    /// starts on Auto, which the server routes Ultrafast turns to a Pro $500
+    /// login, so Ultrafast is offered whenever the viewer can use one.
+    private var speedChoices: SpeedChoices {
+        SpeedChoices(
+            model: selectedModelOption,
+            accounts: SpeedChoices.pool(
+                for: effectiveModelID,
+                catalog: catalog,
+                accounts: accountPools,
+                viewer: ServerConfig.shared.userName
+            ),
+            accountId: ""
+        )
     }
+
+    private var fastSupported: Bool { !speedChoices.isEmpty }
+
+    /// The speed the session will be created at.
+    private var effectiveSpeed: SessionSpeed { speedChoices.effective(speed) }
 
     private var modelChipText: String {
         let id = model.isEmpty ? catalog?.defaultModel : model
@@ -733,7 +754,7 @@ struct NewSessionView: View {
             ComposerDictationButton(dictation: dictation, draft: $prompt)
             Spacer(minLength: 8)
             if !availableEfforts.isEmpty { effortChip }
-            if fastSupported { fastChip }
+            if fastSupported { speedChip }
             if !sandboxChoices.isEmpty { sandboxChip }
             modelChip
             #endif
@@ -868,15 +889,7 @@ struct NewSessionView: View {
                 }
             }
             if fastSupported {
-                Button {
-                    fastMode.toggle()
-                } label: {
-                    if fastMode {
-                        Label("Fast mode", systemImage: "checkmark")
-                    } else {
-                        Text("Fast mode")
-                    }
-                }
+                Section("Speed") { speedButtons }
             }
             #endif
             if engineChoices.count > 1 {
@@ -972,12 +985,31 @@ struct NewSessionView: View {
         .buttonStyle(.plain)
     }
 
-    private var fastChip: some View {
-        Button {
-            fastMode.toggle()
-        } label: {
-            chipLabel(icon: "bolt.fill", text: "Fast", highlighted: fastMode)
+    private var speedButtons: some View {
+        ForEach(speedChoices.options) { option in
+            Button {
+                speed = option
+            } label: {
+                if effectiveSpeed == option {
+                    Label(option.label, systemImage: "checkmark")
+                } else {
+                    Text(option.label)
+                }
+            }
         }
+    }
+
+    private var speedChip: some View {
+        Menu {
+            speedButtons
+        } label: {
+            chipLabel(
+                icon: effectiveSpeed == .ultrafast ? "bolt.fill" : "bolt",
+                text: effectiveSpeed == .standard ? "Speed" : effectiveSpeed.label,
+                highlighted: effectiveSpeed != .standard
+            )
+        }
+        .menuStyle(.button)
         .buttonStyle(.plain)
     }
 
@@ -1145,7 +1177,7 @@ struct NewSessionView: View {
         }
         model = routed
         defaultEffortForCurrentModel()
-        if !(option.fastModeSupported == true) { fastMode = false }
+        speed = SpeedChoices.afterModelChange(speed, next: option)
     }
 
     /// "High" is the palette's default where supported; presets (dial) have
@@ -1323,7 +1355,7 @@ struct NewSessionView: View {
             mode: mode,
             model: model.isEmpty ? nil : model,
             effort: effort.isEmpty ? nil : effort,
-            fastMode: fastMode,
+            speed: effectiveSpeed,
             startedBy: ServerConfig.shared.userName,
             workspaceId: initialWorkspaceId
         )
@@ -1345,7 +1377,7 @@ struct NewSessionView: View {
                     ),
                     model: model.isEmpty ? nil : model,
                     effort: effort.isEmpty ? nil : effort,
-                    fastMode: fastMode,
+                    speed: effectiveSpeed,
                     images: imageURLs,
                     files: files,
                     workspaceId: initialWorkspaceId,

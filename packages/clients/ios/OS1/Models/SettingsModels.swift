@@ -168,6 +168,7 @@ struct SettingsModelOption: Codable, Sendable, Identifiable {
     var group: String?
     var description: String?
     var fastModeSupported: Bool?
+    var ultrafastSupported: Bool?
 }
 
 struct ModelDefaults: Codable, Sendable {
