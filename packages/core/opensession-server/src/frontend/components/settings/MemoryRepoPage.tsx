@@ -70,10 +70,10 @@ export function MemoryReposCard({
       <SettingsGroupLabel>Git repositories</SettingsGroupLabel>
       <SettingCard>
         {repos.map((repo) => (
-          <button
+          <Button
             key={repo.name}
-            type="button"
-            className="focus-ring group flex min-h-11 w-full items-center gap-3 rounded-2xl px-5 py-3.5 text-left hover:bg-hover"
+            variant="ghost"
+            className="group min-h-11 w-full justify-start gap-3 whitespace-normal rounded-2xl px-5 py-3.5 text-left"
             onClick={() => onOpen(repo.name)}
           >
             <span className="min-w-0 flex-1">
@@ -90,7 +90,7 @@ export function MemoryReposCard({
               size={20}
               className="shrink-0 text-faint group-hover:text-dim"
             />
-          </button>
+          </Button>
         ))}
       </SettingCard>
     </div>
@@ -173,10 +173,10 @@ function CommitRow({
   return (
     <div className="border-b border-line px-5 py-3 last:border-b-0">
       <div className="flex items-start gap-3 phone:flex-col phone:items-stretch">
-        <button
-          type="button"
+        <Button
+          variant="ghost"
           aria-expanded={open}
-          className="focus-ring -mx-2 flex min-h-11 min-w-0 flex-1 items-start gap-2 rounded-control px-2 py-1 text-left hover:bg-hover"
+          className="-mx-2 min-h-11 min-w-0 flex-1 items-start justify-start gap-2 whitespace-normal px-2 py-1 text-left font-normal"
           onClick={toggle}
         >
           <IconChevronRight
@@ -186,8 +186,8 @@ function CommitRow({
               open && "rotate-90",
             )}
           />
-          <span className="min-w-0">
-            <span className="block break-words text-item-title text-fg">
+          <span className="min-w-0 flex-1">
+            <span className="block break-words text-item-title leading-snug text-fg">
               {commit.subject}
             </span>
             <span className="mt-0.5 block text-meta text-dim">
@@ -197,7 +197,7 @@ function CommitRow({
               <span className="font-mono">{commit.sha.slice(0, 8)}</span>
             </span>
           </span>
-        </button>
+        </Button>
         <div className="flex shrink-0 items-center gap-2">
           {commit.sessionId && (
             <Button
