@@ -34,7 +34,7 @@
     "test:transcript-scroll": "bun packages/core/opensession-server/src/frontend/tools/transcript-scroll-regression.ts",
     "lint": "bun run check:compiler && oxlint packages/core/opensession-server/src/frontend",
     "check:compiler": "bun scripts/check-react-compiler.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node --max-old-space-size=8192 node_modules/typescript/bin/tsc --noEmit",
     "website:build": "bun --cwd packages/clients/website build",
     "website:dev": "bun --cwd packages/clients/website dev"
   },
