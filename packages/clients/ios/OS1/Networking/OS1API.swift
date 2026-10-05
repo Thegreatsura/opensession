@@ -1713,7 +1713,7 @@ enum OS1API {
         checkoutMode: String = "default",
         model: String? = nil,
         effort: String? = nil,
-        fastMode: Bool = false,
+        speed: SessionSpeed = .standard,
         images: [String] = [],
         files: [AttachedFile] = [],
         workspaceId: String? = nil,
@@ -1729,7 +1729,7 @@ enum OS1API {
             checkoutMode: checkoutMode,
             model: model,
             effort: effort,
-            fastMode: fastMode,
+            speed: speed,
             images: images,
             files: files,
             workspaceId: workspaceId,
@@ -1760,7 +1760,7 @@ enum OS1API {
         checkoutMode: String = "default",
         model: String? = nil,
         effort: String? = nil,
-        fastMode: Bool = false,
+        speed: SessionSpeed = .standard,
         images: [String] = [],
         files: [AttachedFile] = [],
         workspaceId: String? = nil,
@@ -1790,7 +1790,12 @@ enum OS1API {
         if let forkFrom { body["forkFrom"] = forkFrom.wireValue }
         if let model, !model.isEmpty { body["model"] = model }
         if let effort, !effort.isEmpty { body["effort"] = effort }
-        if fastMode { body["fastMode"] = true }
+        // `fastMode` for servers that predate `speed`; a newer one reads
+        // `speed` and ignores the mirror.
+        if speed != .standard {
+            body["fastMode"] = true
+            body["speed"] = speed.rawValue
+        }
         if !images.isEmpty { body["images"] = images }
         let stagedFiles = files.compactMap(\.wireValue)
         if !stagedFiles.isEmpty { body["files"] = stagedFiles }
@@ -1841,6 +1846,30 @@ enum OS1API {
     /// Deliver one message. The reply is the acknowledgement the outbox waits
     /// for; `clientId` makes a retry idempotent, so a reply lost on the way
     /// back can never post the message twice.
+    /// The `POST /api/sessions/:id/prompt` body. `speed` wins on servers
+    /// that know it; `fastMode` is what older ones read. An item queued
+    /// before `speed` existed carries `fastMode` alone, which the server
+    /// applies without downgrading a stored Ultrafast.
+    static func deliverPromptBody(
+        content: String,
+        images: [String],
+        user: String,
+        busyMode: String,
+        effort: String?,
+        fastMode: Bool?,
+        speed: String?,
+        clientId: String
+    ) -> [String: Any] {
+        var body: [String: Any] = ["content": content, "clientId": clientId]
+        if busyMode == "queue" || busyMode == "steer" { body["busy"] = busyMode }
+        if !user.isEmpty { body["user"] = user }
+        if !images.isEmpty { body["images"] = images }
+        if let effort, !effort.isEmpty { body["effort"] = effort }
+        if let fastMode { body["fastMode"] = fastMode }
+        if let speed { body["speed"] = speed }
+        return body
+    }
+
     static func deliverPrompt(
         sessionId: String,
         content: String,
@@ -1849,6 +1878,7 @@ enum OS1API {
         busyMode: String,
         effort: String? = nil,
         fastMode: Bool? = nil,
+        speed: String? = nil,
         clientId: String
     ) async -> PromptDelivery {
         struct DeliverResponse: Decodable, Sendable {
@@ -1873,12 +1903,10 @@ enum OS1API {
         guard normalizedImages.count == images.count else {
             return .rejected("An attached image could not be prepared. Attach it again.")
         }
-        var body: [String: Any] = ["content": content, "clientId": clientId]
-        if busyMode == "queue" || busyMode == "steer" { body["busy"] = busyMode }
-        if !user.isEmpty { body["user"] = user }
-        if !normalizedImages.isEmpty { body["images"] = normalizedImages }
-        if let effort, !effort.isEmpty { body["effort"] = effort }
-        if let fastMode { body["fastMode"] = fastMode }
+        let body = deliverPromptBody(
+            content: content, images: normalizedImages, user: user, busyMode: busyMode,
+            effort: effort, fastMode: fastMode, speed: speed, clientId: clientId
+        )
 
         var request = config.authorizedRequest(url)
         request.httpMethod = "POST"

@@ -47,14 +47,14 @@ final class SessionViewModelTests: XCTestCase {
             socketFactory: { socket }
         )
         viewModel.start(owner: UUID())
-        viewModel.fastMode = true
+        viewModel.speed = .fast
 
         var apiKey = ProviderAccount()
         apiKey.id = "acc-1"
         apiKey.kind = "api_key"
         viewModel.pinAccount(apiKey)
         XCTAssertEqual(viewModel.accountId, "acc-1")
-        XCTAssertFalse(viewModel.fastMode, "an API key cannot carry fast mode")
+        XCTAssertEqual(viewModel.speed, .standard, "an API key cannot carry fast mode")
         XCTAssertEqual(socket.prompts.map(\.content), ["/account acc-1"])
 
         viewModel.pinAccount(apiKey)
@@ -242,7 +242,7 @@ final class SessionViewModelTests: XCTestCase {
         XCTAssertEqual(reopened.queuedCount, 0)
         XCTAssertEqual(reopened.model, "new")
         XCTAssertEqual(reopened.effort, "high")
-        XCTAssertTrue(reopened.fastMode)
+        XCTAssertEqual(reopened.speed, .fast)
     }
 
     /// A client-side action (promoting to code mode) reads as a transcript
@@ -2587,4 +2587,142 @@ private final class MockSocket: SessionSocket {
     func reorderQueued(sessionId: String, order: [String]) { reorders.append(order) }
     func cancelWatchedRun() {}
     func answer(sessionId: String, questionId: String, answers: [String: String]?) {}
+}
+
+/// Speed through the session view model: what the menu picks, what a pin or
+/// model change leaves behind, and what a send (or a replayed one) carries.
+@MainActor
+final class SessionSpeedViewModelTests: XCTestCase {
+    private var socket: MockSocket!
+    private var outbox: Outbox!
+    private var directory: URL!
+    private var deliveries: [Outbox.Item] = []
+
+    override func setUp() async throws {
+        socket = MockSocket()
+        directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("os1-speed-tests-\(UUID().uuidString)", isDirectory: true)
+        outbox = makeOutbox()
+    }
+
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    private func makeOutbox() -> Outbox {
+        let outbox = Outbox(directory: directory, monitorNetwork: false)
+        outbox.transport = { [weak self] item, _ in
+            self?.deliveries.append(item)
+            return .delivered(status: "started", message: "")
+        }
+        return outbox
+    }
+
+    private func viewModel(_ json: String) throws -> SessionViewModel {
+        let session = try JSONDecoder().decode(Session.self, from: Data(json.utf8))
+        let mock = socket!
+        let viewModel = SessionViewModel(session: session, socketFactory: { mock }, outbox: outbox)
+        viewModel.start(owner: UUID())
+        return viewModel
+    }
+
+    private func account(_ id: String, plan: String?) -> ProviderAccount {
+        var account = ProviderAccount()
+        account.id = id
+        account.kind = "home"
+        account.plan = plan
+        return account
+    }
+
+    private func send(_ viewModel: SessionViewModel, _ text: String) async {
+        viewModel.draft = text
+        viewModel.sendDraft()
+        await outbox.flushNow()
+    }
+
+    func testStoredUltrafastRidesEverySendWithTheLegacyMirror() async throws {
+        let vm = try viewModel(#"{"id":"bks-1","fastMode":true,"speed":"ultrafast"}"#)
+        XCTAssertEqual(vm.speed, .ultrafast)
+        await send(vm, "go")
+        XCTAssertEqual(deliveries.map(\.speed), ["ultrafast"])
+        XCTAssertEqual(deliveries.map(\.fastMode), [true])
+    }
+
+    func testUnknownStoredSpeedIsNotOverwrittenBySends() async throws {
+        let vm = try viewModel(#"{"id":"bks-1","fastMode":true,"speed":"warp"}"#)
+        await send(vm, "go")
+        XCTAssertEqual(deliveries.map(\.speed), [nil])
+        XCTAssertEqual(deliveries.map(\.fastMode), [true])
+
+        vm.speed = .standard
+        await send(vm, "slower")
+        XCTAssertEqual(deliveries.last?.speed, "standard", "an explicit pick replaces it")
+        XCTAssertEqual(deliveries.last?.fastMode, false)
+    }
+
+    func testSelectingUltrafastOnAutoPinsTheProMaxLogin() throws {
+        let vm = try viewModel(#"{"id":"bks-1"}"#)
+        var astra = ModelOption(id: "gpt-6-astra")
+        astra.fastModeSupported = true
+        astra.ultrafastSupported = true
+        let choices = SpeedChoices(
+            model: astra,
+            accounts: [account("plus", plan: "plus"), account("max", plan: "promax")],
+            accountId: ""
+        )
+        vm.selectSpeed(.ultrafast, choices: choices)
+        XCTAssertEqual(vm.speed, .ultrafast)
+        XCTAssertEqual(vm.accountId, "max")
+        XCTAssertEqual(socket.prompts.map(\.content), ["/account max"])
+
+        // Already pinned: picking again leaves the pin alone.
+        vm.selectSpeed(.fast, choices: SpeedChoices(model: astra, accounts: [], accountId: "max"))
+        XCTAssertEqual(socket.prompts.count, 1)
+        XCTAssertEqual(vm.speed, .fast)
+    }
+
+    func testPinAndModelChangesDowngradeUltrafast() throws {
+        let vm = try viewModel(#"{"id":"bks-1","model":"gpt-6-astra","speed":"ultrafast","fastMode":true}"#)
+        vm.pinAccount(account("max", plan: "promax"))
+        XCTAssertEqual(vm.speed, .ultrafast, "a Pro $500 pin keeps Ultrafast")
+        vm.pinAccount(account("plus", plan: "plus"))
+        XCTAssertEqual(vm.speed, .fast, "any other login runs at Fast")
+
+        let vm2 = try viewModel(#"{"id":"bks-2","model":"gpt-6-astra","speed":"ultrafast","fastMode":true}"#)
+        var sol = ModelOption(id: "gpt-6-sol")
+        sol.fastModeSupported = true
+        vm2.changeModel(to: "gpt-6-sol", option: sol)
+        XCTAssertEqual(vm2.speed, .fast)
+        vm2.changeModel(to: "claude-x", option: ModelOption(id: "claude-x"))
+        XCTAssertEqual(vm2.speed, .standard)
+    }
+
+    func testServerUpdatesReplaceTheLocalSpeed() throws {
+        let vm = try viewModel(#"{"id":"bks-1","fastMode":true}"#)
+        XCTAssertEqual(vm.speed, .fast)
+        // A live conversation follows its socket; a stopped one takes the row.
+        vm.stop()
+        var updated = vm.session
+        updated.speed = "ultrafast"
+        vm.updateSessionSnapshot(updated)
+        XCTAssertEqual(vm.speed, .ultrafast)
+    }
+
+    /// A message queued by a build from before `speed` replays its
+    /// `fastMode` alone, which the server applies without downgrading a
+    /// stored Ultrafast.
+    func testLegacyQueuedItemReplaysWithoutSpeed() async throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let legacy = """
+        [{"id":"q1","serverKey":"\(Outbox.serverKey())","sessionId":"bks-1","content":"queued earlier",\
+        "imageFiles":[],"fastMode":true,"busyMode":"queue","user":"Alex",\
+        "createdAt":0,"attempts":0,"failed":false}]
+        """
+        try Data(legacy.utf8).write(to: directory.appendingPathComponent("queue.json"))
+        outbox = makeOutbox()
+        XCTAssertEqual(outbox.items.map(\.content), ["queued earlier"])
+        await outbox.flushNow()
+        XCTAssertEqual(deliveries.map(\.speed), [nil])
+        XCTAssertEqual(deliveries.map(\.fastMode), [true])
+    }
 }

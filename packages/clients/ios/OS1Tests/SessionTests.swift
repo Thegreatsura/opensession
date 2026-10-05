@@ -481,7 +481,7 @@ final class SessionTests: XCTestCase {
             mode: "code",
             model: nil,
             effort: nil,
-            fastMode: false,
+            speed: .standard,
             startedBy: "Alice"
         )
 
