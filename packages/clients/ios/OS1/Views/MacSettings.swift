@@ -77,8 +77,10 @@ struct MacSettingsView: View {
     @State private var selection: Pane? = {
         #if DEBUG
         // Screenshot hook, like the iPhone's `OS1_OPEN_SETTINGS`.
-        if ProcessInfo.processInfo.environment["OS1_OPEN_SETTINGS"] == "notifications" {
-            return .notifications
+        switch ProcessInfo.processInfo.environment["OS1_OPEN_SETTINGS"] {
+        case "notifications": return .notifications
+        case "keychain": return .keychain
+        default: break
         }
         #endif
         return .preferences
@@ -151,13 +153,7 @@ struct MacSettingsView: View {
         .onChange(of: selection) { _, pane in
             if pane != .automations { automationId = nil }
         }
-        .onAppear {
-            openPendingAutomation()
-            #if DEBUG
-            // Screenshot hook, the Mac half of the iOS one in SettingsView.
-            if ProcessInfo.processInfo.environment["OS1_OPEN_SETTINGS"] == "keychain" { selection = .keychain }
-            #endif
-        }
+        .onAppear { openPendingAutomation() }
         .onReceive(NotificationCenter.default.publisher(for: .os1OpenAutomationSettings)) { note in
             guard let id = note.object as? String else { return }
             automationId = id
