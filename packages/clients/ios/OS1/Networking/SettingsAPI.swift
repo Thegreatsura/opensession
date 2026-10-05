@@ -207,6 +207,46 @@ enum SettingsAPI {
         )
     }
 
+    // MARK: - Notification inbox
+
+    /// The person's inbox and their alert settings, shared with the web.
+    static func notifications(user: String, connection: Connection? = nil) async throws -> InboxPayload {
+        try await request("/api/notifications", query: ["user": user], connection: connection)
+    }
+
+    @discardableResult
+    static func markNotifications(
+        user: String,
+        mark: InboxMark,
+        connection: Connection? = nil
+    ) async throws -> SettingsOK {
+        var body = mark.body
+        body["user"] = user
+        return try await request(
+            "/api/notifications/mark",
+            method: "POST",
+            body: body,
+            connection: connection
+        )
+    }
+
+    static func saveNotificationAlerts(
+        user: String,
+        patch: [InboxAlerts.Group: Bool],
+        connection: Connection? = nil
+    ) async throws -> InboxAlerts {
+        struct Response: Decodable, Sendable { var alerts: InboxAlerts? }
+        var alerts: [String: Any] = [:]
+        for (group, on) in patch { alerts[group.rawValue] = on }
+        let response: Response = try await request(
+            "/api/notifications/alerts",
+            method: "PUT",
+            body: ["user": user, "alerts": alerts],
+            connection: connection
+        )
+        return response.alerts ?? .defaults
+    }
+
     /// Per-user pinned rows, shared with the web sidebar's Pinned band (row
     /// keys, in the user's own band order). PUT replaces the whole list.
     static func pins(user: String) async throws -> [String] {
