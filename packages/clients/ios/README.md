@@ -209,6 +209,15 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
 - **Agent runs**: the Agents panel reads every workflow a session started and
   updates each run immediately from `workflow_update` socket frames. A 3-second
   poll remains while a run is live for compatibility with older servers.
+- **Action cards** — when the agent needs a person, the session ends with a
+  card: register a keychain credential (the secret goes straight to the
+  keychain over HTTP, never to the agent), answer a keychain ask for a
+  credential you own, or confirm a force merge (only the driver confirms, with
+  a second confirmation; anyone signed in may cancel). Script runs show state,
+  credential call counts, a polled output tail and Stop. `SessionActionCardsModel`
+  owns them per session and re-reads all of them on every handshake. A You
+  should know note offers Learn more, Ask about this (quotes it under the
+  draft), I knew this and Turn off (press twice); Preferences has the toggle.
 - **Changes** — every file the worktree has touched, and the diff of any one of
   them, reached from the overflow menu or the workspace sheet (whose file rows
   open that file directly, and whose "Show all N files" replaces what used to
@@ -282,7 +291,11 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   failing checks, a draft, requested changes — then held for a five-second
   undo window with a countdown before `POST …/pr-merge` goes out; closing the
   panel inside the window takes it back too, see `DeferredMerge`), and
-  **Close pull request** (`POST …/pr-close`). The session overflow menu also
+  **Close pull request** (`POST …/pr-close`). An open draft also gets
+  **Ready for review** (status row and actions menu, `POST …/pr-ready`); each
+  draft related PR row gets its own **Ready** button that sends its repo and
+  branch. `PrReadyTarget` also covers the sessionless
+  `POST /api/pr-preview-ready` route. The session overflow menu also
   exposes squash, merge-commit and rebase merge actions directly, with the same
   warnings and confirmation. PR surfaces can copy the GitHub link or open an
   editable Slack post that appends the link and defaults to the server-selected
@@ -456,7 +469,10 @@ through it, so each keeps its own caching and retry tile.
 A ```mermaid fence in an assistant message renders as a drawn diagram, the same
 way the web client does it — and with the same fallback: source mermaid cannot
 parse keeps its code fence, which is also what an in-flight message looks like
-while it streams.
+while it streams. Like the web, an ER diagram that fails only because an
+attribute is named `pk`/`fk`/`uk` or typed like `Vec<Track>` gets one retry
+with those words backtick-quoted (`MermaidRepair`); the cache key and the code
+fence keep the source as written.
 
 There is no native mermaid. The layout engines (dagre for flowcharts, one per
 diagram type besides) are most of the library, so fidelity means running the
@@ -588,6 +604,8 @@ OS1/
     MermaidSegmenter.swift   Splits ```mermaid fences out of message markdown
     MermaidHostPage.swift    Locates the bundled renderer page
     MermaidRenderer.swift    Offscreen WebKit render + snapshot + cache
+    MermaidRepair.swift      ER attribute quoting for the one parse retry
+    MermaidFixtures.swift    Debug-only diagrams for tests and screenshots
     MermaidDiagramView.swift The diagram row: code fence, then the picture
 ````
 
@@ -604,6 +622,12 @@ OS1/
 - When Settings → Personal → Preferences → Live typing is on, `stream_text`
   deltas render immediately. It defaults off; otherwise each durable part
   appears through `transcript_append`.
+- `credential_registration_request`, `keychain_asks_changed` and
+  `force_merge_request` carry no viewer identity, so they only trigger a
+  re-read of `/api/keychain/registrations`, `/api/keychain/asks` and
+  `/api/force-merge`, which answer with this viewer's permissions. The
+  `*_resolved` frames clear the matching card, and a read that started before
+  a resolution cannot bring it back. `script_runs` replaces the run list.
 - `reply_suggestions` carries a session id and optional `{label,text}` choices.
   A JSON `null` suggestion payload clears the current row; a new stream or send
   clears it locally so stale replies cannot follow the next turn.

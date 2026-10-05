@@ -249,6 +249,56 @@ final class SessionViewModel {
         isLoadingConversation = false
     }
 
+    /// Session action cards with placeholder data. `notice` adds a You
+    /// should know note, opened, with Ask about this already pressed.
+    func showActionCardsForScreenshot(_ variant: String) {
+        holdsScreenshotFixture = true
+        actionCards.installScreenshotFixture(variant)
+        guard variant == "notice" else { return }
+        // After the watch's own snapshot, which would otherwise replace it.
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(6))
+            guard let self else { return }
+            let note = YouShouldKnowNote(
+                title: "You should know \u{00b7} The retry test now waits on the upload queue",
+                explanation: "The fix moved the retry behind the queue drain, so a slow CI runner adds up to 30 seconds to this test instead of failing it."
+            )
+            self.upsert([TranscriptEntry(
+                id: "screenshot-you-should-know",
+                type: "system",
+                content: note.explanation,
+                timestamp: ISO8601DateFormatter().string(from: .now),
+                notice: EntryNotice(
+                    kind: YouShouldKnowNote.kind,
+                    title: "\(note.tag) \u{00b7} \(note.line)",
+                    tone: "info", body: "collapsed", link: nil, ask: nil, icon: nil
+                )
+            )])
+            self.rebuildDisplayItems()
+            self.expansionState(id: "notice-screenshot-you-should-know").toggle()
+            self.draft = "Thanks, one question:"
+            self.appendQuotedDraft(note.chatText)
+        }
+    }
+
+    /// ER diagrams that only draw after `MermaidRepair`, beside ones that
+    /// draw as written, in an ordinary assistant message. Added once the
+    /// transcript snapshot has landed, which would otherwise replace it.
+    func showMermaidFixturesForScreenshot() async {
+        holdsScreenshotFixture = true
+        for _ in 0..<100 where isLoadingConversation {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        try? await Task.sleep(for: .seconds(2))
+        upsert([TranscriptEntry(
+            id: "screenshot-mermaid-repair",
+            type: "assistant",
+            content: MermaidFixtures.transcriptMarkdown,
+            timestamp: ISO8601DateFormatter().string(from: .now)
+        )])
+        rebuildDisplayItems()
+    }
+
     func showSteeredMessageForScreenshot() {
         holdsScreenshotFixture = true
         let id = "screenshot-steered-message"
@@ -316,6 +366,10 @@ final class SessionViewModel {
     private var prTask: Task<Void, Never>?
     private var prLoadGeneration = 0
     private let prLoader: @MainActor (String) async throws -> PrDetails?
+    private let prReadyMarker: @MainActor (PrReadyTarget) async throws -> Void
+    /// PRs with a Ready for review request on the wire. Keyed by target so a
+    /// second tap on the same PR is dropped while another PR can still go.
+    private(set) var readyingPrTargets: Set<SessionPrTarget> = []
     private let slackComposerUndoer: @MainActor (String, String, String) async throws -> Void
     private var notesTask: Task<Void, Never>?
 
@@ -328,6 +382,14 @@ final class SessionViewModel {
     private(set) var workflowLoadFailed = false
     private var workflowEventRevision = 0
     private let workflowLoader: @MainActor (String) async throws -> [WorkflowRun]
+
+    // ── Action cards ──
+    /// Credential, keychain, force-merge and script cards, and You should
+    /// know answers. Its own observable so the cards never invalidate the
+    /// transcript; this view model only feeds it this session's frames.
+    let actionCards: SessionActionCardsModel
+    /// Bumped to put the cursor in the composer (Ask about this).
+    private(set) var composerFocusRequest = 0
 
     // ── Session goal ──
     /// Goal set from this app (`/goal`), used to label the composer menu's
@@ -596,19 +658,25 @@ final class SessionViewModel {
         prLoader: @escaping @MainActor (String) async throws -> PrDetails? = {
             try await OS1API.pr(sessionId: $0)
         },
+        prReadyMarker: @escaping @MainActor (PrReadyTarget) async throws -> Void = {
+            try await OS1API.markPrReady($0)
+        },
         slackComposerUndoer: @escaping @MainActor (String, String, String) async throws -> Void = {
             try await SlackAPI.undoComposer(sessionId: $0, channelId: $1, ts: $2)
         },
         workflowLoader: @escaping @MainActor (String) async throws -> [WorkflowRun] = {
             try await OS1API.workflowRuns(sessionId: $0)
-        }
+        },
+        actionCards: SessionActionCardsModel? = nil
     ) {
+        self.actionCards = actionCards ?? SessionActionCardsModel(sessionId: session.id)
         self.session = session
         self.socketFactory = socketFactory
         self.outbox = outbox
         self.conversationLoadTimeout = conversationLoadTimeout
         self.clock = clock
         self.prLoader = prLoader
+        self.prReadyMarker = prReadyMarker
         self.slackComposerUndoer = slackComposerUndoer
         self.workflowLoader = workflowLoader
         self.isRunning = session.safety == nil && (session.isRunning ?? false)
@@ -756,6 +824,7 @@ final class SessionViewModel {
         stopTyping()
         stopped = true
         replySuggestions = []
+        actionCards.deactivate()
         outbox.stopObserving(sessionId: session.id)
         reconnectTask?.cancel()
         cancelConnectionPresentation()
@@ -939,6 +1008,39 @@ final class SessionViewModel {
     func closePr() async throws {
         try await OS1API.closePr(sessionId: session.id)
         await refreshPr()
+    }
+
+    /// The session's own PR as a target, when it has a branch to name.
+    var primaryPrTarget: SessionPrTarget? {
+        guard let branch = session.branch, !branch.isEmpty else { return nil }
+        return SessionPrTarget(repo: session.effectiveRepo, branch: branch)
+    }
+
+    /// Take one of this session's PRs out of draft. `nil` (or the primary
+    /// target) is the panel's own PR; any other target is an attached-repo or
+    /// series PR and goes out with its repo and branch. Returns false when the
+    /// same PR already has a request in flight. On success only that PR's
+    /// draft state is cleared, and only the panel's own PR is refetched.
+    @discardableResult
+    func markPrReady(_ target: SessionPrTarget? = nil) async throws -> Bool {
+        let primary = primaryPrTarget
+        let resolved = target ?? primary
+        let key = resolved ?? SessionPrTarget(repo: session.effectiveRepo, branch: "")
+        guard readyingPrTargets.insert(key).inserted else { return false }
+        defer { readyingPrTargets.remove(key) }
+
+        let isPrimary = target == nil || target == primary
+        try await prReadyMarker(
+            isPrimary
+                ? .session(id: session.id)
+                : .session(id: session.id, repo: key.repo, branch: key.branch)
+        )
+        if let resolved { session = session.markingPrReady(resolved) }
+        if isPrimary {
+            prDetails?.isDraft = false
+            await refreshPr()
+        }
+        return true
     }
 
     /// Called when the app returns to the foreground. iOS suspends the socket
@@ -1223,6 +1325,17 @@ final class SessionViewModel {
         draft = current.isEmpty ? text : current + "\n" + text
     }
 
+    /// Ask about this on a You should know note: the quote goes under
+    /// whatever is already drafted, never over it, and the cursor follows.
+    func appendQuotedDraft(_ text: String) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let kept = draft.replacingOccurrences(
+            of: "\\s+$", with: "", options: .regularExpression
+        )
+        draft = kept.isEmpty ? text : kept + "\n" + text
+        composerFocusRequest += 1
+    }
+
     private func appendOutboxEcho(_ item: Outbox.Item, images: [String]? = nil) {
         let localId = "local-\(item.id)"
         guard !entries.contains(where: { $0.id == localId }) else { return }
@@ -1377,6 +1490,10 @@ final class SessionViewModel {
     /// own timer; this is the tap, and the only way an error one leaves
     /// before another notice replaces it.
     func dismissNotice() { notice = nil }
+
+    /// A transient line over the composer, for an action taken from a card
+    /// or a transcript row ("You should know is off …").
+    func showNotice(_ message: String) { notice = message }
 
     /// Record something this app just did as a transcript line of its own.
     /// A client-side action gets no entry from the server, so this is a local
@@ -1862,6 +1979,9 @@ final class SessionViewModel {
             if isAway { socket?.setAway(true) }
             // Watch after the handshake frame so the send cannot race the upgrade.
             socket?.watch(sessionId: session.id, resume: transcriptResume)
+            // Cards are announced by broadcast, which a socket that was not
+            // connected at the time never saw: re-read them on every handshake.
+            actionCards.rehydrate()
             // A completed handshake is proof the server is reachable — better
             // evidence than any network path status, so anything waiting out a
             // backoff goes now.
@@ -2252,6 +2372,24 @@ final class SessionViewModel {
 
         case .workflowUpdate(let id, let run) where id == session.id:
             upsertWorkflowRun(run)
+
+        case .credentialRegistrationRequest(let id, let pending) where id == session.id:
+            actionCards.registrationFrame(pending: pending)
+
+        case .credentialRegistrationResolved(let id, let requestId) where id == session.id:
+            actionCards.registrationResolved(requestId: requestId)
+
+        case .keychainAsksChanged(let id) where id == session.id:
+            actionCards.keychainAsksChanged()
+
+        case .forceMergeRequest(let id, let pending) where id == session.id:
+            actionCards.forceMergeFrame(pending: pending)
+
+        case .forceMergeResolved(let id, let requestId) where id == session.id:
+            actionCards.forceMergeResolved(requestId: requestId)
+
+        case .scriptRuns(let id, let runs) where id == session.id:
+            actionCards.scriptRunsFrame(runs)
 
         case .gitPushed(let id, _) where id == session.id:
             loadPr()
