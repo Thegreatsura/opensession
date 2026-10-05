@@ -249,6 +249,38 @@ final class SessionViewModel {
         isLoadingConversation = false
     }
 
+    /// Session action cards with placeholder data. `notice` adds a You
+    /// should know note, opened, with Ask about this already pressed.
+    func showActionCardsForScreenshot(_ variant: String) {
+        holdsScreenshotFixture = true
+        actionCards.installScreenshotFixture(variant)
+        guard variant == "notice" else { return }
+        // After the watch's own snapshot, which would otherwise replace it.
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(6))
+            guard let self else { return }
+            let note = YouShouldKnowNote(
+                title: "You should know \u{00b7} The retry test now waits on the upload queue",
+                explanation: "The fix moved the retry behind the queue drain, so a slow CI runner adds up to 30 seconds to this test instead of failing it."
+            )
+            self.upsert([TranscriptEntry(
+                id: "screenshot-you-should-know",
+                type: "system",
+                content: note.explanation,
+                timestamp: ISO8601DateFormatter().string(from: .now),
+                notice: EntryNotice(
+                    kind: YouShouldKnowNote.kind,
+                    title: "\(note.tag) \u{00b7} \(note.line)",
+                    tone: "info", body: "collapsed", link: nil, ask: nil, icon: nil
+                )
+            )])
+            self.rebuildDisplayItems()
+            self.expansionState(id: "notice-screenshot-you-should-know").toggle()
+            self.draft = "Thanks, one question:"
+            self.appendQuotedDraft(note.chatText)
+        }
+    }
+
     func showSteeredMessageForScreenshot() {
         holdsScreenshotFixture = true
         let id = "screenshot-steered-message"
@@ -328,6 +360,14 @@ final class SessionViewModel {
     private(set) var workflowLoadFailed = false
     private var workflowEventRevision = 0
     private let workflowLoader: @MainActor (String) async throws -> [WorkflowRun]
+
+    // ── Action cards ──
+    /// Credential, keychain, force-merge and script cards, and You should
+    /// know answers. Its own observable so the cards never invalidate the
+    /// transcript; this view model only feeds it this session's frames.
+    let actionCards: SessionActionCardsModel
+    /// Bumped to put the cursor in the composer (Ask about this).
+    private(set) var composerFocusRequest = 0
 
     // ── Session goal ──
     /// Goal set from this app (`/goal`), used to label the composer menu's
@@ -601,8 +641,10 @@ final class SessionViewModel {
         },
         workflowLoader: @escaping @MainActor (String) async throws -> [WorkflowRun] = {
             try await OS1API.workflowRuns(sessionId: $0)
-        }
+        },
+        actionCards: SessionActionCardsModel? = nil
     ) {
+        self.actionCards = actionCards ?? SessionActionCardsModel(sessionId: session.id)
         self.session = session
         self.socketFactory = socketFactory
         self.outbox = outbox
@@ -756,6 +798,7 @@ final class SessionViewModel {
         stopTyping()
         stopped = true
         replySuggestions = []
+        actionCards.deactivate()
         outbox.stopObserving(sessionId: session.id)
         reconnectTask?.cancel()
         cancelConnectionPresentation()
@@ -1223,6 +1266,17 @@ final class SessionViewModel {
         draft = current.isEmpty ? text : current + "\n" + text
     }
 
+    /// Ask about this on a You should know note: the quote goes under
+    /// whatever is already drafted, never over it, and the cursor follows.
+    func appendQuotedDraft(_ text: String) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let kept = draft.replacingOccurrences(
+            of: "\\s+$", with: "", options: .regularExpression
+        )
+        draft = kept.isEmpty ? text : kept + "\n" + text
+        composerFocusRequest += 1
+    }
+
     private func appendOutboxEcho(_ item: Outbox.Item, images: [String]? = nil) {
         let localId = "local-\(item.id)"
         guard !entries.contains(where: { $0.id == localId }) else { return }
@@ -1377,6 +1431,10 @@ final class SessionViewModel {
     /// own timer; this is the tap, and the only way an error one leaves
     /// before another notice replaces it.
     func dismissNotice() { notice = nil }
+
+    /// A transient line over the composer, for an action taken from a card
+    /// or a transcript row ("You should know is off …").
+    func showNotice(_ message: String) { notice = message }
 
     /// Record something this app just did as a transcript line of its own.
     /// A client-side action gets no entry from the server, so this is a local
@@ -1862,6 +1920,9 @@ final class SessionViewModel {
             if isAway { socket?.setAway(true) }
             // Watch after the handshake frame so the send cannot race the upgrade.
             socket?.watch(sessionId: session.id, resume: transcriptResume)
+            // Cards are announced by broadcast, which a socket that was not
+            // connected at the time never saw: re-read them on every handshake.
+            actionCards.rehydrate()
             // A completed handshake is proof the server is reachable — better
             // evidence than any network path status, so anything waiting out a
             // backoff goes now.
@@ -2252,6 +2313,24 @@ final class SessionViewModel {
 
         case .workflowUpdate(let id, let run) where id == session.id:
             upsertWorkflowRun(run)
+
+        case .credentialRegistrationRequest(let id, let pending) where id == session.id:
+            actionCards.registrationFrame(pending: pending)
+
+        case .credentialRegistrationResolved(let id, let requestId) where id == session.id:
+            actionCards.registrationResolved(requestId: requestId)
+
+        case .keychainAsksChanged(let id) where id == session.id:
+            actionCards.keychainAsksChanged()
+
+        case .forceMergeRequest(let id, let pending) where id == session.id:
+            actionCards.forceMergeFrame(pending: pending)
+
+        case .forceMergeResolved(let id, let requestId) where id == session.id:
+            actionCards.forceMergeResolved(requestId: requestId)
+
+        case .scriptRuns(let id, let runs) where id == session.id:
+            actionCards.scriptRunsFrame(runs)
 
         case .gitPushed(let id, _) where id == session.id:
             loadPr()

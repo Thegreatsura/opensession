@@ -370,6 +370,7 @@ struct PreferencesSettingsView: View {
                 Text("Talk to your Desk with a live voice call. Uses the server's OpenAI key.")
             }
             PersonalOutputStyleSection()
+            YouShouldKnowSection()
             PersonalPromptSection()
         }
         .navigationTitle("Preferences")
@@ -1310,6 +1311,58 @@ struct PersonalOutputStyleSection: View {
             self.error = error.localizedDescription
         }
         loading = false
+    }
+}
+
+/// The You should know side agent, per person and server-backed: it runs on
+/// the server during a turn, so the choice has to be readable there. On by
+/// default; a note's Turn off lands here too.
+struct YouShouldKnowSection: View {
+    @State private var enabled: Bool?
+    @State private var saving = false
+    @State private var error: String?
+
+    private let user = ServerConfig.shared.userName
+
+    var body: some View {
+        Section {
+            Toggle("You should know", isOn: Binding(
+                get: { enabled ?? false },
+                set: { save($0) }
+            ))
+            .disabled(enabled == nil || saving)
+            if let error {
+                Text(error).foregroundStyle(.red)
+            }
+        } footer: {
+            Text("A side agent flags important things you might miss during long turns. On by default.")
+        }
+        .task { await load() }
+    }
+
+    private func load() async {
+        do {
+            enabled = try await SessionActionsAPI.youShouldKnow(user: user)
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func save(_ next: Bool) {
+        let previous = enabled ?? false
+        enabled = next
+        saving = true
+        error = nil
+        Task {
+            do {
+                enabled = try await SessionActionsAPI.setYouShouldKnow(user: user, enabled: next)
+            } catch {
+                enabled = previous
+                self.error = error.localizedDescription
+            }
+            saving = false
+        }
     }
 }
 
