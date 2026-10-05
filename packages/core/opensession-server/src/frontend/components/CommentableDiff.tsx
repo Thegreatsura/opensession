@@ -698,7 +698,23 @@ export function CommentableDiff({ patch, options }: Props) {
               stickyFileHeaders
                 ? STICKY_FILE_HEADER_SURFACE
                 : "w-auto rounded-none bg-[var(--review-file-header-bg)] hover:bg-[var(--review-file-header-hover)]",
+              !isEditing && "cursor-pointer",
             )}
+            // The whole row toggles the file, not just the chevron and name.
+            // The toggle button stays the keyboard and accessibility target;
+            // clicks on the row's own controls keep their own meaning.
+            onClick={(event) => {
+              if (isEditing) return;
+              if (
+                event.target instanceof Element &&
+                event.target.closest(
+                  "button, a, input, label, textarea, [role=menuitem], [role=checkbox]",
+                )
+              )
+                return;
+              disarm();
+              toggle(file.name);
+            }}
           >
             <button
               type="button"
