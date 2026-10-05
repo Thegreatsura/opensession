@@ -3049,6 +3049,7 @@ async function runSessionPromptInner(
       content,
       user,
       sessionRepoIds(session),
+      session.id,
     );
     if (memoryContext) prompt = `${memoryContext}\n\n${prompt}`;
   }

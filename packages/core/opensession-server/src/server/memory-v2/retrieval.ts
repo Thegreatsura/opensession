@@ -428,7 +428,8 @@ export function rankMemoryRecords<T extends RetrievalRecord>(
 
 function renderRetrievedLine(item: RankedMemoryRecord): string {
   const { record } = item;
-  return `- [${record.id}] (${record.scopeKey} · ${record.kind}) ${record.summary.trim()}`;
+  const path = (record as RetrievalRecord & { path?: string }).path;
+  return `- [${record.id}] (${record.scopeKey} · ${record.kind}${path ? ` · ${path}` : ""}) ${record.summary.trim()}`;
 }
 
 /** Select and render at most six relevant summaries within 4,000 UTF-8 bytes. */

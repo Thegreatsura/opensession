@@ -42,6 +42,9 @@ export interface MemoryRecordDto {
   scopeKey?: string;
   createdAt?: string;
   updatedAt?: string;
+  /** Repo mode: the file that holds the entry, and its repository. */
+  path?: string;
+  repo?: string;
 }
 
 export interface MemoryScopeV2Dto extends Omit<MemoryScopeDto, "entries"> {
@@ -49,7 +52,7 @@ export interface MemoryScopeV2Dto extends Omit<MemoryScopeDto, "entries"> {
 }
 
 export interface MemoryV2Stats {
-  mode?: "legacy" | "v2";
+  mode?: "legacy" | "v2" | "repo";
   ambientBudgetBytes?: number;
   retrievalBudgetBytes?: number;
   ambientUsedBytes?: number;

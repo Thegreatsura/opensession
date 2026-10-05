@@ -202,8 +202,12 @@ export const MCP_SERVER_CATALOG: McpServerCatalogEntry[] = [
     name: "opensession-search",
     summary: INTERNAL_MCP_CAPABILITIES["opensession-search"].summary,
     source: "packages/core/opensession-server/src/agents/slack/search-tools.ts",
-    wiring: ["packages/core/opensession-server/src/server/interactive-mcp.ts"],
-    runClasses: ["interactive"],
+    wiring: [
+      "packages/core/opensession-server/src/server/interactive-mcp.ts",
+      "packages/core/opensession-server/src/server/automations.ts",
+    ],
+    runClasses: ["interactive", "automation"],
+    note: "Automation runs get it only as a memory Dreaming run, to review past sessions.",
     build: () => createSearchMcpServer(),
   },
   {
@@ -286,12 +290,19 @@ export const MCP_SERVER_CATALOG: McpServerCatalogEntry[] = [
     name: "opensession-memory",
     summary: INTERNAL_MCP_CAPABILITIES["opensession-memory"].summary,
     source: "packages/core/opensession-server/src/agents/slack/memory-tools.ts",
-    wiring: ["packages/core/opensession-server/src/server/interactive-mcp.ts"],
-    runClasses: ["interactive"],
+    wiring: [
+      "packages/core/opensession-server/src/server/interactive-mcp.ts",
+      "packages/core/opensession-server/src/server/automations.ts",
+    ],
+    runClasses: ["interactive", "automation"],
     condition: "Needs a session id.",
-    note: "Write tools are interactive-only; automation runs get read-only memory injected into their prompt instead.",
+    note: "Memory lives in git repositories (docs/memory-repos.md). Sessions with a local checkout edit and push it and get only search_memory; automations, Sandbox and Runner sessions also get the file tools, which commit on the server.",
     build: () =>
-      createMemoryMcpServer({ user: USER, repos: () => ["example"] }),
+      createMemoryMcpServer({
+        user: USER,
+        repos: () => ["example"],
+        fileTools: () => true,
+      }),
   },
   {
     name: "opensession-web",

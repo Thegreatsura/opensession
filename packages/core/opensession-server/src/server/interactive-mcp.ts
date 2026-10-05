@@ -74,9 +74,12 @@ import {
   checkPrMergeReadiness,
   linkPr,
   resolveSessionRepoContext,
+  presentMemoryRepos,
   sessionRepoIds,
+  sessionWorkspaceIsRemote,
   switchPrimaryRepo,
 } from "./session-repos";
+import { sessionLink } from "./run-instructions";
 import { makeAskHandler } from "./asks";
 import { forceMergeForSession } from "./force-merge-session";
 import { createScheduleMcpServer } from "./schedule-mcp";
@@ -311,6 +314,12 @@ export function interactiveMcpServers(
                 const s = findSession(sessionId);
                 return s ? sessionRepoIds(s) : [];
               },
+              fileTools: () => {
+                const s = findSession(sessionId);
+                return !s || sessionWorkspaceIsRemote(s);
+              },
+              presentRepos: () => presentMemoryRepos(sessionId),
+              sessionLink: sessionLink(sessionId),
             }),
           // Read the web: fetch a URL as text, search what was fetched,
           // clone a GitHub repo instead of scraping it. Deliberately no

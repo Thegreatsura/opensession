@@ -13,7 +13,9 @@ import {
   type MemoryFilters,
   type MemoryRecord,
   type MemoryState,
+  v2IsRecord,
 } from "../memory-v2";
+import { handleRepoMemoryRoutes } from "./memory-repo";
 import {
   addSessionMemory,
   archiveMemories,
@@ -124,7 +126,9 @@ export async function handleMemoryRoutes(
 ): Promise<Response | undefined> {
   const { req, url, path } = ctx;
   if (!path.startsWith("/api/memory")) return undefined;
-  if (memoryRolloutMode() !== "v2") return handleLegacyMemoryRoutes(ctx);
+  const mode = memoryRolloutMode();
+  if (mode === "repo") return handleRepoMemoryRoutes(ctx, canAccessMemoryScope);
+  if (!v2IsRecord(mode)) return handleLegacyMemoryRoutes(ctx);
 
   try {
     const { store } = await ensureMemoryV2Ready();

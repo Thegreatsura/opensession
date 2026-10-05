@@ -35,6 +35,8 @@ export interface MemorySource {
   repoPath?: string;
   actor?: string;
   channelId?: string;
+  /** Link to the session where the memory was learned (memory repo `source:`). */
+  url?: string;
 }
 
 export interface MemoryRecord {
@@ -56,6 +58,8 @@ export interface MemoryRecord {
   tags: string[];
   retrievalCount: number;
   lastRetrievedAt?: string;
+  /** File that holds the entry, when memory lives in a memory repository. */
+  path?: string;
 }
 
 export interface CreateMemoryInput {

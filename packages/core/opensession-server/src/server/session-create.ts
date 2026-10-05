@@ -1775,6 +1775,7 @@ export async function openCreatedSession(
         spec.openingPrompt,
         spec.user,
         [...spec.memoryRepoIds, ...attachedRepoIds],
+        bksId,
       );
       const openingPromptForRun = retrievedMemory
         ? `${retrievedMemory}\n\n${spec.openingPrompt}`
@@ -1891,7 +1892,12 @@ export async function openCreatedSession(
                       existingBranch: spec.worktreeKind === "existing",
                       pstackMode,
                     }),
-                    await memoryNoteFor(spec.user, spec.memoryRepoIds),
+                    await memoryNoteFor(
+                      spec.user,
+                      spec.memoryRepoIds,
+                      bksId,
+                      true,
+                    ),
                   ]
                     .filter(Boolean)
                     .join("\n\n") || undefined,
@@ -1986,10 +1992,14 @@ export async function openCreatedSession(
                   existingBranch: spec.worktreeKind === "existing",
                   pstackMode,
                 }),
-            await memoryNoteFor(spec.user, [
-              ...spec.memoryRepoIds,
-              ...attachedRepoIds,
-            ]),
+            await memoryNoteFor(
+              spec.user,
+              [...spec.memoryRepoIds, ...attachedRepoIds],
+              bksId,
+              !!spec.sandboxProvider ||
+                !!sandboxOpeningRun ||
+                !!runnerOpeningRun,
+            ),
           ]
             .filter(Boolean)
             .join("\n\n") || undefined;

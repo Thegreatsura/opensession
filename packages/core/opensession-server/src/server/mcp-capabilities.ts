@@ -86,7 +86,7 @@ export const INTERNAL_MCP_CAPABILITIES = {
     summary:
       "Durable repo / user / team memory, shared with Slack channel memory.",
     guidance:
-      "Search or manage durable repo, user, and team facts. Store only information worth carrying into future sessions, especially when the user says to remember it.",
+      "Search repo, user, and team memory. Memory is git repositories of Markdown: to remember, edit the memory checkout and push, or use the file tools without a checkout. Store only what future sessions need, especially when asked to remember it.",
   },
   "opensession-web": {
     summary:

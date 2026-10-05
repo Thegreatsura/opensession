@@ -163,8 +163,32 @@ export async function addMemory(
   by: string,
 ): Promise<MemoryEntry> {
   const { writable } = resolveScopes(ctx);
-  const { memoryRolloutMode } = await import("../../server/memory-v2/runtime");
-  if (memoryRolloutMode() === "v2") {
+  const { memoryRolloutMode, v2IsRecord } =
+    await import("../../server/memory-v2/runtime");
+  if (memoryRolloutMode() === "repo") {
+    const { memoryRepo } = await import("../../server/memory-repo/client");
+    const { legacySummary } = await import("../../server/memory-v2");
+    const summary = legacySummary(text);
+    const record = await memoryRepo.service(
+      "addEntry",
+      {
+        scopeKey: writable,
+        text: summary,
+        details: summary === text.trim() ? undefined : text,
+        via: "slack",
+        by: by || undefined,
+        tags: ["slack"],
+      },
+      by ? { name: by } : undefined,
+    );
+    return {
+      id: record.id,
+      text: record.summary,
+      by: by || "someone",
+      at: record.createdAt,
+    };
+  }
+  if (v2IsRecord(memoryRolloutMode())) {
     const { ensureMemoryV2Ready, legacySummary } =
       await import("../../server/memory-v2");
     const { store } = await ensureMemoryV2Ready();
@@ -208,8 +232,29 @@ export interface MemoryView {
 
 export async function listMemory(ctx: MemoryContext): Promise<MemoryView> {
   const { writable, sharedReadonly } = resolveScopes(ctx);
-  const { memoryRolloutMode } = await import("../../server/memory-v2/runtime");
-  if (memoryRolloutMode() === "v2") {
+  const { memoryRolloutMode, v2IsRecord } =
+    await import("../../server/memory-v2/runtime");
+  if (memoryRolloutMode() === "repo") {
+    const { memoryRepo } = await import("../../server/memory-repo/client");
+    const { reposForScopes } = await import("../../server/memory-repo/layout");
+    const keys = [writable, ...(sharedReadonly ? [sharedReadonly] : [])];
+    await memoryRepo.service("fresh", reposForScopes(keys));
+    const read = async (scopeKey: string): Promise<MemoryEntry[]> =>
+      (await memoryRepo.index("all", [scopeKey], ["active"]))
+        .slice(-50)
+        .map((record) => ({
+          id: record.id,
+          text: record.summary,
+          by: record.source.actor || record.source.type,
+          at: record.createdAt,
+        }));
+    return {
+      local: await read(writable),
+      shared: sharedReadonly ? await read(sharedReadonly) : [],
+      localIsWorkspace: writable === "workspace",
+    };
+  }
+  if (v2IsRecord(memoryRolloutMode())) {
     const { ensureMemoryV2Ready } = await import("../../server/memory-v2");
     const { store } = await ensureMemoryV2Ready();
     const read = (scopeKey: string): MemoryEntry[] => {
@@ -257,8 +302,36 @@ export async function forgetMemory(
   id: string,
 ): Promise<ForgetResult> {
   const { writable, sharedReadonly } = resolveScopes(ctx);
-  const { memoryRolloutMode } = await import("../../server/memory-v2/runtime");
-  if (memoryRolloutMode() === "v2") {
+  const { memoryRolloutMode, v2IsRecord } =
+    await import("../../server/memory-v2/runtime");
+  if (memoryRolloutMode() === "repo") {
+    const { memoryRepo } = await import("../../server/memory-repo/client");
+    const record = await memoryRepo.index("get", id);
+    if (!record || record.scopeKey !== writable) {
+      if (record && sharedReadonly && record.scopeKey === sharedReadonly) {
+        return {
+          ok: false,
+          error:
+            "That entry is workspace memory and is read-only here. Change it from a public channel or Memory settings.",
+        };
+      }
+      return {
+        ok: false,
+        error: `No memory entry with id "${id}" in this scope.`,
+      };
+    }
+    await memoryRepo.service("removeEntries", [id], undefined, "Forget");
+    return {
+      ok: true,
+      removed: {
+        id: record.id,
+        text: record.summary,
+        by: record.source.actor || record.source.type,
+        at: record.createdAt,
+      },
+    };
+  }
+  if (v2IsRecord(memoryRolloutMode())) {
     const { ensureMemoryV2Ready } = await import("../../server/memory-v2");
     const { store } = await ensureMemoryV2Ready();
     const record = store.get(id);
@@ -316,9 +389,21 @@ export async function renderMemoryForPrompt(
   ctx: MemoryContext,
   query = "",
 ): Promise<string> {
-  const { memoryRolloutMode } = await import("../../server/memory-v2/runtime");
+  const { memoryRolloutMode, v2IsRecord } =
+    await import("../../server/memory-v2/runtime");
   const mode = memoryRolloutMode();
-  if (mode === "v2") {
+  if (mode === "repo") {
+    const { writable, sharedReadonly } = resolveScopes(ctx);
+    const { retrieveRepoMemoryForPrompt } =
+      await import("../../server/memory-repo/session");
+    return (
+      await retrieveRepoMemoryForPrompt(query, [
+        writable,
+        ...(sharedReadonly ? [sharedReadonly] : []),
+      ])
+    ).text;
+  }
+  if (v2IsRecord(mode)) {
     const { writable, sharedReadonly } = resolveScopes(ctx);
     const { retrieveMemoryForPrompt } = await import("../../server/memory-v2");
     return (

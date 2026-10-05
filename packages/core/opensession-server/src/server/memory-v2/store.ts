@@ -66,6 +66,7 @@ interface RecordRow {
   tags_json: string;
   retrieval_count: number;
   last_retrieved_at: string | null;
+  path?: string | null;
 }
 
 /**
@@ -136,6 +137,9 @@ export class MemoryStore {
       this.db.exec(
         "ALTER TABLE memory_legacy_imports ADD COLUMN raw_json TEXT;",
       );
+    } catch {}
+    try {
+      this.db.exec("ALTER TABLE memory_records ADD COLUMN path TEXT;");
     } catch {}
     try {
       this.db.exec(
@@ -739,6 +743,95 @@ export class MemoryStore {
     return this.require(id);
   }
 
+  /**
+   * Replace every record in `scopeKeys` with `records`, the derived index of
+   * one memory repository at one commit. Retrieval counters survive by id.
+   * A record that disappeared from the repository stays as `archived` (or
+   * keeps its retired state) so Settings can still show and restore it.
+   * Callers pass records that already satisfy the row constraints.
+   */
+  syncScopes(
+    scopeKeys: string[],
+    records: MemoryRecord[],
+    now = new Date(),
+  ): { active: number; archived: number } {
+    const keys = uniqueStrings([
+      ...scopeKeys,
+      ...records.map((record) => record.scopeKey),
+    ]);
+    if (!keys.length) return { active: 0, archived: 0 };
+    const placeholders = keys.map(() => "?").join(",");
+    const tx = this.db.transaction(() => {
+      const existing = (
+        this.db
+          .query(
+            `SELECT * FROM memory_records WHERE scope_key IN (${placeholders})`,
+          )
+          .all(...keys) as RecordRow[]
+      ).map(fromRow);
+      const previous = new Map(existing.map((record) => [record.id, record]));
+      for (const record of existing) {
+        this.db.run("DELETE FROM memory_fts WHERE id = ?", [record.id]);
+      }
+      this.db.run(
+        `DELETE FROM memory_records WHERE scope_key IN (${placeholders})`,
+        keys,
+      );
+      const present = new Set<string>();
+      const fingerprints = new Set<string>();
+      let active = 0;
+      for (const record of records) {
+        const fpKey = `${record.scopeKey}\0${record.fingerprint}`;
+        if (present.has(record.id) || fingerprints.has(fpKey)) continue;
+        // Another scope may already hold this id (an entry moved between
+        // repositories); the newest index wins.
+        this.db.run("DELETE FROM memory_fts WHERE id = ?", [record.id]);
+        this.db.run("DELETE FROM memory_records WHERE id = ?", [record.id]);
+        const before = previous.get(record.id);
+        this.insertPreparedUnsafe({
+          ...record,
+          retrievalCount: before?.retrievalCount ?? record.retrievalCount ?? 0,
+          lastRetrievedAt: before?.lastRetrievedAt ?? record.lastRetrievedAt,
+        });
+        present.add(record.id);
+        fingerprints.add(fpKey);
+        if (record.state === "active") active++;
+      }
+      let archived = 0;
+      for (const record of existing) {
+        if (present.has(record.id)) continue;
+        if (!keys.includes(record.scopeKey)) continue;
+        const fpKey = `${record.scopeKey}\0${record.fingerprint}`;
+        if (fingerprints.has(fpKey)) continue;
+        const retired =
+          record.state === "active" || record.state === "expired"
+            ? {
+                ...record,
+                state: "archived" as MemoryState,
+                updatedAt: now.toISOString(),
+              }
+            : record;
+        this.insertPreparedUnsafe(retired);
+        fingerprints.add(fpKey);
+        archived++;
+      }
+      return { active, archived };
+    });
+    return tx.immediate();
+  }
+
+  /** Every record in the given scopes and states, unpaged. */
+  all(scopeKeys: string[], states: MemoryState[] = ["active"]): MemoryRecord[] {
+    if (!scopeKeys.length || !states.length) return [];
+    const rows = this.db
+      .query(
+        `SELECT * FROM memory_records WHERE scope_key IN (${scopeKeys.map(() => "?").join(",")})
+         AND state IN (${states.map(() => "?").join(",")}) ORDER BY created_at, id`,
+      )
+      .all(...scopeKeys, ...states) as RecordRow[];
+    return rows.map(fromRow);
+  }
+
   close(): void {
     this.db.close();
   }
@@ -787,8 +880,8 @@ export class MemoryStore {
       `INSERT INTO memory_records
        (id, scope_key, summary, details, kind, tier, state, source_json, created_at, updated_at,
         last_confirmed_at, expires_at, supersedes_json, superseded_by, fingerprint, tags_json,
-        retrieval_count, last_retrieved_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        retrieval_count, last_retrieved_at, path)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         record.id,
         record.scopeKey,
@@ -808,6 +901,7 @@ export class MemoryStore {
         JSON.stringify(record.tags),
         record.retrievalCount,
         record.lastRetrievedAt ?? null,
+        record.path ?? null,
       ],
     );
     this.syncFts(record.id, record.summary, record.details, record.tags);
@@ -1036,6 +1130,7 @@ function fromRow(row: RecordRow): MemoryRecord {
     tags: JSON.parse(row.tags_json) as string[],
     retrievalCount: Number(row.retrieval_count),
     lastRetrievedAt: row.last_retrieved_at ?? undefined,
+    ...(row.path ? { path: row.path } : {}),
   };
 }
 

@@ -522,6 +522,31 @@ The tripwire is not the boundary. A term list only catches the terms it knows,
 and text that reaches a file before being committed is not scanned. The
 prompt rule and reviewers remain responsible for everything else.
 
+## Memory repositories
+
+Memory lives in git repositories (see [Memory repositories](memory-repos.md)).
+The trust rules follow from who can see each repository, not from per-write
+privileges:
+
+- A session gets checkouts only of the repositories its participants can see:
+  the team repository, the prompting person's repository and repositories of
+  other participants already present. A private Slack channel's repository is
+  only reachable from that channel. Settings and `/api/memory` apply the same
+  visibility per request.
+- Any session, automation or workflow run may write memory. There is no
+  per-run cap and no team-write privilege. The receive hook is the guard: it
+  refuses non-fast-forward pushes, deletions, binaries, executables, oversized
+  files, malformed lines and text that looks like a credential. Every commit
+  records the session that pushed it and can be reverted from Settings.
+- Unattended runs (automations, Sandbox and Runner sessions) write through the
+  `opensession-memory` file tools, which commit on the server. Their paths are
+  confined to the repositories the run can see.
+- A remote is refused when it is a public GitHub repository, checked when it is
+  set and before every sync, so memory does not cross into a public
+  repository. Sync never force-pushes.
+- Erasure of leaked content is a manual operator procedure that rewrites
+  history. Agents never rewrite memory history.
+
 ## GitHub credential scoping (out-of-org writes fail server-side)
 
 The "repositories outside your org require confirmation" rule in AGENTS.md is

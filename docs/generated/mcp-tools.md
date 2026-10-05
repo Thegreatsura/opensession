@@ -44,13 +44,13 @@ touches an in-process tool:
 | [`opensession-admin`](#opensession-admin) | 14 | interactive, Slack loop | – |
 | [`opensession-runners`](#opensession-runners) | 5 | interactive | – |
 | [`opensession-goals`](#opensession-goals) | 8 | interactive | – |
-| [`opensession-search`](#opensession-search) | 2 | interactive | – |
+| [`opensession-search`](#opensession-search) | 2 | interactive, automation | – |
 | [`opensession-self-deploy`](#opensession-self-deploy) | 2 | interactive | Withheld from dev instances (isDevInstance()) — the script targets the production service and state. |
 | [`opensession-humans`](#opensession-humans) | 3 | interactive, Slack loop, goal wake | Interactive runs need a session id (the answer routes back to it). |
 | [`opensession-keychain`](#opensession-keychain) | 12 | interactive | Needs a session id. |
 | [`opensession-publish`](#opensession-publish) | 4 | interactive | Needs a session id. |
 | [`opensession-repos`](#opensession-repos) | 7 | interactive | Needs a session id. |
-| [`opensession-memory`](#opensession-memory) | 9 | interactive | Needs a session id. |
+| [`opensession-memory`](#opensession-memory) | 5 | interactive, automation | Needs a session id. |
 | [`opensession-web`](#opensession-web) | 3 | interactive, goal wake | Needs a session id. |
 | [`opensession-portals`](#opensession-portals) | 9 | interactive | Needs a session id. |
 | [`opensession-desktop`](#opensession-desktop) | 8 | interactive | Needs a sandboxed session. |
@@ -76,7 +76,7 @@ touches an in-process tool:
 | [`opensession-github`](#opensession-github) | 4 | Slack loop | – |
 | [`opensession-goal-self`](#opensession-goal-self) | 6 | goal wake | Only on a session that carries a goalId. |
 
-35 servers, 169 tools.
+35 servers, 165 tools.
 
 ## opensession-sessions
 
@@ -423,8 +423,9 @@ Delete a goal and its ledger. Permanent. The opensession session it created is l
 Search and read the distilled record of past sessions.
 
 - **Source** `packages/core/opensession-server/src/agents/slack/search-tools.ts`
-- **Wired in** `packages/core/opensession-server/src/server/interactive-mcp.ts`
-- **Runs** interactive
+- **Wired in** `packages/core/opensession-server/src/server/interactive-mcp.ts`, `packages/core/opensession-server/src/server/automations.ts`
+- **Runs** interactive, automation
+- **Note** Automation runs get it only as a memory Dreaming run, to review past sessions.
 
 ### `search_history`
 
@@ -656,64 +657,40 @@ Ask the person driving this session to merge a pull request despite failing, pen
 Durable repo / user / team memory, shared with Slack channel memory.
 
 - **Source** `packages/core/opensession-server/src/agents/slack/memory-tools.ts`
-- **Wired in** `packages/core/opensession-server/src/server/interactive-mcp.ts`
-- **Runs** interactive
+- **Wired in** `packages/core/opensession-server/src/server/interactive-mcp.ts`, `packages/core/opensession-server/src/server/automations.ts`
+- **Runs** interactive, automation
 - **Condition** Needs a session id.
-- **Note** Write tools are interactive-only; automation runs get read-only memory injected into their prompt instead.
-
-### `store_memory`
-
-`mcp__opensession-memory__store_memory` · input: `summary` (string, required), `kind` ("preference" | "constraint" | "decision" | "gotcha" | "reference" | "status", required), `scope` ("repo" | "user" | "team", required), `repo` (string), `details` (string), `tags` (string[]), `expiresAt` (string), `supersedes` (string[])
-
-Store one durable, non-obvious fact. The summary is compact and retrieval-only by default; supporting evidence belongs in details. Do not store task progress, completion reports, PR history, incident narration, or facts already documented in the repo. Status requires expiry. Team writes require a separately verified privilege.
+- **Note** Memory lives in git repositories (docs/memory-repos.md). Sessions with a local checkout edit and push it and get only search_memory; automations, Sandbox and Runner sessions also get the file tools, which commit on the server.
 
 ### `search_memory`
 
-`mcp__opensession-memory__search_memory` · input: `query` (string, required), `kind` ("preference" | "constraint" | "decision" | "gotcha" | "reference" | "status"), `scope` ("repo" | "user" | "team"), `state` ("active" | "archived" | "expired" | "superseded"), `cursor` (string), `limit` (integer)
+`mcp__opensession-memory__search_memory` · input: `query` (string, required), `kind` ("preference" | "constraint" | "decision" | "gotcha" | "reference" | "status"), `limit` (integer)
 
-Search this session's memory scopes. Returns compact summaries only; use read_memory for details.
+Ranked search over this run's memory repositories (team, personal, channel). Returns one line per entry with its file path; open the file for context. Use grep in the checkout for exact strings.
 
-### `read_memory`
+### `list_memory_files`
 
-`mcp__opensession-memory__read_memory` · input: `ids` (string[], required)
+`mcp__opensession-memory__list_memory_files` · input: `repo` (string, required)
 
-Read full supporting details for selected memory ids returned by search_memory or list_memory.
+List every file in one memory repository.
 
-### `list_memory`
+### `read_memory_file`
 
-`mcp__opensession-memory__list_memory` · input: `query` (string), `kind` ("preference" | "constraint" | "decision" | "gotcha" | "reference" | "status"), `scope` ("repo" | "user" | "team"), `state` ("active" | "archived" | "expired" | "all"), `review` ("needs_review" | "confirmed" | "all"), `cursor` (string), `limit` (integer)
+`mcp__opensession-memory__read_memory_file` · input: `repo` (string, required), `path` (string, required)
 
-List a bounded page of compact memory summaries. Details are omitted.
+Read one file from a memory repository (latest version).
 
-### `update_memory`
+### `write_memory_file`
 
-`mcp__opensession-memory__update_memory` · input: `id` (string, required), `summary` (string), `kind` ("preference" | "constraint" | "decision" | "gotcha" | "reference" | "status"), `details` (string | null), `tags` (string[]), `expiresAt` (string | null)
+`mcp__opensession-memory__write_memory_file` · input: `repo` (string, required), `path` (string, required), `content` (string, required), `message` (string, required)
 
-Update one memory in place. Keep the summary atomic and put evidence in details.
+Create or replace one file in a memory repository and commit it. Read the file first and send the whole new content. Entries are one bullet per line with `[key: value]` metadata at the end.
 
-### `archive_memory`
+### `delete_memory_file`
 
-`mcp__opensession-memory__archive_memory` · input: `ids` (string[], required)
+`mcp__opensession-memory__delete_memory_file` · input: `repo` (string, required), `path` (string, required), `message` (string, required)
 
-Archive memories without deleting them. Archived records stop appearing in active retrieval.
-
-### `restore_memory`
-
-`mcp__opensession-memory__restore_memory` · input: `ids` (string[], required)
-
-Restore archived memories to active or expired state.
-
-### `confirm_memory`
-
-`mcp__opensession-memory__confirm_memory` · input: `ids` (string[], required)
-
-Confirm that memories remain accurate, refreshing their verification timestamp.
-
-### `forget_memory`
-
-`mcp__opensession-memory__forget_memory` · input: `id` (string, required), `confirm` (boolean, required)
-
-Permanently delete one memory. Prefer archive_memory because deletion cannot be recovered.
+Delete one file from a memory repository and commit. History keeps it.
 
 ## opensession-web
 
