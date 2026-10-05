@@ -145,6 +145,11 @@ final class MermaidRenderer: NSObject {
     /// Runs the page's `render()` and returns the size it laid the diagram out
     /// at, or nil when mermaid refused the source.
     ///
+    /// When mermaid refuses `source`, the page retries once with
+    /// `MermaidRepair`'s version of it, in the same call and under the same
+    /// deadline. Only the drawing changes: the cache key and the code fence
+    /// the view falls back to keep the source as written.
+    ///
     /// The source travels as a JS *argument*, never interpolated into a script
     /// string: it is untrusted transcript text, and escaping it by hand is the
     /// kind of thing that works until a diagram contains a quote.
@@ -155,9 +160,10 @@ final class MermaidRenderer: NSObject {
         background: String
     ) async throws -> CGSize? {
         let result = try await webView.callAsyncJavaScript(
-            "return await render(source, theme, font, bg);",
+            "return await render(source, repaired, theme, font, bg);",
             arguments: [
                 "source": source,
+                "repaired": MermaidRepair.repairedSource(source) ?? NSNull(),
                 "theme": dark ? "dark" : "default",
                 "font": "-apple-system, BlinkMacSystemFont, system-ui, sans-serif",
                 "bg": background,

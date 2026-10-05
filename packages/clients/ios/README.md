@@ -293,7 +293,11 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   failing checks, a draft, requested changes — then held for a five-second
   undo window with a countdown before `POST …/pr-merge` goes out; closing the
   panel inside the window takes it back too, see `DeferredMerge`), and
-  **Close pull request** (`POST …/pr-close`). The session overflow menu also
+  **Close pull request** (`POST …/pr-close`). An open draft also gets
+  **Ready for review** (status row and actions menu, `POST …/pr-ready`); each
+  draft related PR row gets its own **Ready** button that sends its repo and
+  branch. `PrReadyTarget` also covers the sessionless
+  `POST /api/pr-preview-ready` route. The session overflow menu also
   exposes squash, merge-commit and rebase merge actions directly, with the same
   warnings and confirmation. PR surfaces can copy the GitHub link or open an
   editable Slack post that appends the link and defaults to the server-selected
@@ -451,7 +455,10 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
 A ```mermaid fence in an assistant message renders as a drawn diagram, the same
 way the web client does it — and with the same fallback: source mermaid cannot
 parse keeps its code fence, which is also what an in-flight message looks like
-while it streams.
+while it streams. Like the web, an ER diagram that fails only because an
+attribute is named `pk`/`fk`/`uk` or typed like `Vec<Track>` gets one retry
+with those words backtick-quoted (`MermaidRepair`); the cache key and the code
+fence keep the source as written.
 
 There is no native mermaid. The layout engines (dagre for flowcharts, one per
 diagram type besides) are most of the library, so fidelity means running the
@@ -583,6 +590,8 @@ OS1/
     MermaidSegmenter.swift   Splits ```mermaid fences out of message markdown
     MermaidHostPage.swift    Locates the bundled renderer page
     MermaidRenderer.swift    Offscreen WebKit render + snapshot + cache
+    MermaidRepair.swift      ER attribute quoting for the one parse retry
+    MermaidFixtures.swift    Debug-only diagrams for tests and screenshots
     MermaidDiagramView.swift The diagram row: code fence, then the picture
 ````
 

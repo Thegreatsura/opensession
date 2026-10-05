@@ -754,6 +754,14 @@ enum OS1API {
         )
     }
 
+    /// Take a draft PR out of draft. A session target reaches the session's
+    /// primary PR or, with repo and branch, one of its attached-repo PRs; a
+    /// preview target needs no session at all.
+    static func markPrReady(_ target: PrReadyTarget) async throws {
+        struct ReadyResponse: Decodable { let ok: Bool? }
+        let _: ReadyResponse = try await post(target.path, body: target.body)
+    }
+
     /// What the agent can be asked to do with a pull request, from the
     /// workspace's Review section — the same four the web panel offers, and
     /// the same ones the `os-*` PR labels fire.
