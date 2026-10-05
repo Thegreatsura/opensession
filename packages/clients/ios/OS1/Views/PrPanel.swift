@@ -151,6 +151,10 @@ enum SessionPrSeries {
 struct SessionPrSeriesRows: View {
     let session: Session
     var includePrimary = false
+    /// Draft rows get a Ready for review button when this is set. Targets in
+    /// `readying` show a spinner in its place until their request ends.
+    var readying: Set<SessionPrTarget> = []
+    var markReady: ((SessionPrRow) -> Void)? = nil
     let open: (SessionPrRow) -> Void
 
     private var rows: [SessionPrRow] {
@@ -160,44 +164,65 @@ struct SessionPrSeriesRows: View {
     var body: some View {
         ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
             if index > 0 { Divider().padding(.leading, 44) }
-            Button { open(row) } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: row.state == "Merged"
-                        ? "arrow.triangle.merge"
-                        : "arrow.triangle.pull")
-                        .font(.callout.weight(.semibold))
-                        .foregroundStyle(tint(for: row.state))
-                        .frame(width: 22)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(verbatim: row.identityLabel)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(OS1VisualStyle.text)
-                        if let title = row.title, !title.isEmpty {
-                            Text(title)
-                                .font(.caption)
-                                .foregroundStyle(OS1VisualStyle.textDim)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.leading)
-                        }
+            HStack(spacing: 0) {
+                openButton(row)
+                if row.state == "Draft", let markReady {
+                    if readying.contains(row.target) {
+                        ProgressView().controlSize(.small)
+                            .padding(.trailing, 12)
+                            .accessibilityLabel(Text("Marking ready for review"))
+                    } else {
+                        Button("Ready") { markReady(row) }
+                            .font(.caption.weight(.semibold))
+                            .buttonStyle(.borderless)
+                            .padding(.trailing, 12)
+                            .accessibilityLabel(
+                                Text(verbatim: "Ready for review, \(row.identityLabel)")
+                            )
                     }
-                    Spacer(minLength: 8)
-                    Text(row.state)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(tint(for: row.state))
-                        .multilineTextAlignment(.trailing)
-                    Image(systemName: "arrow.up.right")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(OS1VisualStyle.textFaint)
                 }
-                .padding(.horizontal, 12)
-                .frame(minHeight: 52)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(
-                Text(verbatim: "\(row.identityLabel), \(row.state)")
-            )
         }
+    }
+
+    private func openButton(_ row: SessionPrRow) -> some View {
+        Button { open(row) } label: {
+            HStack(spacing: 10) {
+                Image(systemName: row.state == "Merged"
+                    ? "arrow.triangle.merge"
+                    : "arrow.triangle.pull")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(tint(for: row.state))
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verbatim: row.identityLabel)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(OS1VisualStyle.text)
+                    if let title = row.title, !title.isEmpty {
+                        Text(title)
+                            .font(.caption)
+                            .foregroundStyle(OS1VisualStyle.textDim)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                    }
+                }
+                Spacer(minLength: 8)
+                Text(row.state)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(tint(for: row.state))
+                    .multilineTextAlignment(.trailing)
+                Image(systemName: "arrow.up.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(OS1VisualStyle.textFaint)
+            }
+            .padding(.horizontal, 12)
+            .frame(minHeight: 52)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+            Text(verbatim: "\(row.identityLabel), \(row.state)")
+        )
     }
 
     private func tint(for state: String) -> Color {
@@ -256,7 +281,7 @@ struct PrPanelView: View {
 
     enum Chrome { case sheet, pushed }
 
-    enum PrAction { case merge, close }
+    enum PrAction { case merge, close, ready }
 
     /// Overview is the conversation, the way the web's is: the description
     /// and every comment under each other. What the web keeps in the rail
@@ -292,7 +317,7 @@ struct PrPanelView: View {
         // Checks move fast while CI runs; re-fetch on open (server-cached).
         .task {
             await viewModel.refreshPr()
-            #if DEBUG && os(iOS)
+            #if DEBUG
             if ProcessInfo.processInfo.environment["OS1_OPEN_PR_INFO"] == "1" {
                 page = .info
             }
@@ -532,7 +557,11 @@ struct PrPanelView: View {
                 "Related pull requests",
                 answer: Text("\(rows.count)").foregroundColor(OS1VisualStyle.textDim)
             ) {
-                SessionPrSeriesRows(session: viewModel.session) { row in
+                SessionPrSeriesRows(
+                    session: viewModel.session,
+                    readying: viewModel.readyingPrTargets,
+                    markReady: { markReady($0.target) }
+                ) { row in
                     openPrRow(row)
                 }
             }
@@ -597,6 +626,57 @@ struct PrPanelView: View {
         }
     }
 
+    /// An open draft can be taken out of draft from here, the way the web's
+    /// status row offers it. Merging a draft stays allowed, with its warning.
+    private func canMarkReady(_ pr: PrDetails) -> Bool {
+        pr.isOpen && pr.isDraft == true
+    }
+
+    /// The status card's draft row: what it is, and the one way out of it.
+    private var readyRow: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text("Draft")
+                    .font(.subheadline)
+                    .foregroundStyle(OS1VisualStyle.textDim)
+                Spacer(minLength: 8)
+                if busy == .ready {
+                    ProgressView().controlSize(.small)
+                        .accessibilityLabel(Text("Marking ready for review"))
+                } else {
+                    Button("Ready for review") { markReady() }
+                        .font(.subheadline.weight(.semibold))
+                        .buttonStyle(.borderless)
+                        .disabled(busy != nil || deferredMerge.phase != .idle)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            Divider().padding(.leading, 14)
+        }
+    }
+
+    /// Ready for review on the panel's own PR (nil) or one related PR. The
+    /// panel's busy state covers its own PR; a related row shows its own
+    /// spinner from the view model, and the view model drops a repeat tap.
+    private func markReady(_ target: SessionPrTarget? = nil) {
+        let isPanelPr = target == nil || target == viewModel.primaryPrTarget
+        if isPanelPr {
+            run(.ready) { _ = try await viewModel.markPrReady(target) }
+            return
+        }
+        actionError = nil
+        Task {
+            do {
+                _ = try await viewModel.markPrReady(target)
+                Haptics.play(.selection)
+            } catch {
+                actionError = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+            }
+        }
+    }
+
     /// The button that opens the rest of a group, on the card's own last row.
     private func moreRow(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -627,6 +707,7 @@ struct PrPanelView: View {
         ) {
             if let head = pr.headRefName { infoRow("Branch", value: head) }
             if let base = pr.baseRefName { infoRow("Into", value: base) }
+            if canMarkReady(pr) { readyRow }
             if pr.mergeable == "CONFLICTING" {
                 infoRow(
                     "Merge",
@@ -978,6 +1059,14 @@ struct PrPanelView: View {
                     Label("Review", systemImage: "checkmark.bubble")
                 }
                 .disabled(deferredMerge.phase != .idle)
+                if canMarkReady(pr) {
+                    Button {
+                        markReady()
+                    } label: {
+                        Label("Ready for review", systemImage: "eye")
+                    }
+                    .disabled(deferredMerge.phase != .idle)
+                }
                 if deferredMerge.phase == .idle {
                     Menu {
                         Button("Squash and merge") { pendingMerge = "squash" }

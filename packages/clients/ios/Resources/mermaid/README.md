@@ -19,3 +19,8 @@ chunks over the network.
 
 `host.html` is ours — the offscreen page `MermaidRenderer` drives. Both files
 ship as bundle resources for the iOS and macOS targets.
+
+When source does not parse, `host.html` tries it once more with the repaired
+text `MermaidRenderer` passes in (`OS1/Mermaid/MermaidRepair.swift`, a port of
+the ER half of the web's `src/frontend/lib/mermaid-repair.ts`). Keep the two
+in step.
