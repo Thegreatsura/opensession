@@ -218,6 +218,65 @@ enum OS1API {
         let createdBy: String?
         let createdAt: String?
         let draft: WorkspaceDraft?
+        /// Teammates added to the workspace. The server files it into each
+        /// one's sidebar as their own work, the way it files it for its
+        /// creator (`src/server/routes/workspace-collaborators.ts`). Optional
+        /// so a server that predates collaborators still decodes.
+        var collaborators: [WorkspaceCollaborator]? = nil
+
+        func hasCollaborator(_ name: String) -> Bool {
+            let key = name.trimmingCharacters(in: .whitespaces).lowercased()
+            return !key.isEmpty && (collaborators ?? []).contains {
+                $0.name.trimmingCharacters(in: .whitespaces).lowercased() == key
+            }
+        }
+    }
+
+    struct WorkspaceCollaborator: Decodable, Equatable, Sendable {
+        let name: String
+        let by: String?
+        let at: String?
+    }
+
+    private struct CollaboratorResponse: Decodable, Sendable {
+        let workspace: WorkspaceSummary?
+    }
+
+    /// Add a teammate to a workspace. `sessionId` is where they get their
+    /// one-time mention badge. Adding someone already listed is a no-op
+    /// server-side, so a double tap never notifies twice.
+    static func addCollaborator(
+        workspaceId: String,
+        name: String,
+        sessionId: String?
+    ) async throws -> WorkspaceSummary? {
+        var body: [String: Any] = ["name": name, "user": ServerConfig.shared.userName]
+        if let sessionId, !sessionId.isEmpty { body["sessionId"] = sessionId }
+        let response: CollaboratorResponse = try await post(
+            "/api/workspaces/\(pathComponent(workspaceId))/collaborators",
+            body: body
+        )
+        return response.workspace
+    }
+
+    static func removeCollaborator(
+        workspaceId: String,
+        name: String
+    ) async throws -> WorkspaceSummary? {
+        let response: CollaboratorResponse = try await mutate(
+            "/api/workspaces/\(pathComponent(workspaceId))/collaborators/\(pathComponent(name))",
+            method: "DELETE",
+            body: [:]
+        )
+        return response.workspace
+    }
+
+    /// One percent-encoded path segment: a slash or space in an id or a name
+    /// must not split the route.
+    nonisolated static func pathComponent(_ value: String) -> String {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "/?#")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
     }
 
     /// Canonical workspace names for collapsing sibling sessions into one row.

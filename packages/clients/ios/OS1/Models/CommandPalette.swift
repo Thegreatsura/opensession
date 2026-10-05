@@ -15,6 +15,10 @@ struct CommandPaletteEntry: Identifiable, Equatable, Sendable {
         /// Somewhere the app goes. Ranked by how well it matched, then by how
         /// recently it was active.
         case session
+        /// An archived workspace or session. Only offered for a query, and
+        /// always below live work whatever it scores: live work is what the
+        /// palette is for, and the archive is where a forgotten name turns up.
+        case archived
     }
 
     let id: String
@@ -54,10 +58,13 @@ enum CommandPaletteRanking {
         _ entries: [CommandPaletteEntry],
         query: String,
         sessionLimit: Int = 40,
+        archivedLimit: Int = 20,
         contentMatches: Set<String> = []
     ) -> [CommandPaletteEntry] {
+        let hasQuery = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         var matched: [Candidate] = []
         for (order, entry) in entries.enumerated() {
+            if entry.kind == .archived, !hasQuery { continue }
             let score = score(entry, query: query)
             if score > 0 {
                 matched.append(Candidate(entry: entry, order: order, score: score))
@@ -73,7 +80,7 @@ enum CommandPaletteRanking {
                 return left.entry.kind.rawValue < right.entry.kind.rawValue
             }
             if left.score != right.score { return left.score > right.score }
-            if left.entry.kind == .session {
+            if left.entry.kind != .command {
                 let leftDate = left.entry.recency ?? .distantPast
                 let rightDate = right.entry.recency ?? .distantPast
                 if leftDate != rightDate { return leftDate > rightDate }
@@ -82,10 +89,18 @@ enum CommandPaletteRanking {
         }
 
         var sessions = 0
+        var archived = 0
         return matched.compactMap { candidate in
-            guard candidate.entry.kind == .session else { return candidate.entry }
-            sessions += 1
-            return sessions <= sessionLimit ? candidate.entry : nil
+            switch candidate.entry.kind {
+            case .command:
+                return candidate.entry
+            case .session:
+                sessions += 1
+                return sessions <= sessionLimit ? candidate.entry : nil
+            case .archived:
+                archived += 1
+                return archived <= archivedLimit ? candidate.entry : nil
+            }
         }
     }
 
@@ -98,6 +113,108 @@ enum CommandPaletteRanking {
         let rest = ([entry.title, entry.subtitle].compactMap { $0 } + entry.keywords)
             .joined(separator: " ")
         return FuzzyMatch.score(query, rest)
+    }
+}
+
+/// The palette's Archived rows, as values: archived workspaces whose sessions
+/// are all closed, then the archived sessions such a row does not already
+/// stand for (`archivedResults` in the web's SessionSearch.tsx). A workspace
+/// that still has a live session is reached through that session instead.
+enum CommandPaletteArchive {
+    static let workspacePrefix = "archived-workspace:"
+    static let sessionPrefix = "archived:"
+
+    /// What selecting an archived row opens.
+    enum Target: Equatable {
+        /// The workspace's most recently active archived session.
+        case session(String)
+    }
+
+    static func entries(
+        archived: [Session],
+        liveWorkspaceIds: Set<String>,
+        workspaceNames: [String: String]
+    ) -> [CommandPaletteEntry] {
+        let newestFirst = archived.sorted {
+            ($0.lastActivityDate ?? .distantPast) > ($1.lastActivityDate ?? .distantPast)
+        }
+        var workspaceOrder: [String] = []
+        var byWorkspace: [String: [Session]] = [:]
+        for session in newestFirst {
+            guard let workspaceId = session.workspaceId, !workspaceId.isEmpty,
+                  !liveWorkspaceIds.contains(workspaceId) else { continue }
+            if byWorkspace[workspaceId] == nil { workspaceOrder.append(workspaceId) }
+            byWorkspace[workspaceId, default: []].append(session)
+        }
+        var shownNames: [String: String] = [:]
+        var entries: [CommandPaletteEntry] = []
+        for workspaceId in workspaceOrder {
+            guard let sessions = byWorkspace[workspaceId], let newest = sessions.first else {
+                continue
+            }
+            let name = [workspaceNames[workspaceId], newest.workspaceName]
+                .compactMap { $0 }
+                .first { !$0.isEmpty }
+            guard let name else { continue }
+            shownNames[workspaceId] = name
+            let count = sessions.count
+            entries.append(CommandPaletteEntry(
+                id: workspacePrefix + workspaceId,
+                title: name,
+                subtitle: [
+                    RepoTile.label(for: newest.effectiveRepo),
+                    "Archived workspace",
+                    count == 1 ? "1 session" : "\(count) sessions",
+                ].joined(separator: " · "),
+                keywords: keywords(sessions),
+                symbol: "archivebox",
+                kind: .archived,
+                recency: newest.lastActivityDate
+            ))
+        }
+        for session in newestFirst {
+            // A session alone under a workspace row of the same name is the
+            // same result twice.
+            if let workspaceId = session.workspaceId,
+               let shown = shownNames[workspaceId],
+               shown.caseInsensitiveCompare(session.displayTitle) == .orderedSame {
+                continue
+            }
+            entries.append(CommandPaletteEntry(
+                id: sessionPrefix + session.id,
+                title: session.displayTitle,
+                subtitle: [RepoTile.label(for: session.effectiveRepo), "Archived"]
+                    .joined(separator: " · "),
+                keywords: keywords([session]) + [session.workspaceName ?? ""]
+                    .filter { !$0.isEmpty },
+                symbol: "archivebox",
+                kind: .archived,
+                recency: session.lastActivityDate
+            ))
+        }
+        return entries
+    }
+
+    /// The session an archived row opens, from the archived list it was built
+    /// from. Nil for an id this list no longer holds.
+    static func target(for id: String, in archived: [Session]) -> Target? {
+        if id.hasPrefix(sessionPrefix) {
+            let sessionId = String(id.dropFirst(sessionPrefix.count))
+            return archived.contains { $0.id == sessionId } ? .session(sessionId) : nil
+        }
+        guard id.hasPrefix(workspacePrefix) else { return nil }
+        let workspaceId = String(id.dropFirst(workspacePrefix.count))
+        return archived
+            .filter { $0.workspaceId == workspaceId }
+            .max { ($0.lastActivityDate ?? .distantPast) < ($1.lastActivityDate ?? .distantPast) }
+            .map { .session($0.id) }
+    }
+
+    private static func keywords(_ sessions: [Session]) -> [String] {
+        var seen = Set<String>()
+        return sessions.flatMap { session in
+            [session.effectiveRepo, session.branch ?? "", session.startedBy ?? "", "archived"]
+        }.filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 }
 

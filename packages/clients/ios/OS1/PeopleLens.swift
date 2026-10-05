@@ -11,7 +11,11 @@ import Foundation
 ///   honored it since lanes went per-user (`focusWsRows` in
 ///   src/frontend/components/Sidebar.tsx). See `LaneStore`, or
 /// - an outstanding @-mention on one of its sessions. A teammate explicitly
-///   asking for you admits their row to the default "My sessions" lens.
+///   asking for you admits their row to the default "My sessions" lens, or
+/// - a COLLABORATOR entry on its workspace. Adding a teammate files the
+///   workspace into their sidebar exactly as it is filed for its creator
+///   (`rowHasCollaborator` in src/frontend/lib/sidebar-derived.ts), and the
+///   same entry makes it theirs under a teammate lens too.
 ///
 /// The app used to test only the first, which is how a workspace claimed in
 /// the browser could be missing from the phone entirely: nothing in it was
@@ -36,6 +40,20 @@ struct PeopleLens {
     let claims: Set<String>
     /// Session ids where a teammate tagged you (`MentionStore`).
     var mentions: Set<String> = []
+    /// Workspace id to the names of the teammates added to it.
+    var collaborators: [String: [String]] = [:]
+
+    /// The collaborator lists of the workspaces that have any, keyed by id.
+    static func collaboratorIndex(
+        _ workspaces: [OS1API.WorkspaceSummary]
+    ) -> [String: [String]] {
+        var index: [String: [String]] = [:]
+        for workspace in workspaces {
+            let names = (workspace.collaborators ?? []).map(\.name).filter { !$0.isEmpty }
+            if !names.isEmpty { index[workspace.id] = names }
+        }
+        return index
+    }
 
     @MainActor
     static func current() -> PeopleLens {
@@ -54,8 +72,49 @@ struct PeopleLens {
             names: names,
             roster: TeamDirectory.shared.displayNames,
             claims: LaneStore.shared.claims,
-            mentions: MentionStore.shared.sessionIds
+            mentions: MentionStore.shared.sessionIds,
+            collaborators: WorkspaceCollaboratorsStore.shared.index
         )
+    }
+
+    /// Whether `name` (any spelling the roster knows) is you.
+    func isViewer(_ name: String) -> Bool {
+        let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalized.isEmpty else { return false }
+        if names.contains(normalized) { return true }
+        guard let canonical = ArchivedOwners.canonical(name, in: roster)?.lowercased() else {
+            return false
+        }
+        return names.contains(canonical)
+    }
+
+    /// The teammates added to the workspace this row stands for.
+    ///
+    /// The index wins: it is replaced on every workspaces refresh and on each
+    /// add or remove, while a row's own summary is as old as its grouping.
+    func collaborators(of workspace: SidebarWorkspace) -> [String] {
+        if let id = workspace.workspaceId, let listed = collaborators[id] { return listed }
+        return (workspace.workspace?.collaborators ?? []).map(\.name)
+    }
+
+    /// You were added to this row's workspace.
+    func collaborates(on workspace: SidebarWorkspace) -> Bool {
+        collaborators(of: workspace).contains(where: isViewer)
+    }
+
+    /// Whether the row is your own work rather than work waiting on your
+    /// review: you own it, collaborate on it, or one of its ordinary sessions
+    /// is yours. A pull request opened from such a workspace asks its author's
+    /// team to review it, and GitHub then asks the author too, so the review
+    /// mark must not pull your own work out of your lanes (`rowIsOwnWork` in
+    /// src/frontend/lib/review-queue.ts). Claims and mentions do not count:
+    /// they bring someone else's work to you.
+    func isOwnWork(_ workspace: SidebarWorkspace) -> Bool {
+        if let owner = workspace.workspace?.createdBy, isViewer(owner) { return true }
+        if collaborates(on: workspace) { return true }
+        return workspace.sessions.contains { session in
+            !session.isAutomation && session.startedBy.map(isViewer) == true
+        }
     }
 
     /// A single session under the lens: yours to start with, or claimed.
@@ -64,12 +123,7 @@ struct PeopleLens {
         guard !session.isAutomation, let startedBy = session.startedBy else {
             return false
         }
-        let normalized = startedBy.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if names.contains(normalized) { return true }
-        guard let canonical = ArchivedOwners.canonical(startedBy, in: roster)?.lowercased() else {
-            return false
-        }
-        return names.contains(canonical)
+        return isViewer(startedBy)
     }
 
     /// A sidebar row under the lens. A row is yours as soon as ONE of its
@@ -77,8 +131,9 @@ struct PeopleLens {
     func owns(_ workspace: SidebarWorkspace) -> Bool {
         if workspace.isDraftWorkspace,
            let owner = workspace.workspace?.createdBy?.lowercased() {
-            return names.contains(owner)
+            return names.contains(owner) || collaborates(on: workspace)
         }
+        if collaborates(on: workspace) { return true }
         return workspace.sessions.contains { isMine($0) || mentions.contains($0.id) }
     }
 }
@@ -112,12 +167,12 @@ extension PeopleLens {
         case SidebarPersonLens.unassigned:
             // Work nobody has picked up: no person's name on it, and nothing
             // running. The web reads its `pending` status for the same thing.
-            return workspace.lane == .backlog && Self.owners(of: workspace).isEmpty
+            return workspace.lane == .backlog && owners(of: workspace).isEmpty
         default:
             if SidebarPersonLens.nameMatches(agentKey, key: person) {
                 return Self.isAgentWork(workspace)
             }
-            return Self.owners(of: workspace).contains {
+            return owners(of: workspace).contains {
                 SidebarPersonLens.nameMatches($0, key: person)
             }
         }
@@ -158,6 +213,12 @@ extension PeopleLens {
     /// The machine identity is not a person, so it never appears here. That is
     /// what keeps an agent's own workspace out of every teammate's lens and in
     /// the agent's.
+    /// Everyone a row files under: the people who started it, and the
+    /// teammates added to its workspace, who see it as their own work.
+    func owners(of workspace: SidebarWorkspace) -> [String] {
+        Self.owners(of: workspace) + collaborators(of: workspace).compactMap { Self.person($0) }
+    }
+
     static func owners(of workspace: SidebarWorkspace) -> [String] {
         var names = workspace.sessions.compactMap(personName)
         if workspace.isDraftWorkspace,
