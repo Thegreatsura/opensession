@@ -249,6 +249,24 @@ final class SessionViewModel {
         isLoadingConversation = false
     }
 
+    /// ER diagrams that only draw after `MermaidRepair`, beside ones that
+    /// draw as written, in an ordinary assistant message. Added once the
+    /// transcript snapshot has landed, which would otherwise replace it.
+    func showMermaidFixturesForScreenshot() async {
+        holdsScreenshotFixture = true
+        for _ in 0..<100 where isLoadingConversation {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        try? await Task.sleep(for: .seconds(2))
+        upsert([TranscriptEntry(
+            id: "screenshot-mermaid-repair",
+            type: "assistant",
+            content: MermaidFixtures.transcriptMarkdown,
+            timestamp: ISO8601DateFormatter().string(from: .now)
+        )])
+        rebuildDisplayItems()
+    }
+
     func showSteeredMessageForScreenshot() {
         holdsScreenshotFixture = true
         let id = "screenshot-steered-message"
