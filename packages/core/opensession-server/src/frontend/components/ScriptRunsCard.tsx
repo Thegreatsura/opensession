@@ -6,6 +6,10 @@ import { useSessionSocket } from "../hooks/useSessionSocket";
 import { Button } from "../ui/button";
 import { useConfirm } from "../ui/confirm";
 import { Disclosure } from "../ui/disclosure";
+import { Modal } from "../ui/modal";
+import { Tooltip } from "../ui/tooltip";
+import { IconX } from "./icons";
+import { hiddenScriptRunIds, hideScriptRun } from "../lib/hidden-script-runs";
 import { PulseDot } from "../ui/status";
 import { cn } from "../ui/cn";
 import { SCRIPT_CARD_SHELL, SCRIPT_OUTPUT } from "../lib/script-card-classes";
@@ -24,6 +28,7 @@ export function ScriptRunsCard({ sessionId }: { sessionId: string }) {
   const { addHandler } = useSessionSocket();
   const [runs, setRuns] = useState<ScriptRunWire[]>([]);
   const [now, setNow] = useState(() => Date.now());
+  const [hidden, setHidden] = useState(() => hiddenScriptRunIds());
 
   useEffect(() => {
     let live = true;
@@ -48,8 +53,9 @@ export function ScriptRunsCard({ sessionId }: { sessionId: string }) {
   const visible = runs
     .filter(
       (run) =>
-        run.state === "running" ||
-        (run.endedAt && now - Date.parse(run.endedAt) < ENDED_VISIBLE_MS),
+        !hidden.has(run.id) &&
+        (run.state === "running" ||
+          (run.endedAt && now - Date.parse(run.endedAt) < ENDED_VISIBLE_MS)),
     )
     .sort(
       (a, b) =>
@@ -73,7 +79,15 @@ export function ScriptRunsCard({ sessionId }: { sessionId: string }) {
   return (
     <div className="flex flex-col">
       {visible.map((run) => (
-        <ScriptRunRow key={run.id} run={run} now={now} />
+        <ScriptRunRow
+          key={run.id}
+          run={run}
+          now={now}
+          onHide={() => {
+            hideScriptRun(run.id);
+            setHidden((prev) => new Set(prev).add(run.id));
+          }}
+        />
       ))}
     </div>
   );
@@ -121,14 +135,23 @@ const DOT: Record<Exclude<Tone, "running">, string> = {
   quiet: "bg-faint",
 };
 
-function ScriptRunRow({ run, now }: { run: ScriptRunWire; now: number }) {
+function ScriptRunRow({
+  run,
+  now,
+  onHide,
+}: {
+  run: ScriptRunWire;
+  now: number;
+  onHide: () => void;
+}) {
   const [confirm, confirmDialog] = useConfirm();
+  const [closeOpen, setCloseOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { text, tone } = outcome(run);
   const running = run.state === "running";
   const deadline = new Date(run.deadline);
 
-  async function stop() {
+  async function stop(): Promise<boolean> {
     setError(null);
     const res = await fetch(
       `${BASE_PATH}/api/scripts/${encodeURIComponent(run.id)}/stop`,
@@ -141,7 +164,16 @@ function ScriptRunRow({ run, now }: { run: ScriptRunWire; now: number }) {
     if (!res?.ok) {
       const body = await res?.json().catch(() => null);
       setError(body?.error ? `Couldn't stop: ${body.error}` : "Couldn't stop.");
+      return false;
     }
+    return true;
+  }
+
+  // An ended card closes at once. A running one asks first, since closing
+  // it could mean either "out of my way" or "I'm done with this script".
+  function close() {
+    if (running && !run.stopping) setCloseOpen(true);
+    else onHide();
   }
 
   return (
@@ -163,6 +195,16 @@ function ScriptRunRow({ run, now }: { run: ScriptRunWire; now: number }) {
             {elapsedSince(Date.parse(run.startedAt), now)}
           </span>
         )}
+        <Tooltip label="Close" side="top">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="-my-1 -mr-1.5 shrink-0 phone:min-h-11 phone:min-w-11"
+            icon={<IconX size={16} />}
+            aria-label="Close"
+            onClick={close}
+          />
+        </Tooltip>
       </div>
 
       <p className="m-0 text-supporting text-dim [overflow-wrap:anywhere]">
@@ -210,6 +252,57 @@ function ScriptRunRow({ run, now }: { run: ScriptRunWire; now: number }) {
         </p>
       )}
       {confirmDialog}
+      <Modal.Root open={closeOpen} onOpenChange={setCloseOpen}>
+        <Modal.Content role="alertdialog" widthClassName="max-w-[25rem]">
+          <div className="flex flex-col gap-1.5">
+            <Modal.Title className="m-0 text-balance text-dialog-title font-semibold leading-tight tracking-[-0.01em] text-fg">
+              Close this card?
+            </Modal.Title>
+            <Modal.Description className="m-0 text-pretty text-supporting font-normal leading-relaxed text-dim">
+              The script is still running. Hide the card and let it finish, or
+              stop it too.
+            </Modal.Description>
+          </div>
+          <Modal.Footer>
+            <Modal.Close
+              render={
+                <Button
+                  type="button"
+                  size="lg"
+                  variant="ghost"
+                  className="phone:min-h-11 phone:flex-1"
+                />
+              }
+            >
+              Cancel
+            </Modal.Close>
+            <Button
+              type="button"
+              size="lg"
+              variant="soft"
+              className="phone:min-h-11 phone:flex-1"
+              onClick={() => {
+                setCloseOpen(false);
+                onHide();
+              }}
+            >
+              Hide
+            </Button>
+            <Button
+              type="button"
+              size="lg"
+              variant="danger-strong"
+              className="phone:min-h-11 phone:flex-1"
+              onClick={() => {
+                setCloseOpen(false);
+                void stop().then((ok) => ok && onHide());
+              }}
+            >
+              Hide and stop
+            </Button>
+          </Modal.Footer>
+        </Modal.Content>
+      </Modal.Root>
     </section>
   );
 }
