@@ -282,7 +282,11 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   failing checks, a draft, requested changes — then held for a five-second
   undo window with a countdown before `POST …/pr-merge` goes out; closing the
   panel inside the window takes it back too, see `DeferredMerge`), and
-  **Close pull request** (`POST …/pr-close`). The session overflow menu also
+  **Close pull request** (`POST …/pr-close`). An open draft also gets
+  **Ready for review** (status row and actions menu, `POST …/pr-ready`); each
+  draft related PR row gets its own **Ready** button that sends its repo and
+  branch. `PrReadyTarget` also covers the sessionless
+  `POST /api/pr-preview-ready` route. The session overflow menu also
   exposes squash, merge-commit and rebase merge actions directly, with the same
   warnings and confirmation. PR surfaces can copy the GitHub link or open an
   editable Slack post that appends the link and defaults to the server-selected
