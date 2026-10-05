@@ -1360,13 +1360,13 @@ struct SessionView: View {
     #endif
 
     #if os(iOS)
-    /// A principal item stays centred in the whole bar rather than in the gap
-    /// between Back and the trailing items. Size and shift the pill into that
-    /// gap so its glass never paints over either group.
+    /// UIKit centres a principal item in the whole bar only when it fits
+    /// there; a pill this wide never does, so UIKit centres it in the gap
+    /// between Back and the trailing items. Size it to that gap and let UIKit
+    /// place it. An extra offset would shift it a second time, onto Back.
     private var sessionHeaderLane: some View {
         sessionIdentityButton
             .frame(width: sessionIdentityWidth, alignment: .leading)
-            .offset(x: sessionIdentityOffset)
     }
 
     private var sessionHeaderLeadingInset: CGFloat {
@@ -1447,12 +1447,6 @@ struct SessionView: View {
             360,
             max(44, surfaceWidth - sessionHeaderLeadingInset - sessionHeaderTrailingInset)
         )
-    }
-
-    /// Move the principal item from the bar's centre to the centre of the
-    /// uneven space left by Back and the trailing controls.
-    private var sessionIdentityOffset: CGFloat {
-        (sessionHeaderLeadingInset - sessionHeaderTrailingInset) / 2
     }
     #endif
 
