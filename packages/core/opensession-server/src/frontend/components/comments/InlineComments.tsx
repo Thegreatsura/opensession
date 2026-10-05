@@ -18,10 +18,7 @@ import {
 import { errorMessage } from "../../lib/error-message";
 import { onThreadFocusRequest, takeThreadFocus } from "../../lib/thread-focus";
 import type { CommentThread } from "../../lib/types";
-import {
-  onCommentDraftRequest,
-  type CommentDraft,
-} from "../../lib/comment-draft";
+import { useCommentDraft } from "../../lib/comment-draft";
 import { Button } from "../../ui/button";
 import { cn } from "../../ui/cn";
 import { duration, ease } from "../../ui/motion";
@@ -106,8 +103,7 @@ export function InlineComments({
   isPhone: boolean;
 }) {
   // The comment being written, handed over by the selection pill.
-  const [draft, onDraftChange] = useState<CommentDraft | null>(null);
-  useEffect(() => onCommentDraftRequest(sessionId, onDraftChange), [sessionId]);
+  const [draft, onDraftChange] = useCommentDraft(sessionId);
   const me = useCurrentUser();
   const overlayRef = useRef<HTMLDivElement>(null);
   const layerRef = useRef<HTMLDivElement>(null);
