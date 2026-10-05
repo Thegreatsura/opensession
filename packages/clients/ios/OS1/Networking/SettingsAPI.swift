@@ -632,8 +632,11 @@ enum SettingsAPI {
         try await request("/api/keychain")
     }
 
+    /// The body carries the typed secret, so it goes over an ephemeral session:
+    /// the shared one's URLCache writes a POST's request, body included, to
+    /// the on-disk cache database.
     static func addKeychainCredential(_ body: [String: Any]) async throws -> KeychainCredentialResponse {
-        try await request("/api/keychain/credentials", method: "POST", body: body)
+        try await request("/api/keychain/credentials", method: "POST", body: body, session: secretSession)
     }
 
     static func deleteKeychainCredential(id: String) async throws -> SettingsOK {
@@ -642,6 +645,16 @@ enum SettingsAPI {
 
     static func revokeKeychainGrant(id: String) async throws -> SettingsOK {
         try await request("/api/keychain/grants/\(segment(id))", method: "DELETE")
+    }
+
+    /// Owner-only: the server refuses anyone but the credential's owner, so
+    /// the screen offers it only on asks marked `canAnswer`.
+    static func answerKeychainAsk(id: String, decision: KeychainDecision) async throws -> SettingsOK {
+        try await request(
+            "/api/keychain/asks/\(segment(id))/answer",
+            method: "POST",
+            body: ["decision": decision.rawValue]
+        )
     }
 
     // MARK: - Deploys
@@ -782,12 +795,22 @@ enum SettingsAPI {
 
     // MARK: - Transport
 
+    /// No disk cache, cookie store or credential storage: for requests whose
+    /// body holds a secret that must never be written on this device.
+    static let secretSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
+    }()
+
     private static func request<T: Decodable & Sendable>(
         _ path: String,
         method: String = "GET",
         query: [String: String] = [:],
         body: [String: Any]? = nil,
-        connection: Connection? = nil
+        connection: Connection? = nil,
+        session: URLSession = .shared
     ) async throws -> T {
         guard let resolved = connection ?? Connection.current() else {
             throw OS1API.APIError.notConfigured
@@ -808,7 +831,7 @@ enum SettingsAPI {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
         }
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             if http.statusCode == 401 {
                 NotificationCenter.default.post(name: .settingsAuthenticationExpired, object: nil)

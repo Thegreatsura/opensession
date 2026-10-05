@@ -10,6 +10,7 @@ struct MacSettingsView: View {
     /// nav and the panes' own navigation titles.
     enum Pane: String, CaseIterable, Identifiable {
         case connection
+        case keychain
         case preferences
         case notifications
         case shortcuts
@@ -32,6 +33,7 @@ struct MacSettingsView: View {
             switch self {
             case .connection: "Connection"
             case .preferences: "Preferences"
+            case .keychain: "Keychain"
             case .notifications: "Notifications"
             case .shortcuts: "Keyboard shortcuts"
             case .appearance: "Appearance"
@@ -53,6 +55,7 @@ struct MacSettingsView: View {
             switch self {
             case .connection: "server.rack"
             case .preferences: "slider.horizontal.3"
+            case .keychain: "key"
             case .notifications: "bell.badge"
             case .shortcuts: "keyboard"
             case .appearance: "circle.lefthalf.filled"
@@ -88,6 +91,7 @@ struct MacSettingsView: View {
                     paneRow(.connection)
                 }
                 Section("Personal") {
+                    paneRow(.keychain)
                     paneRow(.preferences)
                     paneRow(.notifications)
                     paneRow(.shortcuts)
@@ -139,7 +143,13 @@ struct MacSettingsView: View {
         .onChange(of: selection) { _, pane in
             if pane != .automations { automationId = nil }
         }
-        .onAppear { openPendingAutomation() }
+        .onAppear {
+            openPendingAutomation()
+            #if DEBUG
+            // Screenshot hook, the Mac half of the iOS one in SettingsView.
+            if ProcessInfo.processInfo.environment["OS1_OPEN_SETTINGS"] == "keychain" { selection = .keychain }
+            #endif
+        }
         .onReceive(NotificationCenter.default.publisher(for: .os1OpenAutomationSettings)) { note in
             guard let id = note.object as? String else { return }
             automationId = id
@@ -157,6 +167,7 @@ struct MacSettingsView: View {
         switch selection ?? .preferences {
         case .connection: MacConnectionSettingsView(authenticationMessage: authenticationMessage)
         case .preferences: PreferencesSettingsView()
+        case .keychain: KeychainSettingsView()
         case .notifications: NotificationsSettingsView()
         case .shortcuts: MacKeyboardShortcutsSettingsView()
         case .appearance: AppearanceSettingsView()

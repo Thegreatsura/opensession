@@ -13,6 +13,10 @@ struct SettingsView: View {
     @State private var checkResult: String?
     @State private var copiedCode = false
     @State private var confirmingSignOut = false
+    #if DEBUG
+    @State private var debugOpenKeychain = false
+    @State private var debugKeychainHookUsed = false
+    #endif
 
     private var signIn: GitHubSignIn { .shared }
 
@@ -273,6 +277,16 @@ struct SettingsView: View {
             }
         }
         .insetGroupedListCompat()
+        #if DEBUG
+        // Screenshot hook: `OS1_OPEN_SETTINGS=keychain` lands on Keychain, a
+        // row a scripted run would otherwise have to find and tap.
+        .navigationDestination(isPresented: $debugOpenKeychain) { KeychainSettingsView() }
+        .onAppear {
+            guard debugKeychainHookUsed == false else { return }
+            debugKeychainHookUsed = true
+            if ProcessInfo.processInfo.environment["OS1_OPEN_SETTINGS"] == "keychain" { debugOpenKeychain = true }
+        }
+        #endif
     }
 
     /// How the current identity was decided — the same two modes the web

@@ -380,6 +380,14 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   composer onto the card, where the arrows and Return pick (`AskKeyBridge`,
   `AskLetterShortcuts`). For questions without options, the command focuses
   the free-text answer field instead.
+  Personal → **Keychain** (a pane of its own on macOS) mirrors the web's:
+  requests only a credential's owner can answer (`canAnswer`; a grouped
+  scripted run is one answer naming every credential, owner and call cap),
+  the person's own requests waiting on an owner, active grants with revoke,
+  and credentials, deletable when `mine`. It adds API credentials (optionally
+  status only) and logins (sign-in page, username, password). The models hold
+  no secret, and the add request goes over an ephemeral `URLSession` so the
+  typed secret never reaches the on-disk URL cache.
   Infrastructure → **Runners** lists the machines this instance trusts, read
   only: each one's status, hardware, workspace roots, toolchains and what it is
   working on. Connecting, revoking and permissions stay in the web settings —
