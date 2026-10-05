@@ -453,7 +453,10 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
 A ```mermaid fence in an assistant message renders as a drawn diagram, the same
 way the web client does it — and with the same fallback: source mermaid cannot
 parse keeps its code fence, which is also what an in-flight message looks like
-while it streams.
+while it streams. Like the web, an ER diagram that fails only because an
+attribute is named `pk`/`fk`/`uk` or typed like `Vec<Track>` gets one retry
+with those words backtick-quoted (`MermaidRepair`); the cache key and the code
+fence keep the source as written.
 
 There is no native mermaid. The layout engines (dagre for flowcharts, one per
 diagram type besides) are most of the library, so fidelity means running the
@@ -583,6 +586,8 @@ OS1/
     MermaidSegmenter.swift   Splits ```mermaid fences out of message markdown
     MermaidHostPage.swift    Locates the bundled renderer page
     MermaidRenderer.swift    Offscreen WebKit render + snapshot + cache
+    MermaidRepair.swift      ER attribute quoting for the one parse retry
+    MermaidFixtures.swift    Debug-only diagrams for tests and screenshots
     MermaidDiagramView.swift The diagram row: code fence, then the picture
 ````
 

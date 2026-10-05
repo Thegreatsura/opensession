@@ -971,6 +971,9 @@ struct SessionView: View {
                 if let cards = ProcessInfo.processInfo.environment["OS1_SHOW_ACTION_CARDS"] {
                     viewModel.showActionCardsForScreenshot(cards)
                 }
+                if ProcessInfo.processInfo.environment["OS1_SHOW_MERMAID_FIXTURE"] == "1" {
+                    Task { await viewModel.showMermaidFixturesForScreenshot() }
+                }
                 #endif
                 #if DEBUG && os(iOS)
                 // Install screenshot fixtures before network requests so a
