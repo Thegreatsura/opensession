@@ -6,6 +6,8 @@ import type {
   PrDiffResponse,
   ReviewGuideData,
 } from "../../lib/types";
+import { Segmented, SegmentedOption } from "../../ui/segmented";
+import { cn } from "../../ui/cn";
 import type { sectionsWithPatches } from "../../lib/pr-review-guide";
 import { useIsPhone } from "../../hooks/useIsPhone";
 import { useActiveReviewFile } from "../../hooks/useActiveReviewFile";
@@ -38,6 +40,15 @@ interface Props {
   fileListMode: FileTreeMode | "hidden";
   files: NonNullable<PrDetails["files"]>;
   reviewedFiles?: ReadonlySet<string>;
+  changedFiles?: ReadonlySet<string>;
+  onSetReviewed?: (paths: string[], reviewed: boolean) => void;
+  /** The page's one grouping: guide sections, or file roles until written. */
+  reviewGroups?: DiffFileGroup[];
+  groupsFromGuide: boolean;
+  removedFiles?: readonly string[];
+  resolvedThreadCount: number;
+  showReviewThreads: boolean;
+  onShowReviewThreadsChange: (show: boolean) => void;
   pendingCount: number;
   reviewProvider?: string;
   onFinishReview: () => void;
@@ -68,9 +79,8 @@ interface Props {
   guideFailed: boolean;
   onRetryGuide: () => void;
   guideSections: GuideSections;
-  grouping: "none" | "ai";
-  diffGroups: { oid: string; groups: DiffFileGroup[] | null } | null;
-  diffGroupsLoading: boolean;
+  /** Group the Changes view by reviewGroups. */
+  groupDiff: boolean;
 }
 
 /** The changed-files page, including worktree, guide, and code-flow lenses. */
@@ -79,6 +89,14 @@ export function PrFilesPage({
   fileListMode,
   files,
   reviewedFiles,
+  changedFiles,
+  onSetReviewed,
+  reviewGroups,
+  groupsFromGuide,
+  removedFiles,
+  resolvedThreadCount,
+  showReviewThreads,
+  onShowReviewThreadsChange,
   pendingCount,
   reviewProvider,
   onFinishReview,
@@ -109,9 +127,7 @@ export function PrFilesPage({
   guideFailed,
   onRetryGuide,
   guideSections,
-  grouping,
-  diffGroups,
-  diffGroupsLoading,
+  groupDiff,
 }: Props) {
   const isPhone = useIsPhone();
   const [filesOpen, setFilesOpen] = useState(false);
@@ -126,11 +142,45 @@ export function PrFilesPage({
   const reviewedCount = files.filter((file) =>
     reviewedFiles?.has(file.path),
   ).length;
+  // The guide reads one step at a time by default, so a large PR is a few
+  // focused passes rather than one long scroll. "All steps" keeps the old view.
+  const [guideStep, setGuideStep] = useState(0);
+  const [guideAllSteps, setGuideAllSteps] = useState(false);
+  const guideKey = currentGuide
+    ? `${currentGuide.number}\0${guideSections.length}`
+    : "";
+  const [stepGuideKey, setStepGuideKey] = useState(guideKey);
+  if (stepGuideKey !== guideKey) {
+    setStepGuideKey(guideKey);
+    setGuideStep(0);
+  }
+  const steppingGuide =
+    codeView === "guide" &&
+    !guideAllSteps &&
+    !!currentGuide &&
+    guideSections.length > 1;
+  const currentStep = Math.min(
+    guideStep,
+    Math.max(0, guideSections.length - 1),
+  );
+  const stepOf = (path: string) =>
+    guideSections.findIndex((section) => section.files.includes(path));
   const navigate = (path: string | null) => {
     if (!path) return;
-    onOpenFile(path);
+    const step = steppingGuide ? stepOf(path) : -1;
+    if (step >= 0 && step !== currentStep) {
+      // The file's step has to mount before the diff can scroll to it.
+      setGuideStep(step);
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => onOpenFile(path)),
+      );
+    } else onOpenFile(path);
     selectFile(path);
     setFilesOpen(false);
+  };
+  const showStep = (step: number) => {
+    setGuideStep(step);
+    scroller?.scrollTo({ top: 0 });
   };
   const navigator = (
     <PrFileTree
@@ -140,6 +190,15 @@ export function PrFilesPage({
       layout={filesOpen ? "sheet" : "sidebar"}
       activeFile={activeFile}
       reviewedFiles={reviewedFiles}
+      changedFiles={changedFiles}
+      onSetReviewed={onSetReviewed}
+      groups={reviewGroups}
+      leftoverTitle={
+        groupsFromGuide && currentGuide?.stale
+          ? "New since the guide"
+          : "Everything else"
+      }
+      removedFiles={removedFiles}
       onOpenFile={navigate}
     />
   );
@@ -255,6 +314,18 @@ export function PrFilesPage({
               {pendingCount} pending comment{pendingCount === 1 ? "" : "s"}
             </span>
           )}
+          {resolvedThreadCount > 0 && codeView !== "flow" && (
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-pressed={showReviewThreads}
+              onClick={() => onShowReviewThreadsChange(!showReviewThreads)}
+            >
+              {showReviewThreads
+                ? "Hide resolved comments"
+                : `Show ${resolvedThreadCount} resolved`}
+            </Button>
+          )}
         </div>
       )}
       <div className="flex min-h-0 flex-1">
@@ -362,65 +433,205 @@ export function PrFilesPage({
               guideLoading || (!currentGuide && !guideFailed) ? (
                 <>
                   <div className="mb-4 rounded-sm border border-line bg-panel px-3 py-2 text-xs text-faint">
-                    Writing the review guide… You can review the file diff while
-                    it groups the change by intent.
+                    Writing the review guide… Files are grouped by type until it
+                    groups the change by intent.
                   </div>
-                  <CommentableDiff patch={diff.patch} options={diffOptions} />
+                  <CommentableDiff
+                    patch={diff.patch}
+                    options={{
+                      ...diffOptions,
+                      groups: reviewGroups,
+                      groupsSource: "rules",
+                    }}
+                  />
                 </>
               ) : guideFailed ? (
-                <div className="py-12 text-center text-sm text-faint">
-                  Couldn't generate a guide for this PR.
-                  <button
-                    className="ml-2 border-0 bg-transparent text-link"
-                    onClick={onRetryGuide}
-                  >
-                    Retry
-                  </button>
-                </div>
+                <>
+                  <div className="mb-4 rounded-sm border border-line bg-panel px-3 py-2 text-xs text-faint">
+                    Couldn't write a guide for this PR. Files are grouped by
+                    type instead.
+                    <button
+                      className="ml-2 border-0 bg-transparent text-link"
+                      onClick={onRetryGuide}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                  <CommentableDiff
+                    patch={diff.patch}
+                    options={{
+                      ...diffOptions,
+                      groups: reviewGroups,
+                      groupsSource: "rules",
+                    }}
+                  />
+                </>
               ) : currentGuide ? (
                 <>
-                  <div className="mb-7 grid grid-cols-[54px_minmax(0,1fr)] gap-4 px-1">
+                  <div className="mb-5 grid grid-cols-[54px_minmax(0,1fr)] gap-4 px-1">
                     <div className="text-meta font-medium leading-relaxed text-faint">
                       Review guide
                     </div>
-                    <div>
-                      <h2 className="m-0 text-item-title font-semibold tracking-[-0.01em] text-fg">
-                        {currentGuide.sections.length} focused review step
-                        {currentGuide.sections.length === 1 ? "" : "s"}
-                      </h2>
-                      <p className="mt-1 max-w-[680px] text-xs leading-relaxed text-dim">
-                        Read the change by intent rather than alphabetically.
-                      </p>
+                    <div className="flex flex-col gap-3">
+                      <div className="flex flex-wrap items-start gap-3">
+                        <div className="min-w-0 flex-1">
+                          <h2 className="m-0 text-item-title font-semibold tracking-[-0.01em] text-fg">
+                            {currentGuide.sections.length} focused review step
+                            {currentGuide.sections.length === 1 ? "" : "s"}
+                          </h2>
+                          <p className="mt-1 max-w-[680px] text-xs leading-relaxed text-dim">
+                            {currentGuide.stale
+                              ? "Written before the latest commits. Updating to cover them…"
+                              : "Read the change by intent rather than alphabetically."}
+                          </p>
+                        </div>
+                        {guideSections.length > 1 && (
+                          <Segmented
+                            label="Guide layout"
+                            size="sm"
+                            value={guideAllSteps ? "all" : "step"}
+                            onValueChange={(next) =>
+                              setGuideAllSteps(next === "all")
+                            }
+                          >
+                            <SegmentedOption value="step">
+                              One step
+                            </SegmentedOption>
+                            <SegmentedOption value="all">
+                              All steps
+                            </SegmentedOption>
+                          </Segmented>
+                        )}
+                      </div>
+                      {steppingGuide && (
+                        <nav
+                          aria-label="Guide steps"
+                          className="flex flex-wrap gap-1.5"
+                        >
+                          {guideSections.map((section, index) => {
+                            const reviewed = reviewedFiles
+                              ? section.files.filter((path) =>
+                                  reviewedFiles.has(path),
+                                ).length
+                              : 0;
+                            const done =
+                              !!reviewedFiles &&
+                              section.files.length > 0 &&
+                              reviewed === section.files.length;
+                            return (
+                              <Button
+                                key={`${section.title}-${index}`}
+                                variant={
+                                  index === currentStep ? "soft" : "ghost"
+                                }
+                                size="sm"
+                                aria-current={
+                                  index === currentStep ? "step" : undefined
+                                }
+                                className="max-w-[260px] phone:min-h-11"
+                                onClick={() => showStep(index)}
+                              >
+                                <span className="tabular-nums text-faint">
+                                  {index + 1}
+                                </span>
+                                <span className="min-w-0 truncate">
+                                  {section.title}
+                                </span>
+                                {reviewedFiles && (
+                                  <span
+                                    className={cn(
+                                      "text-meta tabular-nums",
+                                      done ? "text-green" : "text-faint",
+                                    )}
+                                  >
+                                    {reviewed}/{section.files.length}
+                                  </span>
+                                )}
+                              </Button>
+                            );
+                          })}
+                        </nav>
+                      )}
                     </div>
                   </div>
-                  {guideSections.map((section, index, all) => (
-                    <section
-                      id={`review-guide-${index}`}
-                      className="mb-8 scroll-mt-[64px]"
-                      key={`${section.title}-${index}`}
-                    >
-                      <div className="mb-3 grid grid-cols-[54px_minmax(0,1fr)] gap-4 px-1">
-                        <div className="text-meta text-faint">
-                          {String(index + 1).padStart(2, "0")} /{" "}
-                          {String(all.length).padStart(2, "0")}
-                        </div>
-                        <div>
-                          <div className="text-item-title font-semibold text-fg">
-                            {section.title}
+                  {guideSections.map((section, index, all) =>
+                    steppingGuide && index !== currentStep ? null : (
+                      <section
+                        id={`review-guide-${index}`}
+                        className="mb-8 scroll-mt-[64px]"
+                        key={`${section.title}-${index}`}
+                      >
+                        <div className="mb-3 grid grid-cols-[54px_minmax(0,1fr)] gap-4 px-1">
+                          <div className="text-meta text-faint">
+                            {String(index + 1).padStart(2, "0")} /{" "}
+                            {String(all.length).padStart(2, "0")}
                           </div>
-                          <div className="mt-1 text-supporting leading-relaxed text-dim">
-                            {section.explanation}
+                          <div>
+                            <div className="text-item-title font-semibold text-fg">
+                              {section.title}
+                            </div>
+                            <div className="mt-1 text-supporting leading-relaxed text-dim">
+                              {section.explanation}
+                            </div>
                           </div>
                         </div>
+                        {section.patch && (
+                          <CommentableDiff
+                            patch={section.patch}
+                            options={diffOptions}
+                          />
+                        )}
+                      </section>
+                    ),
+                  )}
+                  <div className="mb-6 grid grid-cols-[54px_minmax(0,1fr)] gap-4 px-1">
+                    <div />
+                    {steppingGuide && currentStep < guideSections.length - 1 ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          variant="soft"
+                          className="phone:min-h-11"
+                          icon={<IconChevronRight size={18} />}
+                          onClick={() => showStep(currentStep + 1)}
+                        >
+                          Next: {guideSections[currentStep + 1].title}
+                        </Button>
+                        {reviewedFiles && onSetReviewed && (
+                          <Button
+                            variant="ghost"
+                            className="phone:min-h-11"
+                            onClick={() => {
+                              onSetReviewed(
+                                guideSections[currentStep].files.filter(
+                                  (path) => !reviewedFiles.has(path),
+                                ),
+                                true,
+                              );
+                              showStep(currentStep + 1);
+                            }}
+                          >
+                            Mark step reviewed and continue
+                          </Button>
+                        )}
                       </div>
-                      {section.patch && (
-                        <CommentableDiff
-                          patch={section.patch}
-                          options={diffOptions}
-                        />
-                      )}
-                    </section>
-                  ))}
+                    ) : (
+                      <div className="flex flex-wrap items-center gap-3">
+                        <span className="text-supporting text-dim">
+                          You've reached the end of the guide.
+                        </span>
+                        {reviewProvider && !isPhone && (
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            onClick={onFinishReview}
+                          >
+                            Finish review
+                            {pendingCount > 0 ? ` (${pendingCount})` : ""}
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </>
               ) : null
             ) : (
@@ -428,11 +639,9 @@ export function PrFilesPage({
                 patch={diff.patch}
                 options={{
                   ...diffOptions,
-                  groups:
-                    grouping === "ai" && diffGroups?.oid === diff.headRefOid
-                      ? diffGroups.groups || undefined
-                      : undefined,
-                  groupsLoading: grouping === "ai" && diffGroupsLoading,
+                  groups: groupDiff ? reviewGroups : undefined,
+                  groupsSource: groupsFromGuide ? "ai" : "rules",
+                  groupsLoading: groupDiff && guideLoading,
                 }}
               />
             )}

@@ -1,7 +1,7 @@
 import type { ReviewGuideData } from "./types";
 
 /** Split a unified diff into per-file chunks keyed by the new-side path. */
-function splitPatchByFile(patch: string): Map<string, string> {
+export function splitPatchByFile(patch: string): Map<string, string> {
   const map = new Map<string, string>();
   for (const part of patch.split(/^(?=diff --git )/m)) {
     if (!part.startsWith("diff --git ")) continue;
@@ -18,7 +18,14 @@ function splitPatchByFile(patch: string): Map<string, string> {
  * trailing "Everything else" section so guide mode never hides part of a PR.
  */
 export function sectionsWithPatches(guide: ReviewGuideData, patch: string) {
-  const byFile = splitPatchByFile(patch);
+  return sectionsForFiles(guide, splitPatchByFile(patch));
+}
+
+/** sectionsWithPatches over an already split diff. */
+export function sectionsForFiles(
+  guide: ReviewGuideData,
+  byFile: ReadonlyMap<string, string>,
+) {
   const unclaimed = new Set(byFile.keys());
   // A suffix match can only ever pair two paths that end in the same segment,
   // so bucket the patch's paths by basename once rather than scanning every
@@ -49,8 +56,10 @@ export function sectionsWithPatches(guide: ReviewGuideData, patch: string) {
   });
   if (unclaimed.size > 0)
     sections.push({
-      title: "Everything else",
-      explanation: "Changes the guide didn't group into a section.",
+      title: guide.stale ? "New since the guide" : "Everything else",
+      explanation: guide.stale
+        ? "Files the latest commits added. The guide is updating to cover them."
+        : "Changes the guide didn't group into a section.",
       files: [...unclaimed],
       patch: [...unclaimed]
         .map((file) => byFile.get(file))

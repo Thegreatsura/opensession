@@ -28,6 +28,8 @@ import { AGENT_NAME } from "../lib/brand";
 import { InlineAlert, LoadingState } from "../ui/state";
 import { CodeFlow } from "./CodeFlow";
 import { revealDiffFile } from "../lib/diff-navigation";
+import { ruleGroups } from "../lib/review-groups";
+import { useLocalReviewedFiles } from "../hooks/useLocalReviewedFiles";
 import { IconRestore, IconSliders } from "./icons";
 import { Popover } from "../ui/popover";
 import {
@@ -153,7 +155,7 @@ export function DiffPanel({
   // unified fallback until the person picks a layout.
   const codeDisplaySettings = useCodeDisplaySettings("unified");
   const organizationSettings = useCodeOrganizationSettings();
-  const { grouping, fileListMode, fileOrder, sortDirection } =
+  const { grouping, fileListMode, fileOrder, sortDirection, hideReviewed } =
     organizationSettings;
   const [groups, setGroups] = useState<{
     repo: string;
@@ -187,6 +189,13 @@ export function DiffPanel({
     changed[Math.min(active, changed.length - 1)] || changed[0] || null;
   const groupPatch = cur?.diff.rawPatch || "";
   const groupFileCount = cur?.diff.files.length || 0;
+  // A worktree has no provider-side "Viewed" state, so review marks live in
+  // this browser, keyed by each file's diff: an agent edit to a reviewed file
+  // shows it as changed since review.
+  const localReview = useLocalReviewedFiles(
+    cur ? `worktree:${sessionId}:${cur.repo}` : null,
+    groupPatch,
+  );
   const patchVersion = cur?.diff.diffVersion || "";
   const flowRepo = cur?.repo;
   const flowKey = cur ? `${sessionId}\0${flowRepo}\0${patchVersion}` : "";
@@ -425,7 +434,7 @@ export function DiffPanel({
 
         <CodeOrganizationSettings
           settings={organizationSettings}
-          reviewedFilesAvailable={false}
+          reviewedFilesAvailable
           defaultOrderLabel="Worktree"
           showFileListSetting={showFileList}
         />
@@ -461,7 +470,31 @@ export function DiffPanel({
       return (result || left.path.localeCompare(right.path)) * direction;
     });
   }
-  const visibleFileOrder = orderedFiles.map((file) => file.path);
+  const reviewedFiles = localReview.reviewed;
+  const reviewFiles =
+    hideReviewed && reviewedFiles
+      ? orderedFiles.filter((file) => !reviewedFiles.has(file.path))
+      : orderedFiles;
+  const aiGroups =
+    grouping === "ai" &&
+    groups?.repo === cur.repo &&
+    groups.patch === d.rawPatch
+      ? groups.groups
+      : null;
+  // File roles group the diff at once; the AI's groups replace them on arrival.
+  const shownGroups =
+    grouping !== "ai" || groupFileCount < 3
+      ? undefined
+      : (aiGroups ?? ruleGroups(orderedFiles.map((file) => file.path)));
+  const visibleFileOrder = shownGroups
+    ? (() => {
+        const shown = new Set(reviewFiles.map((file) => file.path));
+        const ordered = shownGroups.flatMap((group) =>
+          group.files.filter((path) => shown.delete(path)),
+        );
+        return [...ordered, ...shown];
+      })()
+    : reviewFiles.map((file) => file.path);
 
   const toolbarContents = (
     <>
@@ -571,9 +604,13 @@ export function DiffPanel({
           fileListMode !== "hidden" &&
           orderedFiles.length > 0 && (
             <PrFileTree
-              files={orderedFiles}
+              files={reviewFiles}
               mode={fileListMode}
               showFileStats={codeDisplaySettings.showFileStats}
+              reviewedFiles={reviewedFiles}
+              changedFiles={localReview.changed}
+              onSetReviewed={localReview.setReviewed}
+              groups={shownGroups}
               onOpenFile={openFlowLocation}
             />
           )}
@@ -611,13 +648,13 @@ export function DiffPanel({
                   // The sidebar owns this scrollport. Keep each file's title below its
                   // standing toolbar until the following file pushes it away.
                   stickyFileHeaders: toolbarTarget === undefined,
-                  groups:
-                    grouping === "ai" &&
-                    groups?.repo === cur.repo &&
-                    groups.patch === d.rawPatch
-                      ? groups.groups || undefined
-                      : undefined,
+                  groups: shownGroups,
+                  groupsSource: aiGroups ? "ai" : "rules",
                   groupsLoading: grouping === "ai" && groupsLoading,
+                  viewedFiles: reviewedFiles,
+                  changedFiles: localReview.changed,
+                  onToggleViewed: (path, viewed) =>
+                    localReview.setReviewed([path], viewed),
                   showGroupsStatus: false,
                   submitLabel: `Send to ${AGENT_NAME}`,
                   placeholder: `Leave feedback on these lines. ${AGENT_NAME} picks it up in this session…`,
