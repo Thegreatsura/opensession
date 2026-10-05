@@ -52,6 +52,8 @@ struct WorktreeInfoView: View {
     /// row agrees. Without it the sheet keeps showing the repo just left.
     @State private var switchedRepo: OS1API.SwitchedRepo?
     @State private var effectiveConfig = EffectiveConfigViewModel()
+    /// Account pools as this device last fetched them, for the Speed row.
+    @State private var accountPools = SettingsAPI.cachedProviderAccountPools()
 
     var body: some View {
         NavigationStack {
@@ -77,13 +79,14 @@ struct WorktreeInfoView: View {
                         .id("runtime")
                     runnerSection
                     runSettingsSection
+                        .id("run-settings")
                     effectiveConfigSection
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 28)
             }
             #if DEBUG
-            // `OS1_SCROLL_TO=sandbox|runtime` brings a section below the fold
+            // `OS1_SCROLL_TO=sandbox|runtime|run-settings` brings a section below the fold
             // into the capture tool's screenshot once the sheet has loaded.
             .onChange(of: scrollToForCapture) { _, target in
                 guard let target else { return }
@@ -1005,7 +1008,7 @@ struct WorktreeInfoView: View {
                     ForEach(catalog.presets + catalog.regular) { option in
                         let routed = ModelCatalog.routedID(option.id, engine: currentEngine)
                         Button {
-                            if let routed { viewModel.changeModel(to: routed) }
+                            if let routed { viewModel.changeModel(to: routed, option: option) }
                         } label: {
                             if option.id == ModelCatalog.baseID(currentModel) {
                                 Label(option.displayLabel, systemImage: "checkmark")
@@ -1031,7 +1034,11 @@ struct WorktreeInfoView: View {
                     ForEach(engineChoices) { engine in
                         let routed = ModelCatalog.routedID(currentModel, engine: engine.id)
                         Button {
-                            if let routed { viewModel.changeModel(to: routed) }
+                            if let routed {
+                                viewModel.changeModel(
+                                    to: routed, option: catalog?.option(for: currentModel)
+                                )
+                            }
                         } label: {
                             if engine.id == currentEngine {
                                 Label(engine.label, systemImage: "checkmark")
@@ -1076,16 +1083,43 @@ struct WorktreeInfoView: View {
                 .buttonStyle(.plain)
             }
 
-            if catalog?.option(for: currentModel)?.fastModeSupported == true {
+            let speeds = speedChoices
+            if !speeds.isEmpty {
+                let effective = speeds.effective(viewModel.speed)
                 Divider()
-                Toggle(isOn: $viewModel.fastMode) {
-                    Label("Fast mode", systemImage: "bolt")
-                        .font(.subheadline)
+                Menu {
+                    ForEach(speeds.options) { option in
+                        Button {
+                            viewModel.selectSpeed(option, choices: speeds)
+                        } label: {
+                            if effective == option {
+                                Label(option.label, systemImage: "checkmark")
+                            } else {
+                                Text(option.label)
+                            }
+                        }
+                    }
+                } label: {
+                    SettingsRow(label: "Speed", value: effective.label, icon: effective.symbol)
                 }
-                .padding(.horizontal, 12)
-                .frame(minHeight: 48)
+                .buttonStyle(.plain)
             }
         }
+    }
+
+    /// Speeds the current model, pin and pool can run at, from the pools
+    /// this device last fetched (the session's own menu refreshes them).
+    private var speedChoices: SpeedChoices {
+        SpeedChoices(
+            model: catalog?.option(for: currentModel),
+            accounts: SpeedChoices.pool(
+                for: currentModel,
+                catalog: catalog,
+                accounts: accountPools,
+                viewer: ServerConfig.shared.userName
+            ),
+            accountId: viewModel.accountId
+        )
     }
 
     private var effectiveConfigSection: some View {
@@ -1541,7 +1575,7 @@ struct WorktreeInfoView: View {
             currentSession.id,
             currentModel,
             viewModel.effort,
-            String(viewModel.fastMode),
+            viewModel.speed.rawValue,
         ].joined(separator: "|")
     }
 
@@ -1798,9 +1832,13 @@ private struct WorkspaceMediaFrame: View {
     private func imageData() async throws -> Data {
         switch item.source {
         case .conversation:
-            return try await OS1API.conversationImage(source: item.src, sessionId: item.sessionId)
+            return try await DisplayableImageData.prepared(
+                OS1API.conversationImage(source: item.src, sessionId: item.sessionId)
+            )
         case .asset:
-            return try await OS1API.assetData(sessionId: item.sessionId, path: item.src)
+            return try await DisplayableImageData.prepared(
+                OS1API.assetData(sessionId: item.sessionId, path: item.src)
+            )
         }
     }
 

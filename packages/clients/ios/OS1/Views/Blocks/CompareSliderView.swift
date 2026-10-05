@@ -42,13 +42,19 @@ struct CompareSliderView: View {
         }
         .task(id: spec) {
             failed = false
-            async let first = try? OS1API.conversationImage(source: spec.before, sessionId: resolvedSessionId)
-            async let second = try? OS1API.conversationImage(source: spec.after, sessionId: resolvedSessionId)
+            async let first = Self.load(spec.before, sessionId: resolvedSessionId)
+            async let second = Self.load(spec.after, sessionId: resolvedSessionId)
             let (a, b) = await (first, second)
             before = a
             after = b
             failed = a == nil || b == nil
         }
+    }
+
+    private static func load(_ source: String, sessionId: String) async -> Data? {
+        guard let raw = try? await OS1API.conversationImage(source: source, sessionId: sessionId)
+        else { return nil }
+        return await DisplayableImageData.prepare(raw)
     }
 
     private func placeholder(symbol: String?) -> some View {

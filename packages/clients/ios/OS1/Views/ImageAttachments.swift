@@ -458,7 +458,11 @@ struct ConversationImage: View {
         self.sessionId = sessionId
         self.gallery = gallery
         self.galleryIndex = galleryIndex
-        _data = State(initialValue: DataImage.decode(dataURL: source))
+        // An inline raster shows on the first pass; an inline SVG still has to
+        // be sanitized and drawn, so it waits for the task like a fetch.
+        _data = State(initialValue: DataImage.decode(dataURL: source).flatMap {
+            SVGSanitizer.looksLikeSVG($0) ? nil : $0
+        })
     }
 
     var body: some View {
@@ -481,7 +485,17 @@ struct ConversationImage: View {
             guard data == nil else { return }
             failed = false
             do {
-                data = try await OS1API.conversationImage(source: source, sessionId: sessionId)
+                let fetched: Data
+                if let inline = DataImage.decode(dataURL: source) {
+                    fetched = inline
+                } else {
+                    fetched = try await OS1API.conversationImage(source: source, sessionId: sessionId)
+                }
+                guard let shown = await DisplayableImageData.prepare(fetched) else {
+                    failed = true
+                    return
+                }
+                data = shown
             } catch {
                 failed = true
             }
@@ -1328,7 +1342,9 @@ enum PreviewImageLoader {
         case .support(let id):
             data = try? await OS1API.supportAttachment(id: id)
         }
-        guard let data, let image = UIImage(data: data) else { return nil }
+        guard let data, let shown = await DisplayableImageData.prepare(data),
+              let image = UIImage(data: shown)
+        else { return nil }
         if let key { cache.setObject(image, forKey: key as NSString) }
         return image
     }

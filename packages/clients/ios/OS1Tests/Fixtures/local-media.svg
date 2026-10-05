@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A chart an agent wrote to /tmp and announced with OPENSESSION_IMAGE. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 200 100">
+  <defs>
+    <linearGradient id="bar" x1="0" x2="1">
+      <stop offset="0" stop-color="#f59e0b"/>
+      <stop offset="1" stop-color="#ef4444"/>
+    </linearGradient>
+    <style>.label { font: 600 14px -apple-system, sans-serif; fill: #ffffff; }</style>
+  </defs>
+  <rect width="200" height="100" fill="#2563eb"/>
+  <rect x="20" y="60" width="160" height="24" rx="4" fill="url(#bar)"/>
+  <text class="label" x="20" y="36">Build time</text>
+</svg>
