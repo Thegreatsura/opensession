@@ -55,6 +55,17 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   cross-owner work to My sessions, lift its workspace into Needs action in Inbox
   mode, and show the sender's face with an @ badge. Opening the session clears
   the mention across the native and web clients.
+- **Inbox** — the server's notification inbox (`/api/notifications`): review
+  requests and results, mentions, workspace invites and Desk reminders, one row
+  per subject, with read and done state shared with the web. A bell in the top
+  bar (iPhone) or sidebar header (Mac) opens it; rows swipe or right-click to
+  read, unread, done or back. Opening a row marks it read and routes it to its
+  session, workspace or PR session (or the web for anything else); reading a
+  session marks its row read. Which kinds alert is an account setting under
+  Settings → Notifications; banners, sound, when to notify and the icon badge
+  (the inbox's unread count) stay on the device. A banner only comes from a
+  live `notification` socket frame the server marked as alerting, so reconnects
+  and relaunches never replay one. Agent runs and questions do not notify.
 - **Feed** (iOS) — recent merged pull requests and commits in one page, with
   person and project filters.
 - **Tasks** (iOS) — the shared `/api/todos` list, with actions to add, complete,
@@ -511,10 +522,12 @@ against both schemes.
 OS1/
   OS1App.swift               App entry; forces Settings on first run
   NativePreferences.swift    Cross-device preference hydration/cache
-  NativeNotifications.swift  Local notifications and the iOS unread icon badge
+  NativeNotifications.swift  Device-local banners, sound and the inbox icon badge
+  NotificationInboxStore.swift  Server inbox state, marks, live frames, deep links
   PlatformCompat.swift       iOS/macOS API bridging shims
   Models/
     Session.swift            Tolerant subset of the server's UnifiedSession
+    NotificationInbox.swift  Inbox wire model, filters and destinations
     TranscriptEntry.swift    Transcript entry (REST + WS frames)
     AskQuestion.swift        Pending AskUserQuestion
     AttachedImage.swift      Composer image attachments

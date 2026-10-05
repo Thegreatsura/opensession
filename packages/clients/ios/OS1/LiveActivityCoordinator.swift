@@ -134,7 +134,6 @@ final class LiveActivityCoordinator {
             githubLogin: ServerConfig.shared.githubLogin,
             isUnread: { reads.isUnread($0) }
         )
-        NativeNotifications.syncBadgeCount(snapshot.unreadCount)
         guard enabled else {
             latestSnapshot = snapshot
             return
