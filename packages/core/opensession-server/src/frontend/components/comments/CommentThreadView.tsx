@@ -406,26 +406,31 @@ export function CommentThreadView({
           {(people.length > 0 || thread.assignee) && (
             <>
               <Menu.Separator />
-              <Menu.GroupLabel>Assign to</Menu.GroupLabel>
+              {/* Base UI requires a GroupLabel inside a Group (error #31). */}
+              <Menu.Group>
+                <Menu.GroupLabel>Assign to</Menu.GroupLabel>
+                {thread.assignee && (
+                  <Menu.Item onClick={() => void assign(null)}>
+                    <IconPerson size={18} className="text-faint" />
+                    Nobody
+                  </Menu.Item>
+                )}
+                {people
+                  .filter((p) => !same(p.name, thread.assignee))
+                  .map((person) => (
+                    <Menu.Item
+                      key={person.name}
+                      onClick={() => void assign(person.name)}
+                    >
+                      <UserAvatar name={person.name} size={18} />
+                      {same(person.name, me)
+                        ? `${person.name} (you)`
+                        : person.name}
+                    </Menu.Item>
+                  ))}
+              </Menu.Group>
             </>
           )}
-          {thread.assignee && (
-            <Menu.Item onClick={() => void assign(null)}>
-              <IconPerson size={18} className="text-faint" />
-              Nobody
-            </Menu.Item>
-          )}
-          {people
-            .filter((p) => !same(p.name, thread.assignee))
-            .map((person) => (
-              <Menu.Item
-                key={person.name}
-                onClick={() => void assign(person.name)}
-              >
-                <UserAvatar name={person.name} size={18} />
-                {same(person.name, me) ? `${person.name} (you)` : person.name}
-              </Menu.Item>
-            ))}
           {rootMine && (
             <>
               <Menu.Separator />
