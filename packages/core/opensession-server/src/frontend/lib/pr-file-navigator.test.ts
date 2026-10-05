@@ -3,6 +3,7 @@ import { FileTree } from "@pierre/trees";
 import {
   filterReviewFiles,
   reviewFileDecoration,
+  filesInFolder,
   syncReviewTreeSelection,
 } from "./pr-file-navigator";
 
@@ -45,6 +46,16 @@ describe("review file navigation", () => {
       text: "✓",
       title: "Reviewed",
     });
+    expect(reviewFileDecoration("a", new Set(), new Set(["a"]))).toEqual({
+      text: "changed",
+      title: "Changed since you reviewed it",
+    });
+  });
+
+  test("finds every file under a folder", () => {
+    expect(
+      filesInFolder(["src/a.ts", "src/lib/b.ts", "srcx/c.ts"], "src"),
+    ).toEqual(["src/a.ts", "src/lib/b.ts"]);
   });
 
   test("controlled selection preserves focus and avoids redundant selection events", () => {

@@ -47,6 +47,8 @@ export interface CommentableDiffOptions {
    *  unavailable, preserving the ordinary flat file list. */
   groups?: DiffFileGroup[];
   groupsLoading?: boolean;
+  /** Where `groups` came from: the AI, or the instant file-role rules. */
+  groupsSource?: "ai" | "rules";
   /** Hide grouping status when the host presents it elsewhere. */
   showGroupsStatus?: boolean;
   /** PR review canvases use GitHub's side-by-side presentation; workspace diffs stay unified. */
@@ -96,6 +98,8 @@ export interface CommentableDiffOptions {
    * being viewed comes back DIRTY, which the server treats as not viewed.
    */
   viewedFiles?: ReadonlySet<string>;
+  /** Files reviewed earlier that later commits changed; flagged in their header. */
+  changedFiles?: ReadonlySet<string>;
   onToggleViewed?: (path: string, viewed: boolean) => void;
   /**
    * @pierre/diffs edit mode: makes files editable in place. Only wired where

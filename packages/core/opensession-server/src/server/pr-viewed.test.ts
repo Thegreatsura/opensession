@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { getPrViewedFiles } from "./pr-viewed";
+import { getPrViewedFiles, viewedMutation } from "./pr-viewed";
 import { __setGhBackoffForTest } from "./github-limit";
 import type { RouteContext } from "./routes/context";
 
@@ -69,7 +69,11 @@ describe("PR viewed state credential", () => {
               id: "PR_node",
               files: {
                 pageInfo: { hasNextPage: false, endCursor: null },
-                nodes: [{ path: "README.md", viewerViewedState: "VIEWED" }],
+                nodes: [
+                  { path: "README.md", viewerViewedState: "VIEWED" },
+                  { path: "src/app.ts", viewerViewedState: "DIRTY" },
+                  { path: "src/new.ts", viewerViewedState: "UNVIEWED" },
+                ],
               },
             },
           },
@@ -88,6 +92,19 @@ describe("PR viewed state credential", () => {
     const result = await getPrViewedFiles(ctx, "", "tellahq/opensession", 112);
 
     expect(authorization).toBe("Bearer ghu_simple_alice");
-    expect(result).toEqual({ prId: "PR_node", viewed: ["README.md"] });
+    expect(result).toEqual({
+      prId: "PR_node",
+      viewed: ["README.md"],
+      changed: ["src/app.ts"],
+    });
+  });
+});
+
+describe("viewedMutation", () => {
+  test("aliases one mutation per path in a single request", () => {
+    expect(viewedMutation(2, true)).toBe(
+      "mutation($id: ID!, $p0: String!, $p1: String!) { f0: markFileAsViewed(input: { pullRequestId: $id, path: $p0 }) { clientMutationId } f1: markFileAsViewed(input: { pullRequestId: $id, path: $p1 }) { clientMutationId } }",
+    );
+    expect(viewedMutation(1, false)).toContain("f0: unmarkFileAsViewed");
   });
 });

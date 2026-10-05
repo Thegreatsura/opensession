@@ -882,6 +882,8 @@ export interface ReviewGuideData {
   number: number;
   headRefOid: string;
   sections: ReviewGuideSection[];
+  /** Written before the latest commits; an update is running on the server. */
+  stale?: boolean;
 }
 
 export interface PrDetails {
