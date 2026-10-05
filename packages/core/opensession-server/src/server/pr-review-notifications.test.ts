@@ -30,7 +30,12 @@ function harness(initial: OpenPrEntry[] = []) {
   let prs = initial;
   let freshRepos = new Set(["tella-fusion"]);
   let refreshCalls = 0;
-  const pushes: Array<{ user: string; title: string; url?: string }> = [];
+  const pushes: Array<{
+    user: string;
+    title: string;
+    url?: string;
+    kind?: string;
+  }> = [];
   const notifier = createPrReviewNotifier({
     refresh: async () => {
       refreshCalls++;
@@ -39,7 +44,12 @@ function harness(initial: OpenPrEntry[] = []) {
     getPrs: () => prs,
     resolveUser: (key) => (key === "alex" ? "Alex" : null),
     notify: async (user, event) => {
-      pushes.push({ user, title: event.reason, url: event.url });
+      pushes.push({
+        user,
+        title: event.reason,
+        url: event.url,
+        ...(event.kind === "review_requested" ? {} : { kind: event.kind }),
+      });
     },
   });
   return {
@@ -68,7 +78,7 @@ describe("GitHub review request push notifications", () => {
     expect(h.pushes).toEqual([
       {
         user: "Alex",
-        title: "Review requested on GitHub",
+        title: "Review requested from you",
         url: "/pr/tella-fusion/review-2",
       },
     ]);
@@ -137,5 +147,22 @@ describe("GitHub review request push notifications", () => {
     prs = [pr(1, ["alex"])];
     await notifier.pollOnce();
     expect(pushes).toEqual([]);
+  });
+
+  test("labels a request that came through a team as its own kind", async () => {
+    const h = harness([]);
+    await h.notifier.pollOnce();
+    h.setPrs([
+      { ...pr(1, ["alex"]), reviewRequestedTeams: { alex: "Code Owners" } },
+    ]);
+    await h.notifier.pollOnce();
+    expect(h.pushes).toEqual([
+      {
+        user: "Alex",
+        title: "Review requested from Code Owners",
+        url: "/pr/tella-fusion/review-1",
+        kind: "team_review_requested",
+      },
+    ]);
   });
 });

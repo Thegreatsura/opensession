@@ -3,6 +3,7 @@ import {
   expandReviewRequestLogins,
   normalizeReviewTeamSlug,
   reviewRequestRemovalSpecs,
+  teamOnlyReviewRequestLogins,
 } from "./github-review-requests";
 
 describe("expandReviewRequestLogins", () => {
@@ -50,5 +51,27 @@ describe("reviewRequestRemovalSpecs", () => {
         "tellahq",
       ),
     ).toEqual(["happylinks", "tellahq/infra-reviewers"]);
+  });
+});
+
+describe("teamOnlyReviewRequestLogins", () => {
+  test("names the team for people asked only through it", () => {
+    const teamLogins = new Map([["acme/code-owners", ["ada", "Grace", "lin"]]]);
+    expect(
+      teamOnlyReviewRequestLogins(
+        [{ login: "grace" }, { slug: "acme/code-owners", name: "Code Owners" }],
+        teamLogins,
+        "lin",
+      ),
+    ).toEqual(new Map([["ada", "Code Owners"]]));
+  });
+
+  test("falls back to the bare slug when the team has no name", () => {
+    expect(
+      teamOnlyReviewRequestLogins(
+        [{ slug: "code-owners" }],
+        new Map([["code-owners", ["ada"]]]),
+      ),
+    ).toEqual(new Map([["ada", "code-owners"]]));
   });
 });
