@@ -85,7 +85,7 @@ const PILL =
 const PILL_BUTTON = "h-12 flex-1 rounded-full px-0 disabled:opacity-35";
 const PILL_STOP = "text-fg hover:bg-[var(--composer-surface)] hover:text-fg";
 const PILL_SEND = "border-transparent shadow-[var(--composer-shadow)]";
-const PILL_METER_BARS = 12;
+const PILL_METER_BARS = 10;
 const PILL_BAR = "w-[3px] shrink-0 rounded-full bg-dim";
 
 function formatElapsed(seconds: number) {
@@ -668,7 +668,7 @@ export function VoiceInput({
             <IconStopSquare size={32} />
           </Button>
           <div
-            className={cn(PILL, "flex-[1.4] gap-3 px-4")}
+            className={cn(PILL, "flex-[1.4] gap-3 pl-4 pr-6")}
             style={overlayStyle}
           >
             <span className="text-section-title font-semibold tabular-nums text-fg">
@@ -698,7 +698,7 @@ export function VoiceInput({
               disabled={phase !== "recording"}
               aria-label="Stop, transcribe and send"
             >
-              <IconArrowUp size={22} />
+              <IconArrowUp size={26} className="[&_path]:[stroke-width:2.25]" />
             </Button>
           )}
         </motion.div>

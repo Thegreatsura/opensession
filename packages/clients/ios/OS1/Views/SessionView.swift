@@ -3353,9 +3353,26 @@ private struct SessionInputBar: View {
                         )
                         .zIndex(0)
                 }
+                #if os(iOS)
+                // Dictating swaps the box for stop, timer and send pills. The
+                // draft keeps filling underneath and returns on stop.
+                if dictation.active {
+                    ComposerDictationPills(
+                        dictation: dictation,
+                        onSend: { send() }
+                    )
+                    .zIndex(1)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                } else {
+                    composer
+                        .zIndex(1)
+                }
+                #else
                 composer
                     .zIndex(1)
+                #endif
             }
+            .animation(.snappy(duration: 0.2), value: dictation.active)
             // One animation for the whole flap: rows arriving, leaving, being
             // steered from one section to the next, and the bar's own reflow
             // all move together. Keyed on a signature rather than a count so
@@ -3431,6 +3448,11 @@ private struct SessionInputBar: View {
             // reach.
             if ProcessInfo.processInfo.environment["OS1_FOCUS_COMPOSER"] == "1" {
                 inputFocused = true
+            }
+            // A simulator has no mic to open, so the recording pills are
+            // otherwise unreachable from a capture.
+            if ProcessInfo.processInfo.environment["OS1_SHOW_DICTATION"] == "1" {
+                dictation.showForScreenshot()
             }
             #endif
         }

@@ -215,4 +215,25 @@ describe("readStoredFilter", () => {
     write({ v: FILTER_VERSION, emptyProjects: "hide" });
     expect(readStoredFilter().emptyProjects).toBe("hide");
   });
+
+  test("an untouched grouping keeps the advanced choices on reload", () => {
+    write({
+      v: FILTER_VERSION,
+      groupBy: "auto",
+      byProject: "auto",
+      prs: "all",
+      autoCreated: "show",
+      emptyProjects: "hide",
+    });
+    const stored = readStoredFilter();
+    expect(stored.byProject).toBe("auto");
+    expect(stored.prs).toBe("all");
+    expect(stored.autoCreated).toBe("show");
+    expect(stored.emptyProjects).toBe("hide");
+  });
+
+  test("one unreadable field does not reset the others", () => {
+    write({ v: FILTER_VERSION, byProject: 3, prs: "all" });
+    expect(readStoredFilter().prs).toBe("all");
+  });
 });

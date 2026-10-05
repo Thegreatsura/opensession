@@ -301,19 +301,26 @@ interface StoredGrouping {
   byProject: StoredByProject;
 }
 
+// Each field falls back on its own: one unreadable value (an untouched
+// grouping is stored as "auto", not a boolean) must not wipe every other
+// remembered choice.
+const optionalString = z.string().optional().catch(undefined);
 const storedFilterInputSchema = z
   .object({
-    v: z.number().optional(),
-    groupBy: z.string().optional(),
-    byProject: z.boolean().optional(),
-    sections: z.string().optional(),
-    lanes: z.string().optional(),
-    repo: z.string().optional(),
-    person: z.string().optional(),
-    sort: z.string().optional(),
-    prs: z.string().optional(),
-    autoCreated: z.string().optional(),
-    emptyProjects: z.string().optional(),
+    v: z.number().optional().catch(undefined),
+    groupBy: optionalString,
+    byProject: z
+      .union([z.boolean(), z.literal("auto")])
+      .optional()
+      .catch(undefined),
+    sections: optionalString,
+    lanes: optionalString,
+    repo: optionalString,
+    person: optionalString,
+    sort: optionalString,
+    prs: optionalString,
+    autoCreated: optionalString,
+    emptyProjects: optionalString,
   })
   .catch({});
 type StoredFilterInput = z.infer<typeof storedFilterInputSchema>;
