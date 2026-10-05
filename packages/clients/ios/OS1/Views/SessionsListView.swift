@@ -52,6 +52,10 @@ struct SessionsListView: View {
     /// bottom of the sessions sidebar; Mac keeps it in the sidebar header.
     @State private var showSupport = false
     @State private var supportQueue = SupportQueueModel()
+    /// The notification inbox: pushed on iPhone, a popover on the Mac.
+    @State private var showInbox = false
+    /// For inbox rows that open on the web (a PR no session owns).
+    @Environment(\.openURL) private var systemOpenURL
     #if os(iOS)
     /// The tools that are lists: what the team shipped and your own tasks.
     /// Each is pushed onto this stack like a ticket is, for the same reason:
@@ -518,6 +522,7 @@ struct SessionsListView: View {
                 autoOpenFromEnvironment()
                 openRequestedSession()
                 openDeleteConfirmationFromEnvironment()
+                consumeInboxOpen()
             }
             // "Start an Agent" (StartAgentIntent — Action Button, widget,
             // Siri). It can run before this view exists (cold launch) or while
@@ -674,10 +679,12 @@ struct SessionsListView: View {
                     .onChange(of: archivedSession, initial: true) { _, open in
                         ReadsStore.shared.open(open)
                         MentionStore.shared.open(open.id)
+                        NotificationInboxStore.shared.viewing(open.id)
                     }
                     .onDisappear {
                         ReadsStore.shared.close(archivedSession.id)
                         MentionStore.shared.close(archivedSession.id)
+                        NotificationInboxStore.shared.stopViewing(archivedSession.id)
                     }
             } else if let selectedID = selectedSessionID,
                let session = viewModel.sessions.first(where: { $0.id == selectedID }) {
@@ -708,10 +715,12 @@ struct SessionsListView: View {
                     .onChange(of: session, initial: true) { _, open in
                         ReadsStore.shared.open(open)
                         MentionStore.shared.open(open.id)
+                        NotificationInboxStore.shared.viewing(open.id)
                     }
                     .onDisappear {
                         ReadsStore.shared.close(session.id)
                         MentionStore.shared.close(session.id)
+                        NotificationInboxStore.shared.stopViewing(session.id)
                     }
             } else {
                 ContentUnavailableView(
@@ -773,6 +782,19 @@ struct SessionsListView: View {
             pendingArchivedOpen = nil
             Task { openedArchivedSession = await viewModel.hydrated(session) }
         }
+        // A row tapped in the inbox popover, or a banner tapped from outside.
+        .onChange(of: NotificationInboxStore.shared.openRequest?.id) {
+            inboxOpenRequested()
+        }
+        #if DEBUG
+        // Screenshot hook: the popover hangs off a toolbar-sized button a
+        // scripted run cannot reliably click. Opened once the window is laid out.
+        .task {
+            guard ProcessInfo.processInfo.environment["OS1_OPEN_INBOX"] != nil else { return }
+            try? await Task.sleep(for: .seconds(6))
+            showInbox = true
+        }
+        #endif
         .sheet(isPresented: $showDesk) {
             DeskSheet()
                 .frame(minWidth: 520, minHeight: 600)
@@ -1042,7 +1064,22 @@ struct SessionsListView: View {
     /// the app menu (Cmd+,), where Mac users expect it.
     private var macSidebarHeader: some View {
         VStack(alignment: .leading, spacing: 9) {
-            ServerAccountPicker(iconSize: 28, openSettings: { openSettings() })
+            // The bell sits in the top row, as on the web's desktop sidebar.
+            HStack(spacing: 7) {
+                ServerAccountPicker(iconSize: 28, openSettings: { openSettings() })
+                Spacer(minLength: 4)
+                Button {
+                    showInbox.toggle()
+                } label: {
+                    InboxBellLabel()
+                }
+                .buttonStyle(.borderless)
+                .help("Inbox")
+                .popover(isPresented: $showInbox, arrowEdge: .bottom) {
+                    InboxView(inPopover: true)
+                        .frame(width: 380, height: 480)
+                }
+            }
 
             HStack(spacing: 7) {
                 Text("Sessions")
@@ -1129,6 +1166,13 @@ struct SessionsListView: View {
                     }
                     .sharedBackgroundVisibility(.hidden)
                     ToolbarItem(placement: .topTrailingCompat) {
+                        Button {
+                            showInbox = true
+                        } label: {
+                            InboxBellLabel()
+                        }
+                    }
+                    ToolbarItem(placement: .topTrailingCompat) {
                         filterButton
                     }
                     ToolbarItem(placement: .topTrailingCompat) {
@@ -1204,6 +1248,18 @@ struct SessionsListView: View {
                         requestToolSessionOpen(sessionId)
                     }
                 }
+                .navigationDestination(isPresented: $showInbox) {
+                    InboxView()
+                }
+                // Like the tool screens: a row's session is pushed once the
+                // inbox has left the stack, not underneath it.
+                .onChange(of: showInbox) { _, shown in
+                    if !shown { consumeInboxOpen() }
+                }
+                // A row tapped in the inbox, or a banner tapped from outside.
+                .onChange(of: NotificationInboxStore.shared.openRequest?.id) {
+                    inboxOpenRequested()
+                }
                 // Pushed onto this stack, not thrown over it: a ticket is
                 // somewhere you go from the list, the same as a session, and
                 // a sheet would have covered the list you came from. It can't
@@ -1250,6 +1306,7 @@ struct SessionsListView: View {
                     // a scripted run would have to find and scroll to.
                     if env["OS1_OPEN_FEED"] != nil { showFeed = true }
                     if env["OS1_OPEN_TASKS"] != nil { showTasks = true }
+                    if env["OS1_OPEN_INBOX"] != nil { showInbox = true }
                     // Same reason again: Archived is a row at the foot of the
                     // list, below whatever is live.
                     if env["OS1_OPEN_ARCHIVED"] != nil { showArchived = true }
@@ -1518,6 +1575,84 @@ struct SessionsListView: View {
     private func openRequestedSession() {
         guard viewModel.hasLoaded, let request = requestedSession.take() else { return }
         _ = openSessionLink(id: request.sessionId)
+    }
+
+    private func inboxOpenRequested() {
+        guard NotificationInboxStore.shared.openRequest != nil else { return }
+        if showInbox {
+            // iPhone routes once the pushed inbox has left the stack.
+            showInbox = false
+            #if os(macOS)
+            consumeInboxOpen()
+            #endif
+        } else {
+            consumeInboxOpen()
+        }
+    }
+
+    /// Route an inbox row once the list can resolve it. A place the app has
+    /// no screen for, or a session it cannot fetch, opens on the web.
+    private func consumeInboxOpen() {
+        guard viewModel.hasLoaded, !showInbox,
+              let request = NotificationInboxStore.shared.takeOpenRequest()
+        else { return }
+        switch request.destination {
+        case .session(let id):
+            openInboxSession(id, fallback: request.url)
+        case .workspace(let id):
+            let newest = viewModel.sessions
+                .filter { $0.workspaceId == id }
+                .max { ($0.lastActivityDate ?? .distantPast) < ($1.lastActivityDate ?? .distantPast) }
+            if let newest {
+                openInboxSession(newest.id, fallback: request.url)
+            } else {
+                openOnWeb(request.url)
+            }
+        case .pullRequest(let repo, let branch):
+            let owner = viewModel.sessions
+                .filter { $0.repo == repo && $0.branch == branch }
+                .max { ($0.lastActivityDate ?? .distantPast) < ($1.lastActivityDate ?? .distantPast) }
+            if let owner {
+                openInboxSession(owner.id, fallback: request.url)
+            } else {
+                openOnWeb(request.url)
+            }
+        case .tasks:
+            #if os(iOS)
+            showTasks = true
+            #else
+            showDesk = true
+            #endif
+        case .web(let path):
+            openOnWeb(path)
+        }
+    }
+
+    private func openInboxSession(_ id: String, fallback: String) {
+        if viewModel.sessions.contains(where: { $0.id == id })
+            || viewModel.archivedSessions.contains(where: { $0.id == id }) {
+            _ = openSessionLink(id: id)
+            return
+        }
+        // Not in the polled list (archived away, another person's): fetch it.
+        Task {
+            guard let session = try? await OS1API.session(id: id) else {
+                openOnWeb(fallback.isEmpty ? "/session/\(id)" : fallback)
+                return
+            }
+            #if os(macOS)
+            openedArchivedSession = session
+            #else
+            path.append(session)
+            #endif
+        }
+    }
+
+    private func openOnWeb(_ path: String) {
+        guard let base = ServerConfig.shared.baseURL,
+              let url = URL(string: path.isEmpty ? "/" : path, relativeTo: base)?.absoluteURL
+        else { return }
+        systemOpenURL(url)
     }
 
     private func loadAutomationOwners() async {

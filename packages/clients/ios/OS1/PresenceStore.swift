@@ -122,6 +122,11 @@ final class PresenceStore {
         switch event {
         case .hello:
             connectedAccountIDs.insert(account.id)
+            // Anything recorded while this socket was down: a silent read,
+            // never a banner.
+            if account.id == config.activeId {
+                NotificationInboxStore.shared.refresh()
+            }
         case .globalPresence(let viewing):
             let mapped = mappedPresence(viewing, me: account.userName)
             presenceByAccount[account.id] = mapped
@@ -140,6 +145,16 @@ final class PresenceStore {
         case .mentionsCleared(let user, let sessionId):
             if account.id == config.activeId {
                 MentionStore.shared.receiveCleared(user: user, sessionId: sessionId)
+            }
+        case .notification(let user, let thread, let alert):
+            if account.id == config.activeId {
+                NotificationInboxStore.shared.receive(user: user, thread: thread, alert: alert)
+            } else if thread?.unread ?? true {
+                config.incrementBadge(for: account.id)
+            }
+        case .notificationsChanged(let user):
+            if account.id == config.activeId {
+                NotificationInboxStore.shared.receiveChanged(user: user)
             }
         case .userMapChanged(let map, let user):
             // A passive account's maps are re-read when it becomes active;

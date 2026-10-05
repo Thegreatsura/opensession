@@ -2670,10 +2670,12 @@ struct SessionTabsView: View {
         .onChange(of: activeSession, initial: true) { _, session in
             ReadsStore.shared.open(session)
             MentionStore.shared.open(session.id)
+            NotificationInboxStore.shared.viewing(session.id)
         }
         .onDisappear {
             ReadsStore.shared.close(activeSession.id)
             MentionStore.shared.close(activeSession.id)
+            NotificationInboxStore.shared.stopViewing(activeSession.id)
         }
         .onChange(of: visibleTabs) { _, updatedTabs in
             // A conversation whose detail is open can be archived from
