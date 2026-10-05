@@ -97,6 +97,12 @@ describe("sessionSearchIndex", () => {
     }
   });
 
+  test("reuses a session's entry across rebuilds", () => {
+    const first = sessionSearchIndex(POOL);
+    const second = sessionSearchIndex(POOL.slice(1));
+    expect(second.prepared.get(POOL[1])).toBe(first.prepared.get(POOL[1]));
+  });
+
   test("covers every session in the pool", () => {
     const index = sessionSearchIndex(POOL);
     expect(index.hay.size).toBe(POOL.length);
