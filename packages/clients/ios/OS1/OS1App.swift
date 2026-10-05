@@ -140,6 +140,7 @@ private struct RootSceneLifecycle: View {
     private func hydrate() async {
         await NativePreferences.hydrate()
         await HideStore.shared.hydrate()
+        await RowColorStore.shared.hydrate()
         await PinStore.shared.hydrate()
         await WorkspaceSnoozeStore.shared.hydrate()
         await LaneStore.shared.hydrate()

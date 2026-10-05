@@ -275,6 +275,7 @@ enum UserMapName: String, Equatable, Sendable {
     case lanes
     case snoozes
     case hides
+    case tabColors = "tab-colors"
 }
 
 /// One person and the session they are looking at, from `global_presence`.

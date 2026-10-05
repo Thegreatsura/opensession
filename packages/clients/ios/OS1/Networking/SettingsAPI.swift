@@ -164,6 +164,27 @@ enum SettingsAPI {
         return response.hides ?? [:]
     }
 
+    /// Per-user tab and row colours, shared with the web (key to swatch key).
+    /// Row colours ride the same map under `row:<row key>`. Writes are deltas
+    /// so a colour another client set is never erased by this one.
+    static func tabColors(user: String) async throws -> [String: String] {
+        struct Response: Decodable, Sendable { var colors: [String: String]? }
+        let response: Response = try await request("/api/tab-colors", query: ["user": user])
+        return response.colors ?? [:]
+    }
+
+    @discardableResult
+    static func saveTabColors(
+        user: String,
+        set: [String: String],
+        remove: [String]
+    ) async throws -> [String: String] {
+        struct Response: Decodable, Sendable { var colors: [String: String]? }
+        let body: [String: Any] = ["user": user, "set": set, "remove": remove]
+        let response: Response = try await request("/api/tab-colors", method: "PUT", body: body)
+        return response.colors ?? [:]
+    }
+
     /// Per-user sidebar lanes, shared with the web sidebar (session id → the
     /// lane it is claimed into). Writes are per-key deltas so this client
     /// cannot erase claims another client made from an older snapshot.
