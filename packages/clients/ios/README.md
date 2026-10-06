@@ -234,7 +234,10 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   keychain over HTTP, never to the agent), answer a keychain ask for a
   credential you own, or confirm a force merge (only the driver confirms, with
   a second confirmation; anyone signed in may cancel). Script runs show state,
-  credential call counts, a polled output tail and Stop. `SessionActionCardsModel`
+  credential call counts, a polled output tail, Stop and Close. Close hides an
+  ended card at once and asks about a running one (hide and keep running, or
+  hide and stop); hides stay on the device for a week, per server and account
+  (`HiddenScriptRuns`). `SessionActionCardsModel`
   owns them per session and re-reads all of them on every handshake. A You
   should know note offers Learn more, Ask about this (quotes it under the
   draft), I knew this and Turn off (press twice); Preferences has the toggle.

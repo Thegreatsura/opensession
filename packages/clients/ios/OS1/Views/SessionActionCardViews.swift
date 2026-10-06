@@ -451,6 +451,7 @@ private struct ScriptRunCard: View {
 
     @State private var showOutput = false
     @State private var confirmingStop = false
+    @State private var confirmingClose = false
     @State private var error: String?
 
     var body: some View {
@@ -479,6 +480,20 @@ private struct ScriptRunCard: View {
                             .foregroundStyle(OS1VisualStyle.textDim)
                     }
                 }
+                Button(action: close) {
+                    Image(systemName: "xmark")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(OS1VisualStyle.textDim)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(-14)
+                .accessibilityLabel("Close")
+                .accessibilityHint(run.canStop
+                    ? "Asks whether to stop the script too"
+                    : "Hides this card on this device")
+                .help("Close")
             }
 
             Text(statusLine(outcome.text))
@@ -535,6 +550,27 @@ private struct ScriptRunCard: View {
         } message: {
             Text("It's asked to stop now and killed after 10 seconds. Work it already did stays done.")
         }
+        .confirmationDialog("Close this card?", isPresented: $confirmingClose, titleVisibility: .visible) {
+            Button("Hide and keep running") { model.hideScriptRun(run) }
+            Button("Hide and stop", role: .destructive) { Task { await hideAndStop() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The script is still running. Hide the card and let it finish, or stop it too.")
+        }
+        #if DEBUG
+        .task {
+            // After the window settles: a dialog asked for mid-layout is dropped.
+            guard model.fixtureConfirmCloseRunId == run.id else { return }
+            try? await Task.sleep(for: .seconds(2))
+            confirmingClose = true
+        }
+        #endif
+    }
+
+    /// An ended card closes at once. A running one asks first, since closing
+    /// it could mean either "out of my way" or "I'm done with this script".
+    private func close() {
+        if run.canStop { confirmingClose = true } else { model.hideScriptRun(run) }
     }
 
     private func statusLine(_ text: String) -> String {
@@ -556,6 +592,17 @@ private struct ScriptRunCard: View {
         error = nil
         do {
             try await model.stopScript(run)
+            Haptics.play(.stop)
+        } catch {
+            self.error = "Couldn't stop: \(describe(error, fallback: "try again."))"
+        }
+    }
+
+    /// The card stays up when the stop is refused, showing why.
+    private func hideAndStop() async {
+        error = nil
+        do {
+            try await model.hideAndStopScript(run)
             Haptics.play(.stop)
         } catch {
             self.error = "Couldn't stop: \(describe(error, fallback: "try again."))"
