@@ -47,6 +47,7 @@ import { publishSessionRow } from "./session-row-events";
 import { workspacePrHead } from "./session-pr-target";
 import { peekWorkspace } from "./workspaces";
 import { activeRunRecords } from "./run-journal";
+import { sessionHasRunningScript } from "./script-runs";
 import {
   getRunState,
   isRunStateUnsettled,
@@ -368,6 +369,8 @@ export function enrichSessionRuntime(
     } else {
       delete s.runStartedAt;
     }
+    if (sessionHasRunningScript(s.id)) s.scriptRunning = true;
+    else delete s.scriptRunning;
     if (rs !== "idle") s.runState = rs;
     checkRunStateWedge(s.id, rs, liveEngineBusy || recoveryBusy);
   }

@@ -118,6 +118,20 @@ async function restart(extra: Partial<scripts.ScriptRunDeps> = {}) {
 setDefaultTimeout(30_000);
 
 describe("script runs", () => {
+  test("marks the session busy while a run is going and refreshes its row", async () => {
+    const published: string[] = [];
+    scripts.__resetScriptRunsForTest(
+      deps({ publishRow: (sessionId) => published.push(sessionId) }),
+    );
+    const run = await start("sleep 0.3");
+    expect(scripts.sessionHasRunningScript(SESSION)).toBe(true);
+    expect(scripts.sessionHasRunningScript("s-other")).toBe(false);
+    expect(published).toEqual([SESSION]);
+    await scripts.__waitForScriptRunForTest(run.id, 10_000);
+    expect(scripts.sessionHasRunningScript(SESSION)).toBe(false);
+    expect(published).toEqual([SESSION, SESSION]);
+  });
+
   test("runs a command to the end, keeps its output and wakes the session once", async () => {
     const run = await start("echo hello; echo bye >&2; exit 3", {
       title: "Say hello",

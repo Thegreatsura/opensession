@@ -484,6 +484,10 @@ export interface UnifiedSession {
    * sidebar then falls back to a client-observed start time.
    */
   runStartedAt?: string;
+  /** A script run the session started is still going. Separate from
+   * `isRunning` because the agent's turn may be over: the session still takes
+   * prompts directly, but the sidebar shows it in progress. */
+  scriptRunning?: boolean;
   /** DETAIL ONLY — see `claudeSessionId`. */
   transcriptPath?: string | null;
   prUrl?: string;

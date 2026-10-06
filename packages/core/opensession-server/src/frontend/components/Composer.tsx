@@ -259,6 +259,7 @@ export function Composer({
   const activeStaging = staging ?? localUploads.staging;
   const isPhone = useIsPhone();
   const attachChord = useShortcutLabel("composer-attach");
+  const noteChord = useShortcutLabel("composer-note");
   const stopKeys = useShortcutKeys("run-stop");
   const effortUpLabel = useShortcutLabel("effort-up");
   const effortDownLabel = useShortcutLabel("effort-down");
@@ -1451,7 +1452,11 @@ export function Composer({
                 key="note-mode"
                 icon={<IconNote size={15} />}
                 label="Team note"
-                title="The agent won't read this."
+                title={
+                  noteChord
+                    ? `The agent won't read this. ${noteChord} to go back.`
+                    : "The agent won't read this."
+                }
                 tone="note"
                 onRemove={() => onNoteModeChange?.(false)}
                 removeLabel="Leave note mode"

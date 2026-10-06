@@ -60,6 +60,7 @@ export type ShortcutId =
   | "session-pin"
   | "session-copy-link"
   | "session-copy-transcript"
+  | "composer-note"
   | "composer-attach"
   | "composer-dictate"
   | "composer-focus"
@@ -259,6 +260,14 @@ export const SHORTCUT_COMMANDS: ShortcutCommand[] = [
     description: "Copy the session transcript in its concise form",
     group: "Sessions",
     defaults: ["mod+alt+c"],
+  },
+  {
+    id: "composer-note",
+    title: "Team note",
+    description: "Switch the composer between a prompt and a team note",
+    group: "Composer",
+    // Not plain mod+n: the Mac app owns that for File → New Window.
+    defaults: ["mod+shift+n"],
   },
   {
     id: "composer-attach",

@@ -40,6 +40,12 @@ export function hoverState(s: UnifiedSession): HoverState {
       tone: "green",
       dotClass: SIDEBAR_STATUS_DOT.running,
     };
+  if (s.scriptRunning)
+    return {
+      label: "Script running",
+      tone: "green",
+      dotClass: SIDEBAR_STATUS_DOT.running,
+    };
   if (s.prState === "MERGED")
     return { label: "Merged", tone: "purple", dotClass: "bg-purple" };
   if (s.prState === "CLOSED")
