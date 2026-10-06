@@ -22,7 +22,10 @@ import {
   shouldRetireCommandResult,
   wsCommandOutboxForScope,
 } from "../lib/ws-command-outbox";
-import { webSocketReconnectDelay } from "../lib/ws-reconnect";
+import {
+  RAPID_WS_CLOSE_MS,
+  webSocketReconnectDelay,
+} from "../lib/ws-reconnect";
 import { TYPING_PREVIEW_MAX } from "../lib/typing";
 import { IGNORE_WS_MESSAGES, type SessionSocket } from "./useSessionSocket";
 import * as SessionSocketRuntime from "../lib/session-socket-runtime";
@@ -112,6 +115,11 @@ export function useWebSocket(presenceActive = true) {
   // A graceful handoff gets a bounded fast reconnect loop until a replacement
   // server completes its hello. Ordinary outages retain the calmer 2s backoff.
   const handoffPendingRef = useRef(false);
+  // Consecutive sockets that opened and closed again within RAPID_WS_CLOSE_MS.
+  // A server that drops every fresh socket would otherwise be redialled
+  // several times a second, each time re-watching and reloading the open
+  // transcript until the page stops responding.
+  const rapidClosesRef = useRef(0);
   const commandResultsRef = useRef(false);
   const commandOutboxRef = useRef(wsCommandOutboxForScope(localCommandScope()));
   const commandNegotiatedRef = useRef(false);
@@ -155,6 +163,7 @@ export function useWebSocket(presenceActive = true) {
     const ws = new WebSocket(getWebSocketUrl());
     wsRef.current = ws;
     aliveRef.current = true;
+    let openedAt: number | null = null;
 
     const finishCommandNegotiation = (
       supported: boolean,
@@ -225,6 +234,7 @@ export function useWebSocket(presenceActive = true) {
 
     ws.onopen = () => {
       if (wsRef.current !== ws) return;
+      openedAt = Date.now();
       setConnected(true);
       everOpenRef.current = true;
       // Flush anything queued while we were down. FIFO preserves the order the
@@ -354,6 +364,11 @@ export function useWebSocket(presenceActive = true) {
       // A close from an already-replaced socket must not flip `connected` or
       // schedule a competing reconnect — only the current socket owns state.
       if (wsRef.current !== ws) return;
+      if (openedAt !== null)
+        rapidClosesRef.current =
+          Date.now() - openedAt < RAPID_WS_CLOSE_MS
+            ? rapidClosesRef.current + 1
+            : 0;
       setConnected(false);
       if (disposedRef.current) return;
       if (event.code === 4001) {
@@ -387,7 +402,11 @@ export function useWebSocket(presenceActive = true) {
       if (disposedRef.current || wsRef.current !== ws) return;
       runtime.schedule(
         "reconnect",
-        webSocketReconnectDelay(event.code, handoffPendingRef.current),
+        webSocketReconnectDelay(
+          event.code,
+          handoffPendingRef.current,
+          rapidClosesRef.current,
+        ),
         () => connectRef.current(),
       );
     };
@@ -535,6 +554,14 @@ export function useWebSocket(presenceActive = true) {
 
   const send = useCallback(
     (msg: WSClientMessage) => {
+      // Skip the backoff for a message someone is waiting on, unless sockets
+      // keep closing right after they open: then the scheduled reconnect
+      // carries the queued message instead.
+      const dialNow = () => {
+        if (rapidClosesRef.current >= 2) return;
+        runtime.cancel("reconnect");
+        connect();
+      };
       msg = withMutationRequestId(msg);
       const mutationRequestId = "requestId" in msg ? msg.requestId : undefined;
       if (mutationRequestId && !commandNegotiatedRef.current) {
@@ -543,10 +570,8 @@ export function useWebSocket(presenceActive = true) {
         if (!saved.ok) throw new Error(describePutFailure(saved.reason));
         negotiatingCommandsRef.current.set(mutationRequestId, msg);
         const pendingSocket = wsRef.current;
-        if (!pendingSocket || pendingSocket.readyState === WebSocket.CLOSED) {
-          runtime.cancel("reconnect");
-          connect();
-        }
+        if (!pendingSocket || pendingSocket.readyState === WebSocket.CLOSED)
+          dialNow();
         return;
       }
       const durableMutation =
@@ -575,24 +600,21 @@ export function useWebSocket(presenceActive = true) {
       }
       // Durable mutations replay from their receipt outbox after reconnect.
       if (durableMutation?.ok) {
-        if (!ws || ws.readyState === WebSocket.CLOSED) {
-          runtime.cancel("reconnect");
-          connect();
-        }
+        if (!ws || ws.readyState === WebSocket.CLOSED) dialNow();
         return;
       }
-      // Liveness pings are worthless once stale — never queue them.
-      if (msg.type === "ping") return;
+      // Liveness pings are worthless once stale, and the server already drops
+      // a closed socket's watches. Never queue either: an unwatch sent from a
+      // viewer's cleanup on disconnect would otherwise redial at once and skip
+      // the reconnect backoff.
+      if (msg.type === "ping" || msg.type === "unwatch") return;
       const box = outboxRef.current;
       box.push({ msg, at: Date.now() });
       // Keep only the most recent OUTBOX_MAX (drop oldest intent first).
       if (box.length > OUTBOX_MAX) box.splice(0, box.length - OUTBOX_MAX);
       // Don't wait out the 2s backoff — try to reconnect right now so the
       // queued message goes out as soon as possible.
-      if (!ws || ws.readyState === WebSocket.CLOSED) {
-        runtime.cancel("reconnect");
-        connect();
-      }
+      if (!ws || ws.readyState === WebSocket.CLOSED) dialNow();
     },
     [connect, runtime],
   );
