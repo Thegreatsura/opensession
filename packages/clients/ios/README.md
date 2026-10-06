@@ -118,10 +118,19 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   opening it reveals steps, tool families and changed files. Wider layouts also
   show the richer fingerprint inline. The turn's final answer escapes the fold
   and renders as a normal message. On phones, one changed-files summary
-  replaces the footer chip cloud while opening the same Changes panel. Team
-  notes sit in that timeline without entering the agent context. The
-  yellow composer mode posts them directly to the team and offers only the
-  author edit and delete actions.
+  replaces the footer chip cloud while opening the same Changes panel. Comment
+  threads sit beside that timeline without entering the agent context: a
+  thread with no passage is a team note in the timeline (the yellow composer
+  mode posts one), and a thread on a passage shows as a quoted chip under the
+  row that holds it. Select text and choose Comment to start one. Threads take
+  replies, an assignee, resolve and reopen, `@agent` side answers and Send to
+  session; a resolved note folds to one line, and a long thread opens in a
+  sheet (medium/large detents on iPhone) with its reply box pinned. Unsent
+  comments survive the sheet or the session remounting (`CommentDrafts`). A
+  `?thread=` link from the inbox or a banner opens that thread and scrolls the
+  transcript to it (`ThreadFocus`). Draft lines starting with `>` render
+  dimmed, markers fainter, so a quoted passage (an Ask about this note) reads
+  apart from the question; only colour changes, on the field's own text view.
   Tool rows use the server's presentation metadata for canonical names,
   humanized MCP server/tool labels, glyph families, summaries and ±lines; the
   native derivation remains as an older-server fallback. Expanding one renders
@@ -642,6 +651,15 @@ OS1/
 ## Protocol notes (from the server source)
 
 - Public paths are prefix-less: REST at `/api/...`, WebSocket at `/ws`.
+- Comment threads: `GET/POST /api/sessions/:id/threads`, `PATCH .../threads/:tid`
+  (status, assignee, `null` unassigns), `POST .../comments`,
+  `PATCH|DELETE .../comments/:cid`, `POST .../agent`. Each mutation is
+  broadcast as `comment_thread` (or `comment_thread_deleted`) to the session's
+  watchers, so a response and its echo land in either order
+  (`SessionComments.apply` keeps the newer `updatedAt`). A session-level thread
+  is also broadcast app-wide as the legacy `session_note`; on a threads server
+  that frame is an echo and is dropped. Comment notifications ride the
+  mentions alert group.
 - WS handshake: server sends `{"type":"hello","bootId":...}` first; the client
   sends `watch` only after that, so it can't race the upgrade.
 - `transcript_init` replaces the tail, `transcript_history` prepends,

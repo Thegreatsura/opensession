@@ -22,10 +22,9 @@ final class SessionViewModel {
     var safety: SessionSafetyState? { session.safety }
 
     private(set) var entries: [TranscriptEntry] = []
-    private(set) var sessionNotes: [SessionNote] = []
-    /// The note list can answer after a live delete. Remember removals so that
-    /// stale response cannot put a deleted note back into the transcript.
-    private var deletedSessionNoteIds: Set<String> = []
+    /// Comment threads: inline comments on passages and the team notes the
+    /// timeline interleaves. Observed on its own (see `SessionComments`).
+    let comments = SessionComments()
     /// Ephemeral entries from the live engine stream (tool calls mid-run).
     /// They render at the end in stream order and graduate into `entries`
     /// when the file watcher lands them via transcript_append — the
@@ -694,6 +693,7 @@ final class SessionViewModel {
         self.accountId = session.accountId ?? ""
         quickReplies.send = { [weak self] text in self?.sendQuickReply(text) }
         quickReplies.fill = { [weak self] text in self?.fillComposer(with: text) }
+        quoteSelection.onCommentRequest = { [weak self] in self?.commentOnSelection() }
         if let composerDraft {
             self.draft = composerDraft.text
             self.attachedImages = composerDraft.images
@@ -814,7 +814,7 @@ final class SessionViewModel {
         armConversationLoadDeadline()
         connect()
         loadPr()
-        loadSessionNotes()
+        loadCommentThreads()
     }
 
     func stop() {
@@ -931,33 +931,74 @@ final class SessionViewModel {
         workflowLoadFailed = false
     }
 
-    func loadSessionNotes() {
+    /// Load the session's threads. A server that predates threads still has
+    /// the old notes routes; their notes show as threads that take no replies.
+    func loadCommentThreads() {
         notesTask?.cancel()
         notesTask = Task { [weak self] in
             guard let self else { return }
+            let sessionId = self.session.id
+            let token = self.comments.snapshotToken()
             do {
-                let notes = try await OS1API.sessionNotes(sessionId: self.session.id)
+                let threads = try await OS1API.commentThreads(sessionId: sessionId)
                 guard !Task.isCancelled else { return }
-                self.mergeSessionNotes(notes)
+                self.updateComments { $0.merge(threads, since: token) }
             } catch {
-                // Notes are an enhancement to the transcript. A server that
-                // predates them still opens the conversation normally.
+                guard !Task.isCancelled,
+                      let notes = try? await OS1API.sessionNotes(sessionId: sessionId),
+                      !Task.isCancelled
+                else { return }
+                // Comments are an enhancement to the transcript. A server
+                // that has neither route still opens the conversation.
+                self.updateComments {
+                    $0.merge(
+                        notes.map { CommentThread(legacyNote: $0, sessionId: sessionId) },
+                        since: token,
+                        supported: false
+                    )
+                }
             }
         }
     }
 
+    /// Run a comments mutation, rebuilding the transcript only when the set
+    /// of timeline notes moved: a reply or a resolve re-renders its own row.
+    private func updateComments(_ change: (SessionComments) -> Void) {
+        let before = comments.timelineSignature
+        change(comments)
+        if comments.timelineSignature != before { rebuildDisplayItems() }
+    }
+
+    /// Apply a thread a request answered with; its broadcast echo is a no-op.
+    func applyCommentThread(_ thread: CommentThread) {
+        updateComments { $0.apply(thread) }
+    }
+
+    func removeCommentThread(id: String) {
+        updateComments { $0.remove(id: id) }
+    }
+
+    /// Post the composer's draft as a team note: a thread with no passage.
     func addSessionNote() async -> Bool {
         let typed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let images = attachedImages.map(\.dataURL)
         guard !typed.isEmpty || !images.isEmpty else { return false }
         let text = quoteSelection.message(with: typed)
         do {
-            let note = try await OS1API.addSessionNote(
-                sessionId: session.id,
-                text: text,
-                images: images
-            )
-            upsertSessionNote(note)
+            if comments.threadsSupported == false {
+                let note = try await OS1API.addSessionNote(
+                    sessionId: session.id,
+                    text: text,
+                    images: images
+                )
+                updateComments { $0.applyLegacyNote(note, sessionId: session.id) }
+            } else {
+                applyCommentThread(try await OS1API.createCommentThread(
+                    sessionId: session.id,
+                    text: text,
+                    images: images
+                ))
+            }
             draft = ""
             attachedImages = []
             quoteSelection.clear()
@@ -969,18 +1010,111 @@ final class SessionViewModel {
         }
     }
 
-    func editSessionNote(_ note: SessionNote, text: String) async throws {
-        let changed = try await OS1API.editSessionNote(
+    /// Start an inline comment on a passage.
+    func createComment(text: String, anchor: TextAnchor?, assignee: String?) async throws {
+        let thread = try await OS1API.createCommentThread(
             sessionId: session.id,
-            noteId: note.id,
-            text: text
+            text: text,
+            anchor: anchor,
+            assignee: assignee
         )
-        upsertSessionNote(changed)
+        applyCommentThread(thread)
     }
 
-    func deleteSessionNote(_ note: SessionNote) async throws {
-        try await OS1API.deleteSessionNote(sessionId: session.id, noteId: note.id)
-        removeSessionNote(id: note.id)
+    /// Reply; replying to a resolved thread reopens it, as on the web.
+    func replyToThread(_ thread: CommentThread, text: String) async throws {
+        var next = try await OS1API.replyToCommentThread(
+            sessionId: session.id,
+            threadId: thread.id,
+            text: text
+        )
+        applyCommentThread(next)
+        if next.isResolved {
+            next = try await OS1API.updateCommentThread(
+                sessionId: session.id,
+                threadId: thread.id,
+                patch: .init(status: .open)
+            )
+            applyCommentThread(next)
+        }
+    }
+
+    func setThreadStatus(_ thread: CommentThread, _ status: CommentThread.Status) async throws {
+        applyCommentThread(try await OS1API.updateCommentThread(
+            sessionId: session.id,
+            threadId: thread.id,
+            patch: .init(status: status)
+        ))
+    }
+
+    func assignThread(_ thread: CommentThread, to assignee: String?) async throws {
+        applyCommentThread(try await OS1API.updateCommentThread(
+            sessionId: session.id,
+            threadId: thread.id,
+            patch: .init(assignee: .some(assignee))
+        ))
+    }
+
+    func editThreadComment(_ thread: CommentThread, _ comment: ThreadComment, text: String) async throws {
+        if thread.legacy {
+            let note = try await OS1API.editSessionNote(sessionId: session.id, noteId: thread.id, text: text)
+            updateComments { $0.applyLegacyNote(note, sessionId: session.id) }
+            return
+        }
+        applyCommentThread(try await OS1API.editThreadComment(
+            sessionId: session.id,
+            threadId: thread.id,
+            commentId: comment.id,
+            text: text
+        ))
+    }
+
+    /// Deleting the opening comment deletes the thread.
+    func deleteThreadComment(_ thread: CommentThread, _ comment: ThreadComment) async throws {
+        if thread.legacy {
+            try await OS1API.deleteSessionNote(sessionId: session.id, noteId: thread.id)
+            removeCommentThread(id: thread.id)
+            return
+        }
+        if let next = try await OS1API.deleteThreadComment(
+            sessionId: session.id,
+            threadId: thread.id,
+            commentId: comment.id
+        ) {
+            applyCommentThread(next)
+        } else {
+            removeCommentThread(id: thread.id)
+        }
+    }
+
+    func askAgentInThread(_ thread: CommentThread) async throws {
+        try await OS1API.askAgentInThread(sessionId: session.id, threadId: thread.id)
+    }
+
+    /// "Comment" on the selected passage: hold its anchor while the comment
+    /// is written. The selection knows its entry when it came from a row's
+    /// menu; a Mac drag-selection is matched to the entry holding its words.
+    func commentOnSelection() {
+        guard let text = quoteSelection.text else { return }
+        let entryId = quoteSelection.entryId ?? entryId(containing: text)
+        let anchor = entryId.flatMap { quoteSelection.commentAnchor(entryId: $0) }
+        quoteSelection.clear()
+        comments.pendingAnchor = anchor ?? TextAnchor(entryId: "", exact: text)
+    }
+
+    /// The newest message whose text holds these words.
+    func entryId(containing words: String) -> String? {
+        let needle = words.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return nil }
+        return (entries + liveEntries).last { entry in
+            (entry.isUser || entry.isAssistant) && entry.text.contains(needle)
+        }?.id
+    }
+
+    /// Hand a thread to the main session: its text lands in the composer,
+    /// appended to any draft, for the person to read, edit and send.
+    func sendThreadToSession(_ thread: CommentThread) {
+        appendQuotedDraft(thread.sendToSessionText)
     }
 
     // ── Pull request actions ──
@@ -2015,6 +2149,10 @@ final class SessionViewModel {
             isServerHandoffPending = true
 
         case .transcriptInit(let id, let newEntries, let cursor) where id == session.id:
+            // A re-watch after a dropped socket: thread frames sent while it
+            // was down are gone, so re-read the list (the first open already
+            // loads it in `startConnection`).
+            if comments.threadsSupported != nil { loadCommentThreads() }
             creationRetryTask?.cancel()
             conversationLoadTask?.cancel()
             conversationLoadError = nil
@@ -2147,10 +2285,18 @@ final class SessionViewModel {
             rebuildDisplayItems()
 
         case .sessionNote(let id, let note) where id == session.id:
-            upsertSessionNote(note)
+            // On a threads server this is the echo of a `comment_thread`
+            // frame for the same id and is dropped (`applyLegacyNote`).
+            updateComments { $0.applyLegacyNote(note, sessionId: id) }
 
         case .sessionNoteDeleted(let id, let noteId) where id == session.id:
-            removeSessionNote(id: noteId)
+            removeCommentThread(id: noteId)
+
+        case .commentThread(let id, let thread) where id == session.id:
+            applyCommentThread(thread)
+
+        case .commentThreadDeleted(let id, let threadId) where id == session.id:
+            removeCommentThread(id: threadId)
 
         case .streamStart(let id) where id == session.id:
             liveFlushTask?.cancel()
@@ -2579,7 +2725,7 @@ final class SessionViewModel {
             live: isRunning || isStreaming,
             worktreeDir: session.worktreeDir,
             walkthrough: session.walkthrough,
-            notes: sessionNotes,
+            notes: comments.timelineThreads,
             reviewResult: ReviewLoopResult(session: session),
             thinkingMessages: thinkingMessages
         )
@@ -2718,39 +2864,6 @@ final class SessionViewModel {
                 entries.append(entry)
             }
         }
-    }
-
-    private func upsertSessionNote(_ note: SessionNote) {
-        deletedSessionNoteIds.remove(note.id)
-        if let index = sessionNotes.firstIndex(where: { $0.id == note.id }) {
-            sessionNotes[index] = note
-        } else {
-            sessionNotes.append(note)
-        }
-        sessionNotes.sort { $0.ts < $1.ts }
-        rebuildDisplayItems()
-    }
-
-    private func removeSessionNote(id: String) {
-        deletedSessionNoteIds.insert(id)
-        sessionNotes.removeAll { $0.id == id }
-        rebuildDisplayItems()
-    }
-
-    private func mergeSessionNotes(_ incoming: [SessionNote]) {
-        var merged = Dictionary(uniqueKeysWithValues: sessionNotes.map { ($0.id, $0) })
-        for note in incoming where !deletedSessionNoteIds.contains(note.id) {
-            if let current = merged[note.id], noteVersion(current) > noteVersion(note) {
-                continue
-            }
-            merged[note.id] = note
-        }
-        sessionNotes = merged.values.sorted { $0.ts < $1.ts }
-        rebuildDisplayItems()
-    }
-
-    private func noteVersion(_ note: SessionNote) -> Double {
-        note.editedAt ?? note.ts
     }
 
     // MARK: - Delivering chips

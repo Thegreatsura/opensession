@@ -239,7 +239,12 @@ final class NotificationInboxStore {
     /// Open a row: mark it read and hand its destination to the router.
     func open(_ thread: InboxThread) {
         if thread.unread { mark([thread.id], unread: false) }
-        openRequest = OpenRequest(destination: InboxDestination.resolve(thread), url: thread.url)
+        let destination = InboxDestination.resolve(thread)
+        // A comment link opens its session with that thread focused.
+        if case .session(let sessionId) = destination {
+            ThreadFocus.shared.note(link: thread.url, sessionId: sessionId)
+        }
+        openRequest = OpenRequest(destination: destination, url: thread.url)
     }
 
     /// A banner tap. Only for the inbox it was raised in.
@@ -255,7 +260,12 @@ final class NotificationInboxStore {
         let parts = target.threadId.split(separator: ":", maxSplits: 1).map(String.init)
         let kind = parts.count == 2 ? parts[0] : ""
         let destination: InboxDestination
-        if kind == "session" {
+        if let url = target.url, let routed = InboxDestination.route(url) {
+            destination = routed
+            if case .session(let sessionId) = routed {
+                ThreadFocus.shared.note(link: url, sessionId: sessionId)
+            }
+        } else if kind == "session" {
             destination = .session(parts[1])
         } else if kind == "workspace" {
             destination = .workspace(parts[1])
@@ -264,7 +274,7 @@ final class NotificationInboxStore {
         } else {
             destination = .web("/")
         }
-        openRequest = OpenRequest(destination: destination, url: "/")
+        openRequest = OpenRequest(destination: destination, url: target.url ?? "/")
     }
 
     func takeOpenRequest() -> OpenRequest? {

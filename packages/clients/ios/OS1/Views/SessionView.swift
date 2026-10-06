@@ -185,6 +185,8 @@ struct SessionView: View {
     /// re-pins through that window, and any real scroll gesture ends it
     /// immediately so it can never fight the reader.
     @State private var holdingAtLatest = true
+    /// A comment thread waiting for its block to load before it scrolls in.
+    @State private var pendingThreadReveal: String?
     @State private var holdTask: Task<Void, Never>?
     private static let initialHoldSeconds: Double = 2.5
 
@@ -633,6 +635,22 @@ struct SessionView: View {
                             // inset settle instead of stopping at the old tail.
                             beginHold(proxy, after: .milliseconds(450))
                         }
+                        // A thread opened from a link, the list or a chip:
+                        // bring its passage or note into view. A link can
+                        // land before the transcript has, so it waits.
+                        // `initial`: a link taken while the transcript was
+                        // still a skeleton is waiting here when it mounts.
+                        .onChange(of: viewModel.comments.revealRequest, initial: true) {
+                            guard let threadId = viewModel.comments.takeRevealRequest() else { return }
+                            pendingThreadReveal = threadId
+                            revealPendingThread(proxy)
+                        }
+                        .onChange(of: viewModel.isLoadingConversation) { _, loading in
+                            if !loading { revealPendingThread(proxy, settle: true) }
+                        }
+                        .onChange(of: viewModel.displayBlocks.count) {
+                            revealPendingThread(proxy)
+                        }
                     // The size-change anchor alone doesn't reliably hold the
                     // bottom while new output arrives (keyboard insets + lazy
                     // row settling knock it loose), so follow explicitly while
@@ -874,6 +892,9 @@ struct SessionView: View {
             ToolbarItem(placement: .topTrailingCompat) {
                 AddToSidebarButton(session: viewModel.session, siblings: tabs)
             }
+            ToolbarItem(placement: .topTrailingCompat) {
+                CommentsToolbarButton(comments: viewModel.comments)
+            }
             if !workspaceHistoryRows.isEmpty, onRestoreArchivedSession != nil {
                 ToolbarItem(placement: .topTrailingCompat) {
                     SessionHistoryMenu(
@@ -899,6 +920,7 @@ struct SessionView: View {
             }
 
         let presentedContent = toolbarContent
+            .modifier(SessionCommentsPresenter(viewModel: viewModel))
             .sheet(isPresented: $showPrPanel) {
             PrPanelView(viewModel: viewModel)
         }
@@ -1717,12 +1739,7 @@ struct SessionView: View {
             onDeleteUnsent: { item in
                 viewModel.discardUnsent(item)
             },
-            onEditNote: { note, text in
-                try await viewModel.editSessionNote(note, text: text)
-            },
-            onDeleteNote: { note in
-                try await viewModel.deleteSessionNote(note)
-            },
+            comments: CommentsContext(viewModel: viewModel),
             onForkMessage: canForkSession ? { entry in
                 forkState.enter(messageId: entry.id)
             } : nil,
@@ -1807,6 +1824,37 @@ struct SessionView: View {
             withAnimation(.snappy) { proxy.scrollTo(target, anchor: .bottom) }
         } else {
             proxy.scrollTo(target, anchor: .bottom)
+        }
+    }
+
+    /// Scroll to the thread `pendingThreadReveal` names once its block is in
+    /// the transcript. `settle` waits out the opening hold the same load arms.
+    private func revealPendingThread(_ proxy: ScrollViewProxy, settle: Bool = false) {
+        guard let threadId = pendingThreadReveal, !viewModel.isLoadingConversation,
+              let thread = viewModel.comments.thread(id: threadId),
+              let target = SessionComments.blockId(for: thread, in: viewModel.displayBlocks)
+        else { return }
+        pendingThreadReveal = nil
+        let generation = scrollInteractionGeneration
+        Task { @MainActor in
+            // Re-assert for a beat, like the opening hold does for the end:
+            // the same open can restore a draft or settle rows that would
+            // otherwise carry the reader back to the latest. A hand on the
+            // transcript ends it.
+            for (index, wait) in [settle ? 300 : 0, 500, 900].enumerated() {
+                if wait > 0 { try? await Task.sleep(for: .milliseconds(wait)) }
+                guard generation == scrollInteractionGeneration else { return }
+                endHold()
+                cancelPrependRestore()
+                readerMovedTowardHistory = true
+                pinnedToBottom = false
+                newBelow = false
+                if index == 0 {
+                    withAnimation(.smooth(duration: 0.3)) { proxy.scrollTo(target, anchor: .top) }
+                } else {
+                    proxy.scrollTo(target, anchor: .top)
+                }
+            }
         }
     }
 
@@ -1971,6 +2019,12 @@ private struct SessionActionsMenu: View {
                     Label("Fork", systemImage: "arrow.triangle.branch")
                 }
                 .accessibilityHint("Starts a new session from the current history")
+            }
+            Button {
+                viewModel.comments.showingList = true
+            } label: {
+                let open = viewModel.comments.openCount
+                Label(open > 0 ? "Comments (\(open))" : "Comments", systemImage: "text.bubble")
             }
             if !workerSessions.isEmpty {
                 Menu {
@@ -3711,6 +3765,16 @@ private struct SessionInputBar: View {
             Text("Selected text")
             Spacer(minLength: 8)
             Button {
+                viewModel.commentOnSelection()
+            } label: {
+                Label("Comment", systemImage: "text.bubble")
+                    .padding(.horizontal, 6)
+                    .frame(height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Comment on the selected text")
+            Button {
                 viewModel.quoteSelection.clear()
                 inputFocused = true
             } label: {
@@ -3981,6 +4045,10 @@ private struct SessionInputBar: View {
                 ) {
                     Text(noteMode ? "Team note" : "Message")
                 }
+                // Dims `>` quote lines in place: colour only, on the field's
+                // own text view, so metrics, selection, IME and the send key
+                // stay the stock field's.
+                .background(ComposerQuoteHighlight(text: projectedDraft.wrappedValue))
                 .textFieldStyle(.plain)
                 .disabled(viewModel.safety != nil)
                 .lineLimit(1...10)

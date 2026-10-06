@@ -45,12 +45,33 @@ struct ComposerMentionContext: Equatable {
         )
     }
 
-    private static func caretUTF16Offset(in text: String, selection: TextSelection?) -> Int? {
+    static func caretUTF16Offset(in text: String, selection: TextSelection?) -> Int? {
         guard let selection else { return (text as NSString).length }
-        guard case .selection(let range) = selection.indices, range.isEmpty,
-              let caret = range.lowerBound.samePosition(in: text.utf16)
-        else { return nil }
-        return text.utf16.distance(from: text.utf16.startIndex, to: caret)
+        guard case .selection(let range) = selection.indices, range.isEmpty else { return nil }
+        return utf16Offset(of: range.lowerBound, in: text)
+    }
+
+    /// Where an index from the field's selection sits in `text`, or nil when
+    /// it lies past the end.
+    ///
+    /// The field and its binding update in separate passes, so the selection
+    /// can belong to a newer copy of the draft than `text`, and its index can
+    /// be UTF-16 encoded (bridged from the platform text view) while `text`
+    /// is native UTF-8. Converting such an index past `text`'s end traps
+    /// ("String index is out of bounds"): a draft with any non-ASCII
+    /// character, like the middle dot an "Ask about this" quote carries,
+    /// crashed the composer on the next keystroke. The conversion runs on a
+    /// copy padded past the index's raw offset in either encoding, which
+    /// shares every position with `text`, so it can never trap.
+    static func utf16Offset(of index: String.Index, in text: String) -> Int? {
+        // Unvalidated: the index's offset in its own encoding.
+        let raw = index.encodedOffset
+        let shortest = min(text.utf8.count, text.utf16.count)
+        let roomy = raw <= shortest
+            ? text
+            : text + String(repeating: " ", count: raw - shortest + 1)
+        let offset = index.utf16Offset(in: roomy)
+        return offset <= text.utf16.count ? offset : nil
     }
 }
 

@@ -188,6 +188,7 @@ private struct InboxRow: View {
         case .reviewDone: "checkmark.circle"
         case .teamReviewRequested: "person.2"
         case .mention: "at"
+        case .comment: "text.bubble"
         case .collaborator: "person.2"
         case .reminder: "clock"
         case nil: "bell"
@@ -197,7 +198,7 @@ private struct InboxRow: View {
     static func tint(_ kind: InboxKind?) -> Color {
         switch kind {
         case .reviewRequested, .reviewDone: OS1VisualStyle.blue
-        case .mention, .collaborator: OS1VisualStyle.accent
+        case .mention, .comment, .collaborator: OS1VisualStyle.accent
         case .teamReviewRequested, .reminder, nil: OS1VisualStyle.textDim
         }
     }

@@ -19,8 +19,9 @@ enum TranscriptBlock: Identifiable, Equatable {
     case footer(TurnFooter)
     /// The agent-published walkthrough, at the point it was published.
     case walkthrough(SessionWalkthrough)
-    /// A team note that the agent never sees.
-    case note(SessionNote)
+    /// A team note that the agent never sees: a comment thread with no
+    /// passage, placed by its opening comment's time.
+    case note(CommentThread)
     /// A PR review handoff and the fix work it triggered, as one fold.
     case reviewLoop(ReviewLoop)
 
@@ -507,7 +508,7 @@ enum TranscriptGrouping {
         live: Bool,
         worktreeDir: String?,
         walkthrough: SessionWalkthrough? = nil,
-        notes: [SessionNote] = [],
+        notes: [CommentThread] = [],
         reviewResult: ReviewLoopResult? = nil,
         thinkingMessages: ThinkingMessages = .standard
     ) -> [TranscriptBlock] {
@@ -791,7 +792,7 @@ enum TranscriptGrouping {
     /// Interleave team notes by timestamp without splitting an answer from its
     /// footer. Mirrors the web transcript's placement rule.
     private static func place(
-        _ notes: [SessionNote], into blocks: [TranscriptBlock]
+        _ notes: [CommentThread], into blocks: [TranscriptBlock]
     ) -> [TranscriptBlock] {
         guard !notes.isEmpty else { return blocks }
         var out = blocks

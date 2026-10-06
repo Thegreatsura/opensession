@@ -322,7 +322,8 @@ final class NotificationInboxTests: XCTestCase {
         XCTAssertEqual(delivered.first?.content.title, "Grace mentioned you")
         XCTAssertEqual(delivered.first?.content.body, "Fix login: Can you look?")
         let target = NotificationTap.target(from: delivered[0].content.userInfo)
-        XCTAssertEqual(target, NotificationTap.Target(threadId: "session:os-9", scope: acme))
+        // The link rides along, so a cold launch can still focus a comment.
+        XCTAssertEqual(target, NotificationTap.Target(threadId: "session:os-9", scope: acme, url: "/session/os-1"))
     }
 
     // MARK: - Accounts

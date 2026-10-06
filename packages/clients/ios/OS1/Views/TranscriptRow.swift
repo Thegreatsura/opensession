@@ -26,8 +26,9 @@ struct TranscriptRow: View {
     var onEditMessage: ((TranscriptEntry) -> Void)?
     var onEditUnsent: ((Outbox.Item) -> Void)?
     var onDeleteUnsent: ((Outbox.Item) -> Void)?
-    var onEditNote: ((SessionNote, String) async throws -> Void)?
-    var onDeleteNote: ((SessionNote) async throws -> Void)?
+    /// Comment threads: notes in the timeline and comments on passages.
+    /// Without it (a sub-agent pane) notes show read-only.
+    var comments: CommentsContext? = nil
     var onForkMessage: ((TranscriptEntry) -> Void)?
     var failureContinuation: FailureContinuationAction? = nil
     /// Gives a You should know note its answers. Without it (a surface with
@@ -35,6 +36,28 @@ struct TranscriptRow: View {
     var youShouldKnow: YouShouldKnowAction? = nil
 
     var body: some View {
+        switch block {
+        case .message, .work:
+            if let comments {
+                VStack(alignment: .leading, spacing: 8) {
+                    content.environment(\.transcriptAnchorEntryId, messageEntryId)
+                    AnchoredThreadsStrip(entryIds: block.entryIds, context: comments)
+                }
+            } else {
+                content.environment(\.transcriptAnchorEntryId, messageEntryId)
+            }
+        default:
+            content
+        }
+    }
+
+    private var messageEntryId: String? {
+        if case .message(let entry) = block { return entry.id }
+        return nil
+    }
+
+    @ViewBuilder
+    private var content: some View {
         switch block {
         case .message(let entry):
             // A notice is anything that isn't someone talking, whatever
@@ -135,185 +158,8 @@ struct TranscriptRow: View {
                 state: expansionState(block.id, false),
                 expansionState: expansionState
             )
-        case .note(let note):
-            SessionNoteRow(
-                note: note,
-                sessionId: sessionId,
-                onEdit: isMine(note) ? { text in
-                    guard let onEditNote else { return }
-                    try await onEditNote(note, text)
-                } : nil,
-                onDelete: isMine(note) ? {
-                    guard let onDeleteNote else { return }
-                    try await onDeleteNote(note)
-                } : nil
-            )
-        }
-    }
-
-    private func isMine(_ note: SessionNote) -> Bool {
-        note.user.trimmingCharacters(in: .whitespacesAndNewlines)
-            .localizedCaseInsensitiveCompare(
-                ServerConfig.shared.userName.trimmingCharacters(in: .whitespacesAndNewlines)
-            ) == .orderedSame
-    }
-}
-
-private struct SessionNoteRow: View {
-    let note: SessionNote
-    let sessionId: String
-    var onEdit: ((String) async throws -> Void)?
-    var onDelete: (() async throws -> Void)?
-
-    @State private var editing = false
-    @State private var draft: String
-    @State private var busy = false
-    @State private var error: String?
-
-    init(
-        note: SessionNote,
-        sessionId: String,
-        onEdit: ((String) async throws -> Void)? = nil,
-        onDelete: (() async throws -> Void)? = nil
-    ) {
-        self.note = note
-        self.sessionId = sessionId
-        self.onEdit = onEdit
-        self.onDelete = onDelete
-        _draft = State(initialValue: note.text)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 7) {
-                UserAvatar(person: note.user, size: 18)
-                Text(note.user)
-                    .font(.caption.weight(.semibold))
-                Text("Note")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(OS1VisualStyle.yellowInk)
-                Text(note.date, format: .dateTime.month(.abbreviated).day().hour().minute())
-                    .font(.caption2)
-                    .foregroundStyle(OS1VisualStyle.textFaint)
-                if note.editedAt != nil {
-                    Text("· edited")
-                        .font(.caption2)
-                        .foregroundStyle(OS1VisualStyle.textFaint)
-                }
-                Spacer(minLength: 4)
-                if onEdit != nil || onDelete != nil {
-                    Menu {
-                        if onEdit != nil {
-                            Button {
-                                draft = note.text
-                                editing = true
-                            } label: {
-                                Label("Edit", systemImage: "square.and.pencil")
-                            }
-                        }
-                        if let onDelete {
-                            Button(role: .destructive) {
-                                Task {
-                                    do { try await onDelete() }
-                                    catch { self.error = error.localizedDescription }
-                                }
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .frame(width: 32, height: 32)
-                            .contentShape(Rectangle())
-                    }
-                    .menuIndicator(.hidden)
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Note actions")
-                }
-            }
-            if editing {
-                TextEditor(text: $draft)
-                    .font(.body)
-                    .scrollContentBackground(.hidden)
-                    .padding(8)
-                    .background(OS1VisualStyle.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(OS1VisualStyle.yellow.opacity(0.5), lineWidth: 1)
-                    }
-                    .frame(minHeight: 96)
-                    .disabled(busy)
-                HStack(spacing: 12) {
-                    Button("Save") { save() }
-                        .buttonStyle(.borderedProminent)
-                        .tint(OS1VisualStyle.accent)
-                        .disabled(busy || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    Button("Cancel") {
-                        draft = note.text
-                        editing = false
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(busy)
-                    Spacer()
-                }
-                .font(.subheadline.weight(.medium))
-            } else {
-                if !note.text.isEmpty {
-                    // An attributed string, so a mention reads as a name and a
-                    // pasted URL is tappable: the same two tokens the web
-                    // bubble marks up. See `NoteText` for why a note does not
-                    // go through the markdown pipeline.
-                    Text(NoteText.attributed(note.text))
-                        .font(.body)
-                        .foregroundStyle(OS1VisualStyle.text)
-                        .textSelection(.enabled)
-                }
-                if let images = note.images, !images.isEmpty {
-                    ConversationImageStrip(
-                        sources: images,
-                        sessionId: sessionId,
-                        size: 140
-                    )
-                }
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            OS1VisualStyle.yellow.opacity(0.10),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-        )
-        .alert("Couldn't change note", isPresented: Binding(
-            get: { error != nil },
-            set: { if !$0 { error = nil } }
-        )) {
-            Button("OK") { error = nil }
-        } message: {
-            Text(error ?? "Try again.")
-        }
-        .onChange(of: note.text) { _, text in
-            if !editing { draft = text }
-        }
-    }
-
-    private func save() {
-        guard let onEdit, !busy else { return }
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        guard text != note.text else {
-            editing = false
-            return
-        }
-        busy = true
-        Task {
-            do {
-                try await onEdit(text)
-                editing = false
-            } catch {
-                self.error = error.localizedDescription
-            }
-            busy = false
+        case .note(let thread):
+            TimelineThreadCard(thread: thread, sessionId: sessionId, context: comments)
         }
     }
 }

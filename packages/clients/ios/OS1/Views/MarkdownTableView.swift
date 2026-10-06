@@ -39,6 +39,7 @@ struct MarkdownTableView: View {
     }
     var sortControls: SortControls?
     @Environment(\.transcriptQuoteSelection) private var quoteSelection
+    @Environment(\.transcriptAnchorEntryId) private var anchorEntryId
 
     @State private var available: CGFloat = 0
 
@@ -72,7 +73,7 @@ struct MarkdownTableView: View {
                     SwiftStreamingMarkdown.MarkdownView(
                         text: table.markdownSource(),
                         config: config,
-                        listener: quoteSelection?.listener
+                        listener: quoteSelection?.listener(entryId: anchorEntryId)
                     )
                 }
             }

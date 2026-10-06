@@ -17,6 +17,11 @@ import AppKit
 @MainActor
 final class TranscriptQuoteSelection {
     private(set) var text: String?
+    /// The transcript entry the selection sits in, when the row said so.
+    @ObservationIgnored private(set) var entryId: String?
+    /// Set by the view model: "Comment" was chosen on the selection.
+    @ObservationIgnored var onCommentRequest: (() -> Void)?
+    @ObservationIgnored private var entryListeners: [String: any MarkdownListener] = [:]
 
     @ObservationIgnored private weak var sourceTextView: PlatformTextView?
     @ObservationIgnored private var sourceRange = NSRange(location: NSNotFound, length: 0)
@@ -27,10 +32,24 @@ final class TranscriptQuoteSelection {
     @ObservationIgnored private(set) lazy var listener: any MarkdownListener =
         TranscriptQuoteListener(selection: self)
 
-    func stage(_ candidate: String) {
+    /// A listener that also records which entry a selection came from, so a
+    /// comment can anchor to it. One per entry, kept so a row's renderer sees
+    /// the same object on every body evaluation.
+    func listener(entryId: String?) -> any MarkdownListener {
+        guard let entryId else { return listener }
+        if let existing = entryListeners[entryId] { return existing }
+        if entryListeners.count > 400 { entryListeners.removeAll(keepingCapacity: true) }
+        let made = TranscriptQuoteListener(selection: self, entryId: entryId)
+        entryListeners[entryId] = made
+        return made
+    }
+
+    func stage(_ candidate: String, entryId: String? = nil) {
         let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 2 else { return }
+        if let entryId { self.entryId = entryId }
         if text == trimmed, let sourceTextView, sourceStillMatches(sourceTextView) { return }
+        if text != trimmed { self.entryId = entryId }
 
         removeRetainedHighlight()
         text = trimmed
@@ -42,6 +61,24 @@ final class TranscriptQuoteSelection {
         collapseNativeSelection()
         removeRetainedHighlight()
         text = nil
+        entryId = nil
+    }
+
+    /// The selection as a comment anchor in `entryId`: the words plus the
+    /// context around them in the text view they were selected in.
+    func commentAnchor(entryId: String) -> TextAnchor? {
+        guard let text else { return nil }
+        if let sourceContent, sourceRange.location != NSNotFound,
+           NSMaxRange(sourceRange) <= (sourceContent as NSString).length,
+           let anchor = CommentAnchor.anchor(text: sourceContent, range: sourceRange, entryId: entryId) {
+            return anchor
+        }
+        return CommentAnchor.anchor(exact: text, entryId: entryId)
+    }
+
+    fileprivate func requestComment(_ candidate: String, entryId: String?) {
+        stage(candidate, entryId: entryId)
+        onCommentRequest?()
     }
 
     func message(with draft: String) -> String {
@@ -216,9 +253,11 @@ final class TranscriptQuoteSelection {
 
 private final class TranscriptQuoteListener: MarkdownListener {
     private weak var selection: TranscriptQuoteSelection?
+    private let entryId: String?
 
-    init(selection: TranscriptQuoteSelection) {
+    init(selection: TranscriptQuoteSelection, entryId: String? = nil) {
         self.selection = selection
+        self.entryId = entryId
     }
 
     func onRender(markdown: RenderableDocument) async {}
@@ -227,13 +266,19 @@ private final class TranscriptQuoteListener: MarkdownListener {
     func onImageTap(image: MarkdownImage) async {}
 
     func onContextMenuAppear(id: String, selectedContent: String) async {
-        guard id == "os1-quote-selection" else { return }
-        await selection?.stage(selectedContent)
+        guard id == "os1-quote-selection" || id == "os1-comment-selection" else { return }
+        await selection?.stage(selectedContent, entryId: entryId)
     }
 
     func onContextMenuTap(id: String, selectedContent: String) async {
-        guard id == "os1-quote-selection" else { return }
-        await selection?.stage(selectedContent)
+        switch id {
+        case "os1-quote-selection":
+            await selection?.stage(selectedContent, entryId: entryId)
+        case "os1-comment-selection":
+            await selection?.requestComment(selectedContent, entryId: entryId)
+        default:
+            break
+        }
     }
 }
 
@@ -243,16 +288,25 @@ extension TextContextMenu {
             title: nil,
             image: nil,
             displayInline: true,
-            items: [TextContextMenuItem(
-                id: "os1-quote-selection",
-                title: "Chat with selected text"
-            )]
+            items: [
+                TextContextMenuItem(
+                    id: "os1-quote-selection",
+                    title: "Chat with selected text"
+                ),
+                TextContextMenuItem(
+                    id: "os1-comment-selection",
+                    title: "Comment"
+                ),
+            ]
         )
     ])
 }
 
 extension EnvironmentValues {
     @Entry var transcriptQuoteSelection: TranscriptQuoteSelection?
+    /// The transcript entry a row renders, so a selection inside it can
+    /// anchor a comment there.
+    @Entry var transcriptAnchorEntryId: String?
 }
 
 extension View {

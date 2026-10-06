@@ -1726,15 +1726,28 @@ struct SessionsListView: View {
     }
 
     /// Dev convenience for simulator runs: OS1_OPEN_SESSION=<id> jumps straight
-    /// into that session once the list has loaded.
+    /// into that session once the list has loaded. OS1_OPEN_THREAD=<id> also
+    /// opens one of its comment threads, the way a comment link does.
     private func autoOpenFromEnvironment() {
-        guard let id = ProcessInfo.processInfo.environment["OS1_OPEN_SESSION"],
+        let env = ProcessInfo.processInfo.environment
+        guard let id = env["OS1_OPEN_SESSION"],
               let session = viewModel.sessions.first(where: { $0.id == id })
         else { return }
+        let focusThread = {
+            if let thread = env["OS1_OPEN_THREAD"] {
+                ThreadFocus.shared.note(link: CommentThreads.link(sessionId: id, threadId: thread), sessionId: id)
+            }
+        }
         #if os(macOS)
-        if selectedSessionID == nil { selectedSessionID = session.id }
+        if selectedSessionID == nil {
+            focusThread()
+            selectedSessionID = session.id
+        }
         #else
-        if path.isEmpty { path.append(session) }
+        if path.isEmpty {
+            focusThread()
+            path.append(session)
+        }
         #endif
     }
 

@@ -36,6 +36,7 @@ struct MarkdownBody: View {
     /// `openPanel`, but its commit references still need the session's repo.
     @Environment(\.transcriptSessionId) private var transcriptSessionId
     @Environment(\.transcriptQuoteSelection) private var quoteSelection
+    @Environment(\.transcriptAnchorEntryId) private var anchorEntryId
 
     /// Whether fences, placed media, callouts and math become native blocks.
     /// Off inside a block that renders markdown of its own (a slide, a
@@ -136,7 +137,7 @@ struct MarkdownBody: View {
         return SwiftStreamingMarkdown.MarkdownView(
             text: linkified(value),
             config: config,
-            listener: quoteSelection?.listener
+            listener: quoteSelection?.listener(entryId: anchorEntryId)
         )
         .frame(maxWidth: .infinity, alignment: .leading)
     }

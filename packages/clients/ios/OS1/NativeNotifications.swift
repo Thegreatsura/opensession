@@ -148,16 +148,21 @@ enum NativeNotifications {
 /// account switch must not open, or mark, a row in the wrong inbox.
 enum NotificationTap {
     static func userInfo(thread: InboxThread, scope: InboxScope) -> [String: String] {
-        [
+        var info = [
             "threadId": thread.id,
             "server": scope.server,
             "user": scope.user,
         ]
+        // The row's link, so a cold launch from the banner can still focus
+        // the comment thread it names before the inbox has loaded.
+        if !thread.url.isEmpty { info["url"] = thread.url }
+        return info
     }
 
     struct Target: Equatable, Sendable {
         let threadId: String
         let scope: InboxScope
+        var url: String? = nil
     }
 
     static func target(from userInfo: [AnyHashable: Any]) -> Target? {
@@ -165,7 +170,11 @@ enum NotificationTap {
               let server = userInfo["server"] as? String,
               let user = userInfo["user"] as? String
         else { return nil }
-        return Target(threadId: threadId, scope: InboxScope(server: server, user: user))
+        return Target(
+            threadId: threadId,
+            scope: InboxScope(server: server, user: user),
+            url: userInfo["url"] as? String
+        )
     }
 }
 

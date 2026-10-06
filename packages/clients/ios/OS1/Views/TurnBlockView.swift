@@ -445,6 +445,7 @@ struct TurnStepsView: View {
                         // The fold and its indent distinguish it; only tool rows
                         // keep the dimmed treatment.
                         MarkdownBody(entry.text)
+                            .environment(\.transcriptAnchorEntryId, entry.id)
                             .padding(.trailing, 16)
                     }
                 case .tools(let calls, let kind):

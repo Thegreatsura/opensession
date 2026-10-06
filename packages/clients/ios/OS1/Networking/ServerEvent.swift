@@ -15,6 +15,10 @@ enum ServerEvent: Sendable {
     )
     case sessionNote(sessionId: String, note: SessionNote)
     case sessionNoteDeleted(sessionId: String, noteId: String)
+    /// A comment thread was created or changed. Sent to the session's
+    /// watchers; the same frame answers this client's own mutations.
+    case commentThread(sessionId: String, thread: CommentThread)
+    case commentThreadDeleted(sessionId: String, threadId: String)
     case streamStart(sessionId: String)
     /// `blockId` names the assistant block this text belongs to when the
     /// engine names its blocks; the durable entry that lands it carries the
@@ -137,6 +141,14 @@ enum ServerEvent: Sendable {
         case "session_note":
             guard let id = frame.sessionId, let note = frame.note else { return .ignored }
             return .sessionNote(sessionId: id, note: note)
+        case "comment_thread":
+            guard let thread = frame.thread?.thread,
+                  let id = frame.sessionId ?? (thread.sessionId.isEmpty ? nil : thread.sessionId)
+            else { return .ignored }
+            return .commentThread(sessionId: id, thread: thread)
+        case "comment_thread_deleted":
+            guard let id = frame.sessionId, let threadId = frame.threadId else { return .ignored }
+            return .commentThreadDeleted(sessionId: id, threadId: threadId)
         case "session_note_deleted":
             guard let id = frame.sessionId, let noteId = frame.noteId else { return .ignored }
             return .sessionNoteDeleted(sessionId: id, noteId: noteId)
@@ -539,6 +551,12 @@ private struct RawFrame: Decodable {
         let steeredAt: Double?
     }
 
+    /// A thread this build cannot read drops the thread, not the frame.
+    struct LossyCommentThread: Decodable {
+        let thread: CommentThread?
+        init(from decoder: Decoder) throws { thread = try? CommentThread(from: decoder) }
+    }
+
     /// Decodes any non-null JSON value without reading it.
     struct PresenceProbe: Decodable {
         init(from decoder: Decoder) throws {}
@@ -556,6 +574,8 @@ private struct RawFrame: Decodable {
     let entry: TranscriptEntry?
     let note: SessionNote?
     let noteId: String?
+    let thread: LossyCommentThread?
+    let threadId: String?
     let text: String?
     let blockId: String?
     struct WireViewing: Decodable {

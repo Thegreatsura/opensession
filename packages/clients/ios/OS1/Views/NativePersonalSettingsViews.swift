@@ -108,7 +108,7 @@ struct NotificationsSettingsView: View {
     static let alertRows: [(group: InboxAlerts.Group, title: String, detail: String)] = [
         (.reviews, "Reviews", "Someone asks you for a review, or finishes one you asked for"),
         (.teamReviews, "Team review requests", "A team you're on is asked to review, like code owners"),
-        (.mentions, "Mentions", "Someone tags you"),
+        (.mentions, "Mentions and comments", "Someone tags you, assigns you a comment, or replies to one you're in"),
         (.collaborators, "Added to a workspace", "Someone adds you as a collaborator"),
         (.reminders, "Reminders", "Desk task reminders"),
     ]

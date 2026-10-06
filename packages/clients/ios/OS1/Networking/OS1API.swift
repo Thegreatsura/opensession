@@ -197,6 +197,148 @@ enum OS1API {
         )
     }
 
+    // ── Comment threads (src/server/routes/comment-threads.ts) ──
+    //
+    // Every mutation is broadcast back to the session's viewers as
+    // `comment_thread`, so callers apply the returned thread at once and the
+    // echo lands idempotently (`SessionComments.apply`).
+
+    struct ThreadList: Decodable, Sendable {
+        let threads: [CommentThread]
+
+        private enum CodingKeys: String, CodingKey { case threads }
+        private struct Lossy: Decodable {
+            let thread: CommentThread?
+            init(from decoder: Decoder) throws { thread = try? CommentThread(from: decoder) }
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            threads = (((try? c.decodeIfPresent([Lossy].self, forKey: .threads)) ?? nil) ?? [])
+                .compactMap(\.thread)
+        }
+    }
+
+    private struct ThreadResponse: Decodable, Sendable {
+        let thread: CommentThread
+    }
+
+    /// A delete answers `null` when the thread went with its last comment.
+    private struct OptionalThreadResponse: Decodable, Sendable {
+        let thread: CommentThread?
+
+        private enum CodingKeys: String, CodingKey { case thread }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            thread = (try? c.decodeIfPresent(CommentThread.self, forKey: .thread)) ?? nil
+        }
+    }
+
+    private struct AcceptedResponse: Decodable, Sendable {}
+
+    nonisolated static func threadsPath(_ sessionId: String, _ parts: String...) -> String {
+        (["/api/sessions/\(pathComponent(sessionId))/threads"] + parts.map(pathComponent))
+            .joined(separator: "/")
+    }
+
+    static func commentThreads(sessionId: String) async throws -> [CommentThread] {
+        let list: ThreadList = try await get(threadsPath(sessionId))
+        return list.threads
+    }
+
+    static func createCommentThread(
+        sessionId: String,
+        text: String,
+        images: [String] = [],
+        anchor: TextAnchor? = nil,
+        assignee: String? = nil
+    ) async throws -> CommentThread {
+        var body: [String: Any] = ["text": text, "user": ServerConfig.shared.userName]
+        if !images.isEmpty { body["images"] = images }
+        if let anchor { body["anchor"] = anchor.body }
+        if let assignee, !assignee.isEmpty { body["assignee"] = assignee }
+        let response: ThreadResponse = try await post(threadsPath(sessionId), body: body)
+        return response.thread
+    }
+
+    static func replyToCommentThread(
+        sessionId: String,
+        threadId: String,
+        text: String,
+        images: [String] = []
+    ) async throws -> CommentThread {
+        var body: [String: Any] = ["text": text, "user": ServerConfig.shared.userName]
+        if !images.isEmpty { body["images"] = images }
+        let response: ThreadResponse = try await post(
+            threadsPath(sessionId, threadId, "comments"),
+            body: body
+        )
+        return response.thread
+    }
+
+    static func editThreadComment(
+        sessionId: String,
+        threadId: String,
+        commentId: String,
+        text: String
+    ) async throws -> CommentThread {
+        let response: ThreadResponse = try await patch(
+            threadsPath(sessionId, threadId, "comments", commentId),
+            body: ["text": text, "user": ServerConfig.shared.userName]
+        )
+        return response.thread
+    }
+
+    /// The thread after the delete, or nil when it went with the comment.
+    static func deleteThreadComment(
+        sessionId: String,
+        threadId: String,
+        commentId: String
+    ) async throws -> CommentThread? {
+        let user = ServerConfig.shared.userName.addingPercentEncoding(
+            withAllowedCharacters: CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&+"))
+        ) ?? ServerConfig.shared.userName
+        let response: OptionalThreadResponse = try await mutate(
+            threadsPath(sessionId, threadId, "comments", commentId) + "?user=\(user)",
+            method: "DELETE",
+            body: [:]
+        )
+        return response.thread
+    }
+
+    /// What a thread PATCH changes. `assignee: .some(nil)` unassigns.
+    struct ThreadPatch: Sendable {
+        var status: CommentThread.Status?
+        var assignee: String??
+
+        var body: [String: Any] {
+            var body: [String: Any] = [:]
+            if let status { body["status"] = status.rawValue }
+            if let assignee { body["assignee"] = assignee.map { $0 as Any } ?? NSNull() }
+            return body
+        }
+    }
+
+    static func updateCommentThread(
+        sessionId: String,
+        threadId: String,
+        patch: ThreadPatch
+    ) async throws -> CommentThread {
+        var body = patch.body
+        body["user"] = ServerConfig.shared.userName
+        let response: ThreadResponse = try await self.patch(threadsPath(sessionId, threadId), body: body)
+        return response.thread
+    }
+
+    /// Ask the agent to answer in the thread. Accepted at once; the answer
+    /// arrives as a `comment_thread` frame when it is written.
+    static func askAgentInThread(sessionId: String, threadId: String) async throws {
+        let _: AcceptedResponse = try await post(
+            threadsPath(sessionId, threadId, "agent"),
+            body: ["user": ServerConfig.shared.userName]
+        )
+    }
+
     struct WorkspaceDraft: Decodable, Equatable, Sendable {
         let text: String
         let updatedAt: String

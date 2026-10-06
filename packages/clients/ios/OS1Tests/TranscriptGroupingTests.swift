@@ -744,10 +744,10 @@ final class TranscriptGroupingTests: XCTestCase {
                 timestamp: "2026-01-01T00:02:00Z"
             ),
         ])
-        let note = SessionNote(
+        let note = CommentThread(legacyNote: SessionNote(
             id: "note-1", user: "Kent", text: "Look here",
             ts: 1_767_225_660_000, editedAt: nil
-        )
+        ), sessionId: "bks-1")
         let blocks = TranscriptGrouping.blocks(
             from: items,
             live: false,
@@ -1064,12 +1064,12 @@ final class TranscriptGroupingTests: XCTestCase {
             from: TranscriptGrouping.displayItems(from: entries),
             live: false,
             worktreeDir: nil,
-            notes: [SessionNote(
+            notes: [CommentThread(legacyNote: SessionNote(
                 id: "n1",
                 user: "Kent",
                 text: "looks right",
                 ts: Date.distantFuture.timeIntervalSince1970 * 1000
-            )]
+            ), sessionId: "bks-1")]
         )
         XCTAssertEqual(blocks.count, 2, "a note has its own placement and never folds away")
         guard case .note = blocks[1] else { return XCTFail("the note should follow the loop") }

@@ -17,8 +17,22 @@ enum InboxKind: String, CaseIterable, Sendable {
     case teamReviewRequested = "team_review_requested"
     case reviewDone = "review_done"
     case mention
+    /// A reply, resolve or assignment on a comment thread you are in.
+    case comment
     case collaborator
     case reminder
+
+    /// The alert switch that governs this kind, as the server groups them
+    /// (`notification-threads.ts`): comments ride with mentions.
+    var alertGroup: InboxAlerts.Group {
+        switch self {
+        case .reviewRequested, .reviewDone: .reviews
+        case .teamReviewRequested: .teamReviews
+        case .mention, .comment: .mentions
+        case .collaborator: .collaborators
+        case .reminder: .reminders
+        }
+    }
 }
 
 struct InboxThread: Decodable, Equatable, Identifiable, Sendable {
@@ -49,6 +63,8 @@ struct InboxThread: Decodable, Equatable, Identifiable, Sendable {
     var done: Bool
 
     var knownKind: InboxKind? { InboxKind(rawValue: kind) }
+    /// The comment thread this row opens, from `?thread=` on its link.
+    var commentThreadId: String? { CommentThreads.threadId(inLink: url) }
     var updatedDate: Date { Date(timeIntervalSince1970: updatedAt / 1000) }
 
     init(
