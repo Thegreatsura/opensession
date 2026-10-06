@@ -755,6 +755,45 @@ interface CsBrowseResult {
 }
 
 type RepoSource = "github" | "codestorage";
+
+/** The Add repository picker on its own, for entry points outside Settings
+ *  (the sidebar's workspace options). Owns its pending and error state; the
+ *  picker announces the change so every repo list refreshes. */
+export function AddRepositoryDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [pendingRepo, setPendingRepo] = useState<PendingRepo | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  return (
+    <Modal.Root
+      open={open}
+      onOpenChange={(next) => {
+        if (!pendingRepo) onOpenChange(next);
+      }}
+      disablePointerDismissal={pendingRepo !== null}
+    >
+      <Modal.Content widthClassName="max-w-[34rem]" initialFocus={inputRef}>
+        <Modal.Header
+          title="Add project"
+          description="Clone a remote repository, register a Git checkout already on the server, or start a new one."
+        />
+        <AddRepoPicker
+          inputRef={inputRef}
+          onAdded={() => onOpenChange(false)}
+          pendingRepo={pendingRepo}
+          onPendingChange={setPendingRepo}
+          error={error}
+          setError={setError}
+        />
+      </Modal.Content>
+    </Modal.Root>
+  );
+}
 type AddRepoMode = "remote" | "local" | "new";
 
 interface PendingRepo {

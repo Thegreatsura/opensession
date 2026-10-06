@@ -74,6 +74,33 @@ export function SwitchRow({
   );
 }
 
+/** An action rather than a setting: a glyph and a verb, the whole row the
+ *  target. For the one thing a settings popover does instead of configures. */
+export function ActionRow({
+  label,
+  icon,
+  onClick,
+}: {
+  label: string;
+  icon?: React.ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        SETTING_ROW,
+        SETTING_ROW_PRESSABLE,
+        "focus-visible:bg-hover focus-visible:outline-none",
+      )}
+      onClick={onClick}
+    >
+      {icon && <span className={SETTING_GLYPH}>{icon}</span>}
+      <span className="truncate">{label}</span>
+    </button>
+  );
+}
+
 /** The options behind a `ValueRow`, and behind a submenu asking the same
  *  question one level in. */
 export function ValueOptions({
