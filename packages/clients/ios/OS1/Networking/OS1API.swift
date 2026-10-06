@@ -743,21 +743,91 @@ enum OS1API {
         return try await decodeDetached(PrCodeFlow.self, from: data)
     }
 
+    /// The viewer's viewed and changed-since-viewed files on a PR. Hosts
+    /// without viewed state never call this (`PrHostCapabilities`).
     static func prViewedFiles(repo: String?, number: Int) async throws -> PrViewedFiles {
         var components = URLComponents()
         components.queryItems = [URLQueryItem(name: "number", value: String(number))]
         if let repo, !repo.isEmpty {
             components.queryItems?.append(URLQueryItem(name: "repo", value: repo))
         }
+        let user = ServerConfig.shared.userName
+        if !user.isEmpty {
+            components.queryItems?.append(URLQueryItem(name: "user", value: user))
+        }
         return try await get("/api/pr-viewed-files?\(components.percentEncodedQuery ?? "")")
     }
 
-    static func setPrFileViewed(prId: String, path: String, viewed: Bool) async throws {
-        struct Response: Decodable, Sendable { let ok: Bool? }
-        var body: [String: Any] = ["prId": prId, "path": path, "viewed": viewed]
-        let user = ServerConfig.shared.userName
+    /// The JSON body for one viewed-state change. Many paths travel as one
+    /// `paths` batch; a single path also sends `path`, which is all a server
+    /// older than the batch request reads.
+    nonisolated static func viewedFilesBody(
+        prId: String,
+        paths: [String],
+        viewed: Bool,
+        repo: String?,
+        user: String
+    ) -> [String: Any] {
+        var body: [String: Any] = ["prId": prId, "paths": paths, "viewed": viewed]
+        if paths.count == 1 { body["path"] = paths[0] }
+        if let repo, !repo.isEmpty { body["repo"] = repo }
         if !user.isEmpty { body["user"] = user }
-        let _: Response = try await post("/api/pr-viewed-files", body: body)
+        return body
+    }
+
+    /// Whether a failed batch is an older server that only reads `path`.
+    nonisolated static func isSinglePathOnlyServer(_ error: Error) -> Bool {
+        switch error as? APIError {
+        case .http(400): true
+        case .server(let message): message.contains("path and viewed required")
+        default: false
+        }
+    }
+
+    /// Mark or unmark files viewed in one request (a group, a folder, or a
+    /// whole-review action). A server that predates the batch rejects it, so
+    /// the files then go one request at a time.
+    static func setPrFilesViewed(
+        prId: String,
+        paths: [String],
+        viewed: Bool,
+        repo: String? = nil
+    ) async throws {
+        struct Response: Decodable, Sendable { let ok: Bool? }
+        guard !paths.isEmpty else { return }
+        let user = ServerConfig.shared.userName
+        do {
+            let _: Response = try await post(
+                "/api/pr-viewed-files",
+                body: viewedFilesBody(prId: prId, paths: paths, viewed: viewed, repo: repo, user: user)
+            )
+        } catch where paths.count > 1 && isSinglePathOnlyServer(error) {
+            for path in paths {
+                let _: Response = try await post(
+                    "/api/pr-viewed-files",
+                    body: viewedFilesBody(prId: prId, paths: [path], viewed: viewed, repo: repo, user: user)
+                )
+            }
+        }
+    }
+
+    static func setPrFileViewed(prId: String, path: String, viewed: Bool) async throws {
+        try await setPrFilesViewed(prId: prId, paths: [path], viewed: viewed)
+    }
+
+    /// Resolved review threads on a PR, for per-file counts. Empty on hosts
+    /// without them and on servers that predate the route.
+    static func prReviewThreads(repo: String?, number: Int) async throws -> [PrReviewThread] {
+        struct Response: Decodable, Sendable { let threads: [PrReviewThread]? }
+        var components = URLComponents()
+        components.queryItems = [URLQueryItem(name: "number", value: String(number))]
+        if let repo, !repo.isEmpty {
+            components.queryItems?.append(URLQueryItem(name: "repo", value: repo))
+        }
+        let response: Response = try await get(
+            "/api/pr-review-threads?\(components.percentEncodedQuery ?? "")"
+        )
+        return (response.threads ?? []).filter { $0.isResolved != false && $0.path != nil }
     }
 
     // MARK: - Pull request actions

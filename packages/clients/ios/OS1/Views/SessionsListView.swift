@@ -376,12 +376,25 @@ struct SessionsListView: View {
         #endif
     }
 
+    /// The review-progress fixture's mode (`pushed`, `stale`, `worktree`).
+    /// Always nil in a release build.
+    private var prReviewFreshnessFixture: String? {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["OS1_PR_REVIEW_FRESHNESS_FIXTURE"]
+        #else
+        nil
+        #endif
+    }
+
     var body: some View {
         navigationContainer
             #if DEBUG && os(iOS)
             .overlay {
                 if presentsPrReviewCardsFixture {
                     PrReviewCardsScreenshot()
+                } else if let mode = prReviewFreshnessFixture {
+                    PrReviewFreshnessFixture(mode: mode)
+                        .background(OS1VisualStyle.background)
                 }
             }
             #endif
@@ -671,6 +684,10 @@ struct SessionsListView: View {
             if presentsPrReviewCardsFixture {
                 #if DEBUG
                 PrReviewCardsScreenshot()
+                #endif
+            } else if let mode = prReviewFreshnessFixture {
+                #if DEBUG
+                PrReviewFreshnessFixture(mode: mode)
                 #endif
             } else if let openTicket {
                 SupportThreadView(row: openTicket) {
