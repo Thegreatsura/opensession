@@ -20,6 +20,7 @@ import {
   SETTING_ROW_PRESSABLE,
 } from "../../lib/setting-row-classes";
 import {
+  ActionRow,
   type SettingOption,
   ValueOptions,
   ValueRow,
@@ -27,7 +28,7 @@ import {
 import { SwitchIndicator } from "../../ui/switch";
 import { cn } from "../../ui/cn";
 import { RepoTile, repoLabel } from "../RepoTile";
-import { IconChevronRight, IconRepo } from "../icons";
+import { IconChevronRight, IconFolderPlus, IconRepo } from "../icons";
 import {
   GROUP_BY_OPTIONS,
   LAST_USED_TIME_OPTIONS,
@@ -108,6 +109,7 @@ export function FilterPopover({
   currentUser,
   onChange,
   onClose,
+  onAddProject,
 }: {
   anchor: HTMLElement | null;
   filter: FilterState;
@@ -117,6 +119,7 @@ export function FilterPopover({
   onChange: (patch: Partial<FilterState>) => void;
   onClose: () => void;
   onCustomize: () => void;
+  onAddProject: () => void;
 }) {
   // Density and last used time belong to this list, but they are stored display
   // preferences rather than part of FilterState. Keep them live here so the
@@ -328,6 +331,14 @@ export function FilterPopover({
             />
           </Menu.Popup>
         </Menu.Root>
+        {/* Bringing a project in is the one action here rather than a view
+            setting, so it sits last, under a rule. */}
+        <div className="-mx-2 my-1 h-px bg-line" role="separator" />
+        <ActionRow
+          label="Add project…"
+          icon={<IconFolderPlus size={16} />}
+          onClick={onAddProject}
+        />
       </div>
     </>,
     document.body,
