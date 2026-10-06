@@ -22,8 +22,11 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   branch, workspace name) with the web's typo-tolerant matcher
   (`Models/FuzzyMatch.swift`, a port of `shared/fuzzy-match.ts`, scored off
   the main actor by `SidebarSearch`) and conversation text through
-  `/api/sessions/search`. The Mac command palette and the `@` palette's people
-  rows rank by the same scorer. iOS long-press actions
+  `/api/sessions/search`. A hyphenated term such as `pi-durable` is a phrase
+  of adjacent words. The Mac command palette and the `@` palette's people
+  rows rank by the same scorer; the palette lists conversation-only hits,
+  live and archived, in the server's order under "In conversations",
+  between live and archived metadata matches. iOS long-press actions
   include details, rename, sharing, pull request, pin, hide, Snooze/Unsnooze,
   and Archive. Swipe right pins; swipe left offers Snooze and Archive.
   Pinned rows are lifted into a Pinned band at the top in the user's own order,
