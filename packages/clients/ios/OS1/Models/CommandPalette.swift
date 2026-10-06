@@ -36,6 +36,27 @@ struct CommandPaletteEntry: Identifiable, Equatable, Sendable {
     /// Breaks ties between sessions. Nil on commands, which keep the order
     /// they were declared in.
     var recency: Date?
+    /// The session this row opens, so a conversation hit from the server can
+    /// find its row. Nil on commands and archived workspace rows.
+    var sessionId: String?
+    /// False for a row that only stands in for a conversation hit: an
+    /// archived session whose same-named workspace row already answers its
+    /// metadata, but whose transcript can still be the best match.
+    var searchable = true
+    /// The heading the row is listed under. Set by `CommandPaletteRanking`.
+    var section: Section?
+
+    enum Section: String, Sendable {
+        case conversations = "In conversations"
+        case archived = "Archived"
+    }
+}
+
+/// One session found inside its conversation by the server's transcript
+/// search, with the line that matched.
+struct CommandPaletteConversationHit: Equatable, Sendable {
+    let sessionId: String
+    let snippet: String
 }
 
 /// Which rows a query keeps, and in what order.
@@ -47,7 +68,29 @@ struct CommandPaletteEntry: Identifiable, Equatable, Sendable {
 /// title beats one that needed the subtitle or a keyword, and within each the
 /// scorer's own order holds (the title's start over a word inside it, over a
 /// typo).
+///
+/// The groups follow the web palette (`SessionSearch.tsx`): commands, live
+/// sessions whose metadata matched, then sessions found only inside their
+/// conversation, live and archived together in the server's relevance order
+/// ("In conversations"), then archived metadata matches ("Archived").
 enum CommandPaletteRanking {
+    /// An entry with its searchable text normalized once, so a keystroke
+    /// scores a long archive without re-deriving every row's words.
+    struct Prepared {
+        let entry: CommandPaletteEntry
+        fileprivate let title: FuzzyMatch.Text
+        fileprivate let rest: FuzzyMatch.Text
+
+        init(_ entry: CommandPaletteEntry) {
+            self.entry = entry
+            title = FuzzyMatch.Text(entry.title)
+            rest = FuzzyMatch.Text(
+                ([entry.title, entry.subtitle].compactMap { $0 } + entry.keywords)
+                    .joined(separator: " ")
+            )
+        }
+    }
+
     private struct Candidate {
         let entry: CommandPaletteEntry
         let order: Int
@@ -59,19 +102,37 @@ enum CommandPaletteRanking {
         query: String,
         sessionLimit: Int = 40,
         archivedLimit: Int = 20,
-        contentMatches: Set<String> = []
+        conversationLimit: Int = 20,
+        conversationHits: [CommandPaletteConversationHit] = []
     ) -> [CommandPaletteEntry] {
-        let hasQuery = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        results(
+            entries.map(Prepared.init),
+            query: query,
+            sessionLimit: sessionLimit,
+            archivedLimit: archivedLimit,
+            conversationLimit: conversationLimit,
+            conversationHits: conversationHits
+        )
+    }
+
+    static func results(
+        _ entries: [Prepared],
+        query: String,
+        sessionLimit: Int = 40,
+        archivedLimit: Int = 20,
+        conversationLimit: Int = 20,
+        conversationHits: [CommandPaletteConversationHit] = []
+    ) -> [CommandPaletteEntry] {
+        let fuzzy = FuzzyMatch.Query(query)
+        let hasQuery = !fuzzy.isEmpty
         var matched: [Candidate] = []
-        for (order, entry) in entries.enumerated() {
+        for (order, prepared) in entries.enumerated() {
+            let entry = prepared.entry
+            guard entry.searchable else { continue }
             if entry.kind == .archived, !hasQuery { continue }
-            let score = score(entry, query: query)
+            let score = score(prepared, query: fuzzy)
             if score > 0 {
                 matched.append(Candidate(entry: entry, order: order, score: score))
-            } else if entry.kind == .session, contentMatches.contains(entry.id) {
-                // A backend transcript hit ranks after every metadata match,
-                // whose weakest score is still at least one.
-                matched.append(Candidate(entry: entry, order: order, score: 0))
             }
         }
 
@@ -88,31 +149,58 @@ enum CommandPaletteRanking {
             return left.order < right.order
         }
 
+        var listed: [CommandPaletteEntry] = []
+        var archived: [CommandPaletteEntry] = []
         var sessions = 0
-        var archived = 0
-        return matched.compactMap { candidate in
+        for candidate in matched {
             switch candidate.entry.kind {
             case .command:
-                return candidate.entry
+                listed.append(candidate.entry)
             case .session:
                 sessions += 1
-                return sessions <= sessionLimit ? candidate.entry : nil
+                if sessions <= sessionLimit { listed.append(candidate.entry) }
             case .archived:
-                archived += 1
-                return archived <= archivedLimit ? candidate.entry : nil
+                if archived.count < archivedLimit {
+                    var row = candidate.entry
+                    row.section = .archived
+                    archived.append(row)
+                }
             }
         }
+
+        // Conversation-only hits keep the server's order: its full-text
+        // index already ranked them, and re-sorting by recency is what buried
+        // the best archived match under every passing live mention.
+        var conversations: [CommandPaletteEntry] = []
+        if hasQuery, !conversationHits.isEmpty {
+            var bySession: [String: CommandPaletteEntry] = [:]
+            for prepared in entries {
+                guard let sessionId = prepared.entry.sessionId,
+                      prepared.entry.kind != .command,
+                      bySession[sessionId] == nil else { continue }
+                bySession[sessionId] = prepared.entry
+            }
+            var shown = Set((listed + archived).map(\.id))
+            for hit in conversationHits {
+                if conversations.count >= conversationLimit { break }
+                guard let entry = bySession[hit.sessionId],
+                      shown.insert(entry.id).inserted else { continue }
+                var row = entry
+                row.subtitle = hit.snippet
+                row.section = .conversations
+                conversations.append(row)
+            }
+        }
+        return listed + conversations + archived
     }
 
     /// 0 when the row does not match. A title match sits a full band above a
     /// match that needed the subtitle or keywords, and a query whose terms are
     /// spread across both still counts, since the row as a whole is searched.
-    private static func score(_ entry: CommandPaletteEntry, query: String) -> Int {
-        let title = FuzzyMatch.score(query, entry.title)
+    private static func score(_ entry: Prepared, query: FuzzyMatch.Query) -> Int {
+        let title = query.score(entry.title)
         if title > 0 { return 100 + title }
-        let rest = ([entry.title, entry.subtitle].compactMap { $0 } + entry.keywords)
-            .joined(separator: " ")
-        return FuzzyMatch.score(query, rest)
+        return query.score(entry.rest)
     }
 }
 
@@ -174,12 +262,12 @@ enum CommandPaletteArchive {
         }
         for session in newestFirst {
             // A session alone under a workspace row of the same name is the
-            // same result twice.
-            if let workspaceId = session.workspaceId,
-               let shown = shownNames[workspaceId],
-               shown.caseInsensitiveCompare(session.displayTitle) == .orderedSame {
-                continue
-            }
+            // same result twice, so its metadata is left to the workspace
+            // row. It stays as a row a conversation hit can still land on.
+            let coveredByWorkspace = session.workspaceId
+                .flatMap { shownNames[$0] }
+                .map { $0.caseInsensitiveCompare(session.displayTitle) == .orderedSame }
+                ?? false
             entries.append(CommandPaletteEntry(
                 id: sessionPrefix + session.id,
                 title: session.displayTitle,
@@ -189,7 +277,9 @@ enum CommandPaletteArchive {
                     .filter { !$0.isEmpty },
                 symbol: "archivebox",
                 kind: .archived,
-                recency: session.lastActivityDate
+                recency: session.lastActivityDate,
+                sessionId: session.id,
+                searchable: !coveredByWorkspace
             ))
         }
         return entries

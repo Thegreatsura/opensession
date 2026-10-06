@@ -54,4 +54,39 @@ final class FuzzyMatchTests: XCTestCase {
         XCTAssertEqual(FuzzyMatch.best("audit", in: [nil, "Billing", "audit/billing"]), 90)
         XCTAssertEqual(FuzzyMatch.best("nothing", in: ["a", nil]), 0)
     }
+
+    func testPunctuationInsideATermIsAPhraseOfAdjacentWords() {
+        XCTAssertEqual(FuzzyMatch.score("pi-durable", "Explore Pi Durable objects"), 60)
+        XCTAssertGreaterThan(FuzzyMatch.score("pi-durable", "pi_durable"), 0)
+        XCTAssertGreaterThan(FuzzyMatch.score("pi-durable", "Pi/Durable worker"), 0)
+        XCTAssertGreaterThan(FuzzyMatch.score("pi-durable", "pidurable"), 0)
+        // Both words, but not adjacent or not in order: not the phrase.
+        XCTAssertEqual(FuzzyMatch.score("pi-durable", "Durable Pi"), 0)
+        XCTAssertEqual(FuzzyMatch.score("pi-durable", "Pi release, durable queue"), 0)
+        XCTAssertEqual(FuzzyMatch.score("s-desk", "Voice captions for the Desk"), 0)
+        // The phrase starts at a word boundary.
+        XCTAssertEqual(FuzzyMatch.score("pi-durable", "api durable"), 0)
+        // Edge punctuation is not a phrase.
+        XCTAssertEqual(FuzzyMatch.score("pi-", "Pi release"), 60)
+    }
+
+    func testAPreparedQueryScoresLikeTheOneShotAcrossManyTexts() {
+        let texts = [
+            "Release work", "Relase notes", "workspace", "Explore Pi Durable objects",
+            "Durable Pi", "Café", "Billing audit", "audit/billing", "",
+        ]
+        for query in ["release", "relase work", "wksp", "pi-durable", "cafe", "billng audit"] {
+            let prepared = FuzzyMatch.Query(query)
+            for text in texts {
+                // Twice, so the second pass reads the per-word cache.
+                for _ in 0..<2 {
+                    XCTAssertEqual(
+                        prepared.score(FuzzyMatch.Text(text)),
+                        FuzzyMatch.score(query, text),
+                        "\(query) / \(text)"
+                    )
+                }
+            }
+        }
+    }
 }

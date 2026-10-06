@@ -22,8 +22,11 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   branch, workspace name) with the web's typo-tolerant matcher
   (`Models/FuzzyMatch.swift`, a port of `shared/fuzzy-match.ts`, scored off
   the main actor by `SidebarSearch`) and conversation text through
-  `/api/sessions/search`. The Mac command palette and the `@` palette's people
-  rows rank by the same scorer. iOS long-press actions
+  `/api/sessions/search`. A hyphenated term such as `pi-durable` is a phrase
+  of adjacent words. The Mac command palette and the `@` palette's people
+  rows rank by the same scorer; the palette lists conversation-only hits,
+  live and archived, in the server's order under "In conversations",
+  between live and archived metadata matches. iOS long-press actions
   include details, rename, sharing, pull request, pin, hide, Snooze/Unsnooze,
   and Archive. Swipe right pins; swipe left offers Snooze and Archive.
   Pinned rows are lifted into a Pinned band at the top in the user's own order,
@@ -234,7 +237,10 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   keychain over HTTP, never to the agent), answer a keychain ask for a
   credential you own, or confirm a force merge (only the driver confirms, with
   a second confirmation; anyone signed in may cancel). Script runs show state,
-  credential call counts, a polled output tail and Stop. `SessionActionCardsModel`
+  credential call counts, a polled output tail, Stop and Close. Close hides an
+  ended card at once and asks about a running one (hide and keep running, or
+  hide and stop); hides stay on the device for a week, per server and account
+  (`HiddenScriptRuns`). `SessionActionCardsModel`
   owns them per session and re-reads all of them on every handshake. A You
   should know note offers Learn more, Ask about this (quotes it under the
   draft), I knew this and Turn off (press twice); Preferences has the toggle.
