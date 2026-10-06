@@ -58,6 +58,7 @@ touches an in-process tool:
 | [`opensession-slack`](#opensession-slack) | 1 | interactive | Needs a session id. |
 | [`opensession-scripts`](#opensession-scripts) | 3 | interactive | Needs a session id. |
 | [`opensession-local-files`](#opensession-local-files) | 1 | interactive | Needs a session id. |
+| [`opensession-local-folders`](#opensession-local-folders) | 10 | interactive | Needs a session id. |
 | [`opensession-plain-discussion`](#opensession-plain-discussion) | 2 | interactive | Only a session that answers a Plain discussion (plainDiscussionId): an Ask Sidekick session carries this server alone instead of the interactive set; an auto-triage session that reports into a discussion carries it beside the automation-bar set on its later turns. |
 | [`opensession-ask`](#opensession-ask) | 1 | interactive, Slack loop | Needs a session id. |
 | [`opensession-workflows`](#opensession-workflows) | 8 | interactive, automation | Automation runs get it ONLY with the human-set `workflows` flag. |
@@ -76,7 +77,7 @@ touches an in-process tool:
 | [`opensession-github`](#opensession-github) | 4 | Slack loop | – |
 | [`opensession-goal-self`](#opensession-goal-self) | 6 | goal wake | Only on a session that carries a goalId. |
 
-35 servers, 166 tools.
+36 servers, 176 tools.
 
 ## opensession-sessions
 
@@ -922,6 +923,75 @@ Ask the person watching for files from their own computer, including large video
 `mcp__opensession-local-files__request_local_files` · input: `purpose` (string, required), `hint` (string), `multiple` (boolean)
 
 Ask the person watching this session to send files from their own computer, and wait until they do. A card appears in the session; they choose the files in their own file picker and the upload streams to this session's machine, so large files (multi-gigabyte video) are fine. You never choose or see paths on their computer. Returns the uploaded files' paths here, or says they declined. Use it when the work needs a file only they have; do not use it for files already in the repo, the web, or earlier attachments. One request at a time; after a decline, do not ask again without their go-ahead.
+
+## opensession-local-folders
+
+Read, search, and edit a folder on the person's own computer while their app is open.
+
+- **Source** `packages/core/opensession-server/src/server/local-folders-mcp.ts`
+- **Wired in** `packages/core/opensession-server/src/server/interactive-mcp.ts`
+- **Runs** interactive
+- **Condition** Needs a session id.
+
+### `list_local_folders`
+
+`mcp__opensession-local-folders__list_local_folders` · input: none
+
+List the folders on the person's own computer connected to this session, whether each is online, and whether it is read-only. Only the person who connected a folder can use it, in turns they prompted.
+
+### `local_list`
+
+`mcp__opensession-local-folders__local_list` · input: `folder` (string), `path` (string), `recursive` (boolean), `limit` (number)
+
+List a directory in a connected local folder. Set recursive to walk subfolders (skips .git and node_modules).
+
+### `local_read`
+
+`mcp__opensession-local-folders__local_read` · input: `folder` (string), `path` (string, required), `offset` (number), `limit` (number)
+
+Read a text file from a connected local folder. offset and limit are 1-based line numbers. For binary files (PDF, images, spreadsheets) use copy_from_local_folder and process the copy.
+
+### `local_search`
+
+`mcp__opensession-local-folders__local_search` · input: `folder` (string), `pattern` (string, required), `path` (string), `glob` (string), `ignoreCase` (boolean), `limit` (number)
+
+Search file contents in a connected local folder with a JavaScript regular expression. Skips binary files, files over 2 MB, .git and node_modules.
+
+### `local_write`
+
+`mcp__opensession-local-folders__local_write` · input: `folder` (string), `path` (string, required), `content` (string, required)
+
+Create or overwrite a text file in a connected local folder. Parent folders are created. The file is on the person's computer, so do not overwrite without reason.
+
+### `local_edit`
+
+`mcp__opensession-local-folders__local_edit` · input: `folder` (string), `path` (string, required), `edits` (object[], required)
+
+Edit a text file in a connected local folder by exact text replacement. Each oldText must match exactly once in the original file.
+
+### `local_move`
+
+`mcp__opensession-local-folders__local_move` · input: `folder` (string), `from` (string, required), `to` (string, required)
+
+Move or rename a file or directory inside a connected local folder. Never overwrites an existing path.
+
+### `local_trash`
+
+`mcp__opensession-local-folders__local_trash` · input: `folder` (string), `path` (string, required)
+
+Move a file or directory in a connected local folder to the computer's Trash, where the person can restore it. Needs the Open Session Mac app; a browser cannot delete.
+
+### `copy_from_local_folder`
+
+`mcp__opensession-local-folders__copy_from_local_folder` · input: `folder` (string), `path` (string, required)
+
+Copy one file from a connected local folder into this session's scratch directory, so shell tools can process it (PDFs, images, spreadsheets, archives). Returns the local path of the copy. The copy is deleted with the session.
+
+### `copy_to_local_folder`
+
+`mcp__opensession-local-folders__copy_to_local_folder` · input: `source` (string, required), `folder` (string), `path` (string, required)
+
+Copy one file from this session's workspace or scratch directory into a connected local folder, such as a finished report or a converted image. Overwrites the target file.
 
 ## opensession-plain-discussion
 

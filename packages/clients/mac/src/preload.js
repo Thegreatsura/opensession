@@ -125,6 +125,32 @@ contextBridge.exposeInMainWorld("os1", {
     },
   },
   ...voiceAudioBridge(),
+  // Folders on this Mac that the server's sessions may reach (local-folders.js
+  // in the main process). The web app names a grant and a folder-relative
+  // path; the main process owns the paths and checks every one.
+  localFolders: {
+    device: () => ipcRenderer.invoke("os1:local-folders-device"),
+    list: () => ipcRenderer.invoke("os1:local-folders-list"),
+    pick: () => ipcRenderer.invoke("os1:local-folders-pick"),
+    update: (id, patch) =>
+      ipcRenderer.invoke("os1:local-folders-update", id, {
+        ...(Array.isArray(patch?.sessionIds)
+          ? { sessionIds: patch.sessionIds.map(String) }
+          : {}),
+        ...(typeof patch?.readOnly === "boolean"
+          ? { readOnly: patch.readOnly }
+          : {}),
+      }),
+    remove: (id) => ipcRenderer.invoke("os1:local-folders-remove", id),
+    op: (id, op, args) =>
+      ipcRenderer.invoke("os1:local-folders-op", id, op, args),
+    onChange: (cb) => {
+      const listener = () => cb();
+      ipcRenderer.on("os1:local-folders-changed", listener);
+      return () =>
+        ipcRenderer.removeListener("os1:local-folders-changed", listener);
+    },
+  },
   // Which Open Session server this shell talks to. Only the shell's own
   // file:// pages (setup.html, offline.html) call these, and main.js refuses
   // them from anywhere else: the app served BY a server must not be able to

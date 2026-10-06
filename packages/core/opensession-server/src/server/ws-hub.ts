@@ -92,6 +92,8 @@ export interface WSClientData {
   presenceClient?: string;
   /** Automated and hosted-loopback clients never appear in presence. */
   presenceSuppressed?: boolean;
+  /** A local folder bridge (local-folders.ts), not a person's view. */
+  localFolderBridge?: boolean;
   /** Typing is a short lease refreshed by composer input. The deadline makes
    * stale indicators self-clear when a client disappears without stopping. */
   typingUntil?: number;

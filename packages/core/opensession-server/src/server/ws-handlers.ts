@@ -1,3 +1,4 @@
+import { localFolderWsClose, localFolderWsMessage } from "./local-folders";
 import { getConfigAsync } from "./config";
 /**
  * The UI WebSocket: watch/unwatch sessions, live prompts and queue control,
@@ -650,6 +651,9 @@ export const websocketHandlers: WebSocketHandler<WSClientData> = {
         ws.data.user = firstName;
         msg.user = firstName;
       }
+      // A local folder bridge (local-folders.ts) answers file operations for
+      // the agent. Its frames are not a person doing something.
+      if (localFolderWsMessage(ws, msg)) return;
       // Anything that isn't a heartbeat is a person doing something, so it
       // refreshes this socket's attention (ws-hub's idle window — a face means
       // "here now"). `away` carries its own stamp.
@@ -1909,6 +1913,7 @@ export const websocketHandlers: WebSocketHandler<WSClientData> = {
     if (vmDisplayClose(ws)) return;
     ws.data.watchRequest = (ws.data.watchRequest ?? 0) + 1;
     allClients.delete(ws);
+    localFolderWsClose(ws);
     stopAllWatchesForClient(ws);
     releaseTranscriptV2(ws);
     leaveSession(ws);

@@ -157,6 +157,25 @@ The release workflow also runs these tests and checks the packaged helper's
 signature. A live **Allow / Always Allow / Deny** prompt still needs verification
 in a signed app on an interactive Mac, using a disposable item.
 
+## Local folders
+
+`src/local-folders.js` is the native side of local folders
+([docs/local-folders.md](../../../docs/local-folders.md)). The web app calls
+`window.os1.localFolders` to pick a folder (the native open panel), list and
+update grants, and run one file operation at a time. Grants are stored in
+`local-folders.json` in the profile, keyed by the server origin that created
+them, so one organization never sees another's folders. Every path is
+folder-relative and resolved with `realpath`, including the deepest existing
+ancestor of a file that does not exist yet, so a symlink cannot lead outside
+the folder. System roots and the home folder itself cannot be picked. Deleting
+uses `shell.trashItem`. There is no command execution. Hidden per-organization
+windows can answer too, so a folder stays reachable while another organization
+is on screen.
+
+```sh
+bun test src/local-folders.test.js
+```
+
 ## Realtime voice audio
 
 Voice sessions benefit from separate microphone and output choices, echo

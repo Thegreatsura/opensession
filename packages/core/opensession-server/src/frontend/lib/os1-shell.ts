@@ -1,3 +1,5 @@
+import type { NativeLocalFolders } from "./local-folders/electron-provider";
+
 export interface VoiceAudioDevice {
   id: string;
   label: string;
@@ -31,6 +33,8 @@ export interface NativeVoiceAudioBridge {
 
 export interface OS1ShellBridge {
   desktop?: boolean;
+  /** Folders on this Mac sessions may reach (lib/local-folders). */
+  localFolders?: NativeLocalFolders;
   materialBackdrop?: boolean;
   focusWindow?: () => void;
   /** Dock badge count (os1-mac preload). */

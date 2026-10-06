@@ -24,6 +24,7 @@ const { NativeDictation } = require("./native-dictation");
 const { NativeVoiceAudio } = require("./native-voice-audio");
 const { VoiceAudioBridge } = require("./voice-audio-bridge");
 const { MacKeychainReview } = require("./mac-keychain-ui");
+const { LocalFolders } = require("./local-folders");
 const macKeychainReview = new MacKeychainReview({
   dialog,
   context: (target) => {
@@ -1498,6 +1499,80 @@ app.whenReady().then(async () => {
     if (account && account.id !== accountForWindow(target, stored)?.id)
       switchAccount(account.id, source, target);
     else showWindow(target);
+  });
+
+  // Local folders (local-folders.js): the server's web app may hold folders
+  // the person picked, scoped to that server's origin. The picker only opens
+  // from a visible window; every other call is limited to its own origin's
+  // grants, and file work never leaves the granted folder.
+  const localFolders = new LocalFolders({
+    file: () => path.join(app.getPath("userData"), "local-folders.json"),
+    pickDirectory: async (target) => {
+      const result = await dialog.showOpenDialog(target, {
+        title: "Connect a folder",
+        buttonLabel: "Connect",
+        message:
+          "The session can read and edit files in this folder while the app is open.",
+        properties: ["openDirectory", "createDirectory"],
+      });
+      return result.canceled ? null : result.filePaths[0] || null;
+    },
+    trashItem: (file) => shell.trashItem(file),
+  });
+  const localFolderOrigin = (e) => {
+    const source = e.senderFrame?.url ?? "";
+    // Hidden per-organization windows count too, so a folder stays reachable
+    // while another organization is on screen.
+    const owner = BrowserWindow.fromWebContents(e.sender);
+    const known =
+      !!eventWindow(e) ||
+      (!!owner && [...backgroundAccountWindows.values()].includes(owner));
+    if (!inWindow(source) || !known) return null;
+    try {
+      return new URL(source).origin;
+    } catch {
+      return null;
+    }
+  };
+  const localFoldersChanged = (sender) => {
+    for (const win of BrowserWindow.getAllWindows())
+      if (!win.isDestroyed() && win.webContents !== sender)
+        win.webContents.send("os1:local-folders-changed");
+  };
+  const refused = () => {
+    throw new Error("Not available here");
+  };
+  ipcMain.handle("os1:local-folders-device", (e) =>
+    localFolderOrigin(e) ? localFolders.device() : refused(),
+  );
+  ipcMain.handle("os1:local-folders-list", (e) => {
+    const origin = localFolderOrigin(e);
+    return origin ? localFolders.list(origin) : refused();
+  });
+  ipcMain.handle("os1:local-folders-pick", async (e) => {
+    const origin = localFolderOrigin(e);
+    const target = eventWindow(e);
+    if (!origin || !target?.isVisible()) refused();
+    const grant = await localFolders.pick(origin, target);
+    if (grant) localFoldersChanged(e.sender);
+    return grant;
+  });
+  ipcMain.handle("os1:local-folders-update", async (e, id, patch) => {
+    const origin = localFolderOrigin(e);
+    if (!origin || typeof id !== "string") refused();
+    await localFolders.update(origin, id, patch || {});
+    localFoldersChanged(e.sender);
+  });
+  ipcMain.handle("os1:local-folders-remove", async (e, id) => {
+    const origin = localFolderOrigin(e);
+    if (!origin || typeof id !== "string") refused();
+    await localFolders.remove(origin, id);
+    localFoldersChanged(e.sender);
+  });
+  ipcMain.handle("os1:local-folders-op", (e, id, op, args) => {
+    const origin = localFolderOrigin(e);
+    if (!origin || typeof id !== "string" || typeof op !== "string") refused();
+    return localFolders.op(origin, id, op, args || {});
   });
 
   const fromActiveOrganizationPicker = (e) => {

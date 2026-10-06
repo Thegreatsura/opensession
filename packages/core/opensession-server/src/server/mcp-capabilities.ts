@@ -128,6 +128,12 @@ export const INTERNAL_MCP_CAPABILITIES = {
     guidance:
       "`request_local_files` asks the person watching for files on their computer (large video is fine) and returns paths here.",
   },
+  "opensession-local-folders": {
+    summary:
+      "Read, search, and edit a folder on the person's own computer while their app is open.",
+    guidance:
+      "File tools for a folder the person connected from their own computer; `list_local_folders` first. No shell there.",
+  },
   "opensession-plain-discussion": {
     summary:
       "Reply to the customer or run a Stripe action from a Plain Ask Sidekick discussion, behind the teammate's Approve/Deny card.",

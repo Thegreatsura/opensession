@@ -32,6 +32,8 @@ import { getSandboxProvider } from "./sandbox";
 import { createWalkthroughMcpServer } from "../agents/slack/walkthrough-tools";
 import { createSlackComposeMcpServer } from "../agents/slack/slack-compose-tools";
 import { createLocalFilesMcpServer } from "../agents/slack/local-files-tools";
+import { createLocalFoldersMcpServer } from "./local-folders-mcp";
+import { hostSessionScratchDir } from "./session-scratch";
 import { createPlainDiscussionMcpServer } from "../agents/plain/discussion-tools";
 import { createMemoryMcpServer } from "../agents/slack/memory-tools";
 import {
@@ -447,6 +449,25 @@ export function interactiveMcpServers(
           // only: the purpose string is shown to a person as a request.
           "opensession-local-files": () =>
             createLocalFilesMcpServer({ sessionId }),
+          // A folder on the person's own computer, reached through the app
+          // that connected it (local-folders.ts). File tools only, and only
+          // for turns the folder's owner prompted.
+          "opensession-local-folders": () =>
+            createLocalFoldersMcpServer({
+              sessionId,
+              user,
+              workspace: () => {
+                const s = findSession(sessionId);
+                if (!s || sessionWorkspaceIsRemote(s)) return null;
+                return {
+                  scratchDir: hostSessionScratchDir(sessionId),
+                  roots: [
+                    ...(s.worktreeDir ? [s.worktreeDir] : []),
+                    ...(s.attachedRepos ?? []).map((repo) => repo.dir),
+                  ],
+                };
+              },
+            }),
           // AskUserQuestion for engines without a canUseTool hook (Codex):
           // blocks on the same UI question card + Slack escalation as the
           // native Claude tool. claude-runner strips this server so Claude

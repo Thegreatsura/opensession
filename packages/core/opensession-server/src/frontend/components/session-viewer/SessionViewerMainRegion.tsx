@@ -103,6 +103,7 @@ import { InlineComments } from "../comments/InlineComments";
 import { anchorFromRange } from "../../lib/comment-anchor";
 import { requestCommentDraft } from "../../lib/comment-draft";
 import { toast as showToast } from "../../ui/toast";
+import { ConnectFolderMenuItem } from "../LocalFoldersFlap";
 import type { TypingPresence } from "../../lib/typing";
 import type { SessionViewerProps } from "../../lib/session-viewer-bindings";
 import type { QueueReceipt } from "../../lib/session-queue";
@@ -1497,6 +1498,12 @@ export function SessionViewerMainRegion({
                           Send to Slack…
                         </span>
                       </button>
+                      {session.source === "opensession" && (
+                        <ConnectFolderMenuItem
+                          sessionId={session.id}
+                          close={close}
+                        />
+                      )}
                       {isAsk && session.source === "opensession" && (
                         <button
                           type="button"

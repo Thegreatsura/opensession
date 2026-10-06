@@ -57,6 +57,7 @@ import { createWorkflowsMcpServer } from "../agents/slack/workflow-tools";
 import { createAuditMcpServer } from "./audit-mcp";
 import { createHealthMcpServer } from "./health-mcp";
 import { createRunnersMcpServer } from "./runners-mcp";
+import { createLocalFoldersMcpServer } from "./local-folders-mcp";
 import { createScheduleMcpServer } from "./schedule-mcp";
 import { createScriptsMcpServer } from "./scripts-mcp";
 import { createPortalsMcpServer } from "./portals-mcp";
@@ -388,6 +389,20 @@ export const MCP_SERVER_CATALOG: McpServerCatalogEntry[] = [
     runClasses: ["interactive"],
     condition: "Needs a session id.",
     build: () => createLocalFilesMcpServer({ sessionId: SESSION_ID }),
+  },
+  {
+    name: "opensession-local-folders",
+    summary: INTERNAL_MCP_CAPABILITIES["opensession-local-folders"].summary,
+    source: "packages/core/opensession-server/src/server/local-folders-mcp.ts",
+    wiring: ["packages/core/opensession-server/src/server/interactive-mcp.ts"],
+    runClasses: ["interactive"],
+    condition: "Needs a session id.",
+    build: () =>
+      createLocalFoldersMcpServer({
+        sessionId: SESSION_ID,
+        user: USER,
+        workspace: () => null,
+      }),
   },
   {
     name: "opensession-plain-discussion",

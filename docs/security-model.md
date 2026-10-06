@@ -372,6 +372,38 @@ folder; any other path is rejected. Automation identities and cross-origin
 requests cannot answer. File contents are untrusted input to the agent, like
 any attachment.
 
+## Local folders
+
+The interactive-only `opensession-local-folders` server lets a session read,
+search, and edit a folder on a person's own computer while their Open Session
+client is open (see [local-folders.md](local-folders.md)). The agent and its
+shell stay on the server; the client answers one file operation at a time over
+a dedicated WebSocket. There is no command execution on the device.
+
+- **Consent and scope.** The person picks the folder in the system folder
+  picker and connects it to one session at a time. The Mac app keeps grants
+  per server origin and refuses system roots and the home folder itself; a
+  browser only lets the page touch the picked directory.
+- **Paths.** The agent sends folder-relative paths. The server, the web app,
+  and the Mac app each reject absolute paths and `..`. The Mac app resolves
+  every path with `realpath`, including the deepest existing ancestor of a new
+  file, and refuses anything outside the folder, so a symlink cannot lead out.
+- **Who may use it.** An operation is dispatched only for a turn prompted by
+  the person who connected the folder. Automation runs and workflow scripts do
+  not mount the tools, automation sockets cannot announce folders, and Plain
+  discussion sessions get no prompt note.
+- **Writes.** A folder can be connected read-only, enforced on the server and
+  on the device. Deleting moves to the macOS Trash and is not offered in a
+  browser, which can only delete permanently. Moves never overwrite.
+- **Liveness.** Nothing is persisted on the server. A closed app makes every
+  operation fail at once; an unanswered one times out after a minute.
+- **Copies.** `copy_from_local_folder` writes into the session's scratch
+  directory, which is removed with the session. `copy_to_local_folder` only
+  reads files inside the session's worktrees or scratch directory, checked
+  with `realpath`. Neither runs for sessions whose workspace is remote.
+
+File contents are untrusted input to the agent, like any attachment.
+
 ## Per-user MCP servers (`allowedUsers`)
 
 An MCP server in `mcp-config.json` can carry an optional

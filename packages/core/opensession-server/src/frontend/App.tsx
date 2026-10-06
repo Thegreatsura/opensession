@@ -7,6 +7,7 @@ import { TranscriptMotionLab } from "./components/TranscriptMotionLab";
 import { transcriptMotionFixtureOptions } from "./lib/transcript-motion-scenarios";
 import { TooltipProvider } from "./ui/tooltip";
 import { AppContent } from "./AppContent";
+import { startLocalFolderBridge } from "./lib/local-folders/bridge";
 import type { AppProps } from "./lib/app-types";
 
 declare global {
@@ -40,6 +41,9 @@ if (!embeddedDemo) {
     location.pathname,
     location.search,
   );
+  // Folders on this computer connected to sessions (lib/local-folders) stay
+  // reachable while any window is open. Opens no socket unless one is.
+  if (!transcriptMotionFixture) startLocalFolderBridge();
   // `reducedMotion="user"` makes every `motion.*` component honour the OS
   // setting. Motion's default is "never", so without this the CSS blanket in
   // legacy.css would quietly cover only half the app — Motion animates inline

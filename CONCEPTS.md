@@ -26,11 +26,12 @@ sessions may be workspace-less and use `/session/<sessionId>`.
 
 Alongside it sits a second, independent axis — _where_ a session's work happens:
 
-| Concept      | What it is                                                       |
-| ------------ | ---------------------------------------------------------------- |
-| **Worktree** | the git working directory a code session edits in                |
-| **Sandbox**  | an optional provider-backed environment used instead of the host |
-| **Runner**   | a trusted persistent machine attached for specialized work       |
+| Concept          | What it is                                                               |
+| ---------------- | ------------------------------------------------------------------------ |
+| **Worktree**     | the git working directory a code session edits in                        |
+| **Sandbox**      | an optional provider-backed environment used instead of the host         |
+| **Runner**       | a trusted persistent machine attached for specialized work               |
+| **Local folder** | a folder on your own computer a session can reach while your app is open |
 
 And a third — _what starts or coordinates work when you are not there_:
 
@@ -200,6 +201,12 @@ the agent can drive and you can watch in a Desktop tab:
 `opensession runner connect` for platform-, toolchain-, or GPU-specific work.
 The Runner connects outbound to Open Session, which can delegate bounded
 commands to it. See [docs/runners.md](docs/runners.md).
+
+**Local folders** are folders on your own computer that you connect to a
+session from the composer's **+** menu, in the Mac app, Chrome, or Edge. The
+agent keeps running on the server and reads, searches, and edits the folder
+through file tools, with no shell on your computer, and only while the app
+that connected it is open. See [docs/local-folders.md](docs/local-folders.md).
 
 ## Automations
 

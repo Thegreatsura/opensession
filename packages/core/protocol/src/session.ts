@@ -781,6 +781,24 @@ export type ProtocolServerMessage =
       files?: { name: string; size: number }[];
     }
   | {
+      /** Folders on a person's own computer connected to this session, held
+       *  by their app's bridge socket. Replaces the whole list. Listed and
+       *  disconnected over HTTP (/api/local-folders). */
+      type: "local_folders";
+      sessionId: string;
+      folders: {
+        key: string;
+        id: string;
+        name: string;
+        displayPath?: string;
+        readOnly: boolean;
+        deviceId: string;
+        deviceLabel: string;
+        owner: string;
+        online: boolean;
+      }[];
+    }
+  | {
       /** The agent asked the session's driver to add a keychain credential
        *  (register_credential). Metadata only: the secret is typed into the
        *  card and posted over HTTP (/api/keychain/registrations), never sent

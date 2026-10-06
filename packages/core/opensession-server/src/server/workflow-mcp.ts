@@ -135,6 +135,8 @@ export const WORKFLOW_INPROCESS_EXCLUDED: Record<string, string> = {
     "it opens a Slack composer a person has to press Send in",
   "opensession-local-files":
     "it waits for a person to choose and upload files from their computer",
+  "opensession-local-folders":
+    "it reads and changes files on a person's own computer, which a fan-out must not do unsupervised",
   "opensession-keychain":
     "it borrows a teammate's credential on a model-authored purpose string",
   "opensession-admin":

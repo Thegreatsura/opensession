@@ -8,6 +8,7 @@
  * cache in session-cache.ts.
  */
 
+import { localFoldersContextNote } from "./local-folders";
 import { portalAutostarting, portalsContextNote } from "./portal-autostart";
 import { ownedWorktreeHeadBranch } from "./session-branch-ownership";
 import {
@@ -3040,6 +3041,13 @@ async function runSessionPromptInner(
   const isAutomationSession = runInputs.isAutomationSession;
   const mcpServers = runInputs.mcpServers;
   const deniedTools = runInputs.deniedTools;
+  // Folders on the prompter's own computer (local-folders.ts). Interactive
+  // turns only, and only folders this prompter connected.
+  if (!isAutomationSession && !session.plainDiscussionId) {
+    const foldersNote = localFoldersContextNote(session.id, user);
+    if (foldersNote)
+      prompt = `${wrapContext(foldersNote, "local-folders-note")}\n\n${prompt}`;
+  }
 
   // Retrieval is query-specific context for this turn. Keep it out of the
   // stable system prefix so an unrelated memory write cannot invalidate every

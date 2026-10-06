@@ -53,8 +53,9 @@ describe("renderInternalMcpCapabilities", () => {
       ),
     );
     // Every server mounted at once is the ceiling; keep it a section, not
-    // a manual.
-    expect(note.length).toBeLessThan(7_300);
+    // a manual. Raised from 7,300 for opensession-local-folders, whose
+    // per-turn note names its tools instead.
+    expect(note.length).toBeLessThan(7_500);
   });
 
   test("is empty when nothing internal is mounted", () => {
