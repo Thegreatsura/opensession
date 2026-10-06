@@ -80,6 +80,7 @@ struct MacSettingsView: View {
         switch ProcessInfo.processInfo.environment["OS1_OPEN_SETTINGS"] {
         case "notifications": return .notifications
         case "keychain": return .keychain
+        case "memory": return .memory
         default: break
         }
         #endif

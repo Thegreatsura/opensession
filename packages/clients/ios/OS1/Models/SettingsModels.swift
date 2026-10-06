@@ -329,11 +329,30 @@ struct PlainRouterConfig: Codable, Sendable {
     var defaultBasicModel: String?
 }
 
+/// One memory entry. The original native shape carried `text`/`by`/`at`;
+/// `GET /api/memory` now answers summaries (`summary`, `scopeKey`, `kind`,
+/// `updatedAt`, and in repo mode the `repo` and `path` it lives in). Both
+/// decode into this, so cached entries from either shape still render.
+/// `source` is an object there and is deliberately not decoded.
 struct MemoryEntry: Codable, Sendable, Identifiable {
     var id: String?
     var text: String?
     var by: String?
     var at: String?
+    var summary: String?
+    var scopeKey: String?
+    var kind: String?
+    var state: String?
+    var updatedAt: String?
+    var repo: String?
+    var path: String?
+
+    var displayText: String { text ?? summary ?? "" }
+    var byline: String {
+        [by ?? kind, at ?? updatedAt.map { String($0.prefix(10)) }]
+            .compactMap { $0?.isEmpty == false ? $0 : nil }
+            .joined(separator: " · ")
+    }
 }
 
 struct MemoryScopeInfo: Codable, Sendable {
@@ -346,6 +365,8 @@ struct MemoryScope: Codable, Sendable, Identifiable {
     var id: String? { scope?.key }
     var scope: MemoryScopeInfo?
     var entries: [MemoryEntry]?
+    /// The memory repository this scope lives in (repo mode only).
+    var repo: String?
 }
 
 struct MemoryResponse: Codable, Sendable {

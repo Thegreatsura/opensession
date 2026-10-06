@@ -1,0 +1,26 @@
+{
+  "repo": "team",
+  "commits": [
+    {
+      "sha": "e2805c48a845b633c134b4d12f7eeeda7c28d706",
+      "author": "Sam",
+      "date": "2026-10-06T07:24:49+00:00",
+      "subject": "Add deploy notes",
+      "body": "Session: https://os.example.test/session/bks-demo-pr",
+      "files": [
+        { "status": "M", "path": "MEMORY.md" },
+        { "status": "A", "path": "notes/deploys.md" }
+      ],
+      "sessionId": "bks-demo-pr"
+    },
+    {
+      "sha": "aa8073eafec17821e97ebe210a2a43ed81d5e735",
+      "author": "Alex",
+      "date": "2026-10-06T07:24:49+00:00",
+      "subject": "Remember the acme deploy window",
+      "body": "Session: https://os.example.test/session/bks-demo-live",
+      "files": [{ "status": "M", "path": "constraints.md" }],
+      "sessionId": "bks-demo-live"
+    }
+  ]
+}

@@ -18,6 +18,8 @@ struct SettingsView: View {
         ProcessInfo.processInfo.environment["OS1_OPEN_SETTINGS"] == "keychain"
     @State private var opensNotificationsFixture =
         ProcessInfo.processInfo.environment["OS1_OPEN_SETTINGS"] == "notifications"
+    @State private var opensMemoryFixture =
+        ProcessInfo.processInfo.environment["OS1_OPEN_SETTINGS"] == "memory"
     #endif
 
     private var signIn: GitHubSignIn { .shared }
@@ -53,6 +55,11 @@ struct SettingsView: View {
             // Same for `OS1_OPEN_SETTINGS=keychain`.
             .navigationDestination(isPresented: $opensKeychainFixture) {
                 KeychainSettingsView()
+            }
+            // And `OS1_OPEN_SETTINGS=memory` (with `OS1_MEMORY_REPO` and
+            // `OS1_MEMORY_COMMIT` / `OS1_MEMORY_FILE` to go deeper).
+            .navigationDestination(isPresented: $opensMemoryFixture) {
+                MemorySettingsView()
             }
             #endif
             #if os(macOS)

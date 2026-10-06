@@ -1,0 +1,5 @@
+{
+  "repo": "team",
+  "sha": "e2805c48",
+  "diff": " MEMORY.md        | 1 +\n notes/deploys.md | 4 ++++\n 2 files changed, 5 insertions(+)\n\ndiff --git a/MEMORY.md b/MEMORY.md\nindex 59ee2ed..d666dbb 100644\n--- a/MEMORY.md\n+++ b/MEMORY.md\n@@ -2,4 +2,5 @@\n \n ## Index\n - [[constraints]]\n+- [[notes/deploys]]\n - [[repos/acme-todo/MEMORY]]\ndiff --git a/notes/deploys.md b/notes/deploys.md\nnew file mode 100644\nindex 0000000..328a6b6\n--- /dev/null\n+++ b/notes/deploys.md\n@@ -0,0 +1,4 @@\n+# Deploys\n+\n+- Staging deploys run from the acme-todo main branch.\n+- Roll back with the previous image tag.\n"
+}

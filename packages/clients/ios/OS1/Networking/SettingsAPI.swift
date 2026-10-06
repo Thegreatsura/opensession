@@ -629,18 +629,169 @@ enum SettingsAPI {
 
     // MARK: - Memory, warmers, papercuts, audit
 
-    static func memory() async throws -> MemoryResponse { try await request("/api/memory") }
-
-    static func addMemory(scopeKey: String, text: String, by: String) async throws -> MemoryResponse {
-        try await request("/api/memory", method: "POST", body: ["scopeKey": scopeKey, "text": text, "by": by])
+    /// Every visible scope with its active entries, for the entry editor.
+    /// `GET /api/memory` answers pages of summaries, so the scope list (which
+    /// includes empty scopes, so there is always somewhere to add) comes from
+    /// `/scopes` and each scope's entries are paged in after it.
+    static func memoryScopes(
+        connection: Connection? = nil,
+        session: URLSession = .shared
+    ) async throws -> [MemoryScope] {
+        let listed: MemoryScopesResponse = try await request(
+            "/api/memory/scopes", connection: connection, session: session
+        )
+        var scopes: [MemoryScope] = []
+        for item in listed.scopes ?? [] {
+            guard let key = item.scope?.key, !key.isEmpty else { continue }
+            var entries: [MemoryEntry] = []
+            if item.count != 0 {
+                var cursor: String?
+                // A hard page cap: a runaway cursor must not spin forever.
+                for _ in 0..<memoryPageLimit {
+                    let page = try await memoryEntries(
+                        scopeKey: key, cursor: cursor, connection: connection, session: session
+                    )
+                    entries += page.items ?? []
+                    guard let next = page.nextCursor, !next.isEmpty, next != cursor else { break }
+                    cursor = next
+                }
+            }
+            scopes.append(MemoryScope(scope: item.scope, entries: entries, repo: item.repo))
+        }
+        return scopes
     }
 
-    static func updateMemory(scopeKey: String, id: String, text: String) async throws -> MemoryResponse {
-        try await request("/api/memory", method: "PUT", body: ["scopeKey": scopeKey, "id": id, "text": text])
+    static let memoryPageLimit = 20
+
+    static func memoryEntries(
+        scopeKey: String,
+        cursor: String? = nil,
+        connection: Connection? = nil,
+        session: URLSession = .shared
+    ) async throws -> MemoryEntriesPage {
+        var query = ["scopeKey": scopeKey, "state": "active", "limit": "50"]
+        if let cursor { query["cursor"] = cursor }
+        return try await request("/api/memory", query: query, connection: connection, session: session)
     }
 
-    static func deleteMemory(scopeKey: String, id: String) async throws -> SettingsOK {
-        try await request("/api/memory", method: "DELETE", body: ["scopeKey": scopeKey, "id": id])
+    // Memory repositories: list, history, one change, revert, files, remote.
+    // Access is enforced server-side per repository (404 for one you cannot
+    // see); every mutation is a commit authored as the signed-in person.
+
+    static func memoryRepos(
+        connection: Connection? = nil, session: URLSession = .shared
+    ) async throws -> [MemoryRepo] {
+        let response: MemoryReposResponse = try await request(
+            "/api/memory/repos", connection: connection, session: session
+        )
+        return response.repos ?? []
+    }
+
+    static func memoryHistory(
+        repo: String, limit: Int = 40, connection: Connection? = nil, session: URLSession = .shared
+    ) async throws -> [MemoryCommit] {
+        let response: MemoryHistoryResponse = try await request(
+            "/api/memory/history",
+            query: ["repo": repo, "limit": String(limit)],
+            connection: connection, session: session
+        )
+        return response.commits ?? []
+    }
+
+    static func memoryCommitDiff(
+        repo: String, sha: String, connection: Connection? = nil, session: URLSession = .shared
+    ) async throws -> String {
+        let response: MemoryCommitDiffResponse = try await request(
+            "/api/memory/commit", query: ["repo": repo, "sha": sha],
+            connection: connection, session: session
+        )
+        return response.diff ?? ""
+    }
+
+    /// A new commit that undoes `sha`. The server answers 409 with a message
+    /// when later changes touched the same lines.
+    static func revertMemoryCommit(
+        repo: String, sha: String, connection: Connection? = nil, session: URLSession = .shared
+    ) async throws -> MemoryRevertResponse {
+        try await request(
+            "/api/memory/revert", method: "POST", body: ["repo": repo, "sha": sha],
+            connection: connection, session: session
+        )
+    }
+
+    static func memoryFiles(
+        repo: String, connection: Connection? = nil, session: URLSession = .shared
+    ) async throws -> [String] {
+        let response: MemoryFilesResponse = try await request(
+            "/api/memory/files", query: ["repo": repo], connection: connection, session: session
+        )
+        return response.files ?? []
+    }
+
+    static func memoryFile(
+        repo: String, path: String, connection: Connection? = nil, session: URLSession = .shared
+    ) async throws -> String {
+        let response: MemoryFileResponse = try await request(
+            "/api/memory/file", query: ["repo": repo, "path": path],
+            connection: connection, session: session
+        )
+        return response.content ?? ""
+    }
+
+    /// Save (or with an empty `url`, remove) the remote. Saving syncs at once,
+    /// so the answer already carries the first sync's result.
+    static func saveMemoryRemote(
+        repo: String, url: String, connection: Connection? = nil, session: URLSession = .shared
+    ) async throws -> MemoryRemoteStatus {
+        let response: MemoryRemoteResponse = try await request(
+            "/api/memory/remote", method: "PUT",
+            body: ["repo": repo, "url": url.trimmingCharacters(in: .whitespacesAndNewlines)],
+            connection: connection, session: session
+        )
+        return response.remote ?? MemoryRemoteStatus()
+    }
+
+    /// A failed sync or a conflict is a 200 with `ok: false`, not an error.
+    static func syncMemoryRemote(
+        repo: String, connection: Connection? = nil, session: URLSession = .shared
+    ) async throws -> MemoryRemoteStatus {
+        let response: MemoryRemoteResponse = try await request(
+            "/api/memory/remote/sync", method: "POST", body: ["repo": repo],
+            connection: connection, session: session
+        )
+        return response.remote ?? MemoryRemoteStatus()
+    }
+
+    // Entry editing: the server commits each to the scope's repository.
+
+    static func addMemory(
+        scopeKey: String, text: String, by: String,
+        connection: Connection? = nil, session: URLSession = .shared
+    ) async throws -> MemoryResponse {
+        try await request(
+            "/api/memory", method: "POST", body: ["scopeKey": scopeKey, "text": text, "by": by],
+            connection: connection, session: session
+        )
+    }
+
+    static func updateMemory(
+        scopeKey: String, id: String, text: String,
+        connection: Connection? = nil, session: URLSession = .shared
+    ) async throws -> MemoryResponse {
+        try await request(
+            "/api/memory", method: "PUT", body: ["scopeKey": scopeKey, "id": id, "text": text],
+            connection: connection, session: session
+        )
+    }
+
+    static func deleteMemory(
+        scopeKey: String, id: String,
+        connection: Connection? = nil, session: URLSession = .shared
+    ) async throws -> SettingsOK {
+        try await request(
+            "/api/memory", method: "DELETE", body: ["scopeKey": scopeKey, "id": id],
+            connection: connection, session: session
+        )
     }
 
     static func warmTemplates() async throws -> WarmTemplatesResponse { try await request("/api/warm-templates") }
