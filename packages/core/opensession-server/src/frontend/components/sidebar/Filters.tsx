@@ -20,7 +20,6 @@ import {
   SETTING_ROW_PRESSABLE,
 } from "../../lib/setting-row-classes";
 import {
-  ActionRow,
   type SettingOption,
   ValueOptions,
   ValueRow,
@@ -28,7 +27,14 @@ import {
 import { SwitchIndicator } from "../../ui/switch";
 import { cn } from "../../ui/cn";
 import { RepoTile, repoLabel } from "../RepoTile";
-import { IconChevronRight, IconFolderPlus, IconRepo } from "../icons";
+import {
+  IconChevronRight,
+  IconFolder,
+  IconFolderPlus,
+  IconPlus,
+  IconRepo,
+} from "../icons";
+import type { AddRepoMode } from "../SetupRepos";
 import {
   GROUP_BY_OPTIONS,
   LAST_USED_TIME_OPTIONS,
@@ -119,7 +125,7 @@ export function FilterPopover({
   onChange: (patch: Partial<FilterState>) => void;
   onClose: () => void;
   onCustomize: () => void;
-  onAddProject: () => void;
+  onAddProject: (mode: AddRepoMode) => void;
 }) {
   // Density and last used time belong to this list, but they are stored display
   // preferences rather than part of FilterState. Keep them live here so the
@@ -334,11 +340,43 @@ export function FilterPopover({
         {/* Bringing a project in is the one action here rather than a view
             setting, so it sits last, under a rule. */}
         <div className="-mx-2 my-1 h-px bg-line" role="separator" />
-        <ActionRow
-          label="Add project…"
-          icon={<IconFolderPlus size={16} />}
-          onClick={onAddProject}
-        />
+        <Menu.Root>
+          <Menu.Trigger className={cn(SETTING_ROW, SETTING_ROW_PRESSABLE)}>
+            <span className={SETTING_GLYPH}>
+              <IconFolderPlus size={16} />
+            </span>
+            <span className="truncate">Add project</span>
+            <IconChevronRight
+              size={16}
+              className="-mr-0.5 ml-auto shrink-0 text-faint"
+            />
+          </Menu.Trigger>
+          <Menu.Popup
+            align="end"
+            sideOffset={6}
+            alignOffset={isPhone ? -6 : -30}
+            className="[&>div]:p-2"
+          >
+            <Menu.Item onClick={() => onAddProject("remote")}>
+              <span className={SETTING_GLYPH}>
+                <IconRepo size={16} />
+              </span>
+              Clone repository…
+            </Menu.Item>
+            <Menu.Item onClick={() => onAddProject("local")}>
+              <span className={SETTING_GLYPH}>
+                <IconFolder size={16} />
+              </span>
+              Local folder…
+            </Menu.Item>
+            <Menu.Item onClick={() => onAddProject("new")}>
+              <span className={SETTING_GLYPH}>
+                <IconPlus size={16} />
+              </span>
+              New repository…
+            </Menu.Item>
+          </Menu.Popup>
+        </Menu.Root>
       </div>
     </>,
     document.body,

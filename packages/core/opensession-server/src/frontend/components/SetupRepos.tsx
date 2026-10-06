@@ -756,35 +756,45 @@ interface CsBrowseResult {
 
 type RepoSource = "github" | "codestorage";
 
-/** The Add repository picker on its own, for entry points outside Settings
- *  (the sidebar's workspace options). Owns its pending and error state; the
- *  picker announces the change so every repo list refreshes. */
-export function AddRepositoryDialog({
-  open,
-  onOpenChange,
+/** The picker body already says what each source needs. */
+const ADD_PROJECT_TITLE: Record<AddRepoMode, string> = {
+  remote: "Clone repository",
+  local: "Add local folder",
+  new: "New repository",
+};
+
+/** One source of the Add repository picker on its own, for the sidebar's
+ *  workspace options, where the source was already picked from its submenu.
+ *  `mode` null is closed. Owns its pending and error state; the picker
+ *  announces the change so every repo list refreshes. */
+export function AddProjectDialog({
+  mode,
+  onClose,
 }: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+  mode: AddRepoMode | null;
+  onClose: () => void;
 }) {
   const [pendingRepo, setPendingRepo] = useState<PendingRepo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Held through the close animation, so the copy does not blank out.
+  const [shown, setShown] = useState<AddRepoMode>("remote");
+  if (mode && mode !== shown) setShown(mode);
   return (
     <Modal.Root
-      open={open}
+      open={mode !== null}
       onOpenChange={(next) => {
-        if (!pendingRepo) onOpenChange(next);
+        if (!next && !pendingRepo) onClose();
       }}
       disablePointerDismissal={pendingRepo !== null}
     >
       <Modal.Content widthClassName="max-w-[34rem]" initialFocus={inputRef}>
-        <Modal.Header
-          title="Add project"
-          description="Clone a remote repository, register a Git checkout already on the server, or start a new one."
-        />
+        <Modal.Header title={ADD_PROJECT_TITLE[shown]} />
         <AddRepoPicker
+          key={shown}
+          mode={shown}
           inputRef={inputRef}
-          onAdded={() => onOpenChange(false)}
+          onAdded={onClose}
           pendingRepo={pendingRepo}
           onPendingChange={setPendingRepo}
           error={error}
@@ -794,7 +804,7 @@ export function AddRepositoryDialog({
     </Modal.Root>
   );
 }
-type AddRepoMode = "remote" | "local" | "new";
+export type AddRepoMode = "remote" | "local" | "new";
 
 interface PendingRepo {
   label: string;
@@ -862,6 +872,7 @@ function RepoPickRow({
 }
 
 function AddRepoPicker({
+  mode: fixedMode,
   inputRef,
   onAdded,
   pendingRepo,
@@ -869,6 +880,8 @@ function AddRepoPicker({
   error,
   setError,
 }: {
+  /** Pins the picker to one source and drops the source switch. */
+  mode?: AddRepoMode;
   /** Focused once the list resolves. Which input exists depends on whether
    *  there's a credential to browse with, so both branches take it. */
   inputRef?: React.RefObject<HTMLInputElement | null>;
@@ -878,7 +891,7 @@ function AddRepoPicker({
   error: string | null;
   setError: (error: string | null) => void;
 }) {
-  const [mode, setMode] = useState<AddRepoMode>("remote");
+  const [mode, setMode] = useState<AddRepoMode>(fixedMode ?? "remote");
   const [localPath, setLocalPath] = useState("");
 
   useEffect(() => {
@@ -945,7 +958,7 @@ function AddRepoPicker({
       )}
       <div className={pendingRepo ? "hidden" : undefined}>
         <Segmented
-          className="mb-3 w-full"
+          className={cn("mb-3 w-full", fixedMode && "hidden")}
           label="Repository source"
           value={mode}
           onValueChange={(value) => {

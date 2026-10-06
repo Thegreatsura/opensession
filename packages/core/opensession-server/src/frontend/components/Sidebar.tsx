@@ -127,7 +127,7 @@ import { useConfirm } from "../ui/confirm";
 import { ContextMenu } from "../ui/menu";
 import { EmptyState, ListSkeleton } from "../ui/state";
 import { IconDotsHorizontal, IconMessages } from "./icons";
-import { AddRepositoryDialog } from "./SetupRepos";
+import { AddProjectDialog, type AddRepoMode } from "./SetupRepos";
 import { PrRow } from "./PrRow";
 import { AutomationsBand } from "./sidebar/AutomationsBand";
 import { DraftRow } from "./sidebar/DraftRow";
@@ -265,7 +265,7 @@ export const Sidebar = React.forwardRef<SidebarHandle, Props>(function Sidebar(
   // a face picked there is the sidebar you come back to.
   const filter = useSidebarFilter();
   const [filterOpen, setFilterOpen] = useState(false);
-  const [addProjectOpen, setAddProjectOpen] = useState(false);
+  const [addProject, setAddProject] = useState<AddRepoMode | null>(null);
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [filterButton, setFilterButton] = useState<HTMLButtonElement | null>(
     null,
@@ -1491,15 +1491,15 @@ export const Sidebar = React.forwardRef<SidebarHandle, Props>(function Sidebar(
                   setFilterOpen(false);
                   setCustomizeOpen(true);
                 }}
-                onAddProject={() => {
+                onAddProject={(mode) => {
                   setFilterOpen(false);
-                  setAddProjectOpen(true);
+                  setAddProject(mode);
                 }}
               />
             )}
-            <AddRepositoryDialog
-              open={addProjectOpen}
-              onOpenChange={setAddProjectOpen}
+            <AddProjectDialog
+              mode={addProject}
+              onClose={() => setAddProject(null)}
             />
 
             {workspaceMenu && (
