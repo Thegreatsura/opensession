@@ -79,7 +79,7 @@ export function mineStatus(s: UnifiedSession): MineStatus {
   if (s.waitingForInput || runNeedsAttention(s)) return "needsinput";
   // Live execution is authoritative. A pinned lane parks idle work; it must
   // never leave a visibly working chat filed under Backlog or another stage.
-  if (s.isRunning) return "inprogress";
+  if (s.isRunning || s.scriptRunning) return "inprogress";
   const lane = pinnedLane(s);
   if (lane) return lane;
   // Everything else is idle. A single session knows nothing about the PR

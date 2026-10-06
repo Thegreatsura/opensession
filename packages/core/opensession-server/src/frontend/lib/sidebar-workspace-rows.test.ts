@@ -94,6 +94,18 @@ describe("buildWorkspaceRows", () => {
     expect(rows[0]?.status).toBe("inprogress");
   });
 
+  test("shows an idle session with a running script as in progress", () => {
+    const rows = build({
+      sessions: [
+        session("parent", { workspaceId: "workspace-1", scriptRunning: true }),
+      ],
+      workspaces: [workspace("workspace-1")],
+    });
+
+    expect(rows[0]?.running).toBe(true);
+    expect(rows[0]?.status).toBe("inprogress");
+  });
+
   test("does not create top-level rows for merged or closed subagents", () => {
     const rows = build({
       sessions: [

@@ -149,6 +149,8 @@ export interface ScriptRunDeps {
   deliver?: (run: ScriptRunRecord, message: string) => Promise<void>;
   /** Tells viewers. Test seam. */
   broadcast?: (sessionId: string, runs: ScriptRunSummary[]) => void;
+  /** Refreshes the session's list row when a run starts or ends. Test seam. */
+  publishRow?: (sessionId: string) => void;
   /** Where the registry and run dirs live. Test seam. */
   root?: string;
   /** The host's argv before the run dir. Test seam. */
@@ -225,7 +227,7 @@ export function __resetScriptRunsForTest(deps: ScriptRunDeps = {}): void {
   state.loading = undefined;
   state.poll = undefined;
   state.persistTimer = undefined;
-  state.deps = deps;
+  state.deps = { publishRow: () => {}, ...deps };
   state.relayHandler = undefined;
   state.endListeners = new Set();
   state.dirtyPersist = false;
@@ -339,6 +341,14 @@ export async function listScriptRuns(
   return sessionRuns(sessionId);
 }
 
+/** Whether the session has a run still going, for its sidebar row. Reads
+ *  the in-memory registry; false until it has loaded at boot. */
+export function sessionHasRunningScript(sessionId: string): boolean {
+  for (const run of state.runs.values())
+    if (run.sessionId === sessionId && run.state === "running") return true;
+  return false;
+}
+
 function sessionRuns(sessionId: string): ScriptRunSummary[] {
   return [...state.runs.values()]
     .filter((run) => run.sessionId === sessionId)
@@ -404,6 +414,19 @@ function announce(sessionId: string, immediate = false): void {
   const timer = setTimeout(send, BROADCAST_THROTTLE_MS);
   timer.unref?.();
   state.broadcastTimers.set(sessionId, timer);
+}
+
+/** Refresh the session's list row, so the sidebar shows it as busy while a
+ *  run is going even though the agent's turn has ended. */
+function publishRow(sessionId: string): void {
+  const publish = state.deps.publishRow;
+  if (publish) {
+    publish(sessionId);
+    return;
+  }
+  void import("./session-cache")
+    .then(({ publishSessionChange }) => publishSessionChange(sessionId))
+    .catch((error) => console.error("[scripts] row refresh failed:", error));
 }
 
 function defaultBroadcast(sessionId: string, runs: ScriptRunSummary[]): void {
@@ -565,6 +588,7 @@ export async function startScriptRun(
   await persist().catch(() => {});
   ensurePolling();
   announce(run.sessionId, true);
+  publishRow(run.sessionId);
   return { run: summarizeScriptRun(run) };
 }
 
@@ -822,6 +846,7 @@ async function settle(
     if (!run.notify) run.notified = true;
     await persist().catch(() => {});
     announce(run.sessionId, true);
+    if (!sessionHasRunningScript(run.sessionId)) publishRow(run.sessionId);
     await notifyEnded(run);
   })().finally(() => state.live.delete(run.id));
   if (live) live.ending = ending;
@@ -985,6 +1010,11 @@ export async function startScriptRuns(deps?: ScriptRunDeps): Promise<void> {
     );
   }
   if (reattached) console.log(`[scripts] reattached ${reattached} run(s)`);
+  // Rows built before the registry loaded don't know about these runs yet.
+  const busy = new Set<string>();
+  for (const run of state.runs.values())
+    if (run.state === "running") busy.add(run.sessionId);
+  for (const sessionId of busy) publishRow(sessionId);
   ensurePolling();
 }
 

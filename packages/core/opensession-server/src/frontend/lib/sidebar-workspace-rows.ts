@@ -99,8 +99,11 @@ export function buildWorkspaceRows({
       (session) => !session.parentSessionId,
     );
     const statusSources = parentSessions.length ? parentSessions : members;
+    // A worker still running, or a script a session started that hasn't
+    // ended: the row is busy even though its own conversation is idle.
     const workerRunning = members.some(
-      (session) => session.parentSessionId && session.isRunning,
+      (session) =>
+        (session.parentSessionId && session.isRunning) || session.scriptRunning,
     );
     const reviewRunning = members.some((session) =>
       sessionPrKeys(session).some((prKey) => activeReviewPrKeys.has(prKey)),
@@ -149,7 +152,9 @@ export function buildWorkspaceRows({
       unread: !!pickUnreadWorkspaceSession(members, selectedSessionId, reads),
       mention: mentionEntry?.mention?.by,
       mentionSessionId: mentionEntry?.session.id,
-      running: members.some((session) => session.isRunning) || reviewRunning,
+      running:
+        members.some((session) => session.isRunning || session.scriptRunning) ||
+        reviewRunning,
       owner: ownerKey(
         workspace?.createdBy || members[0]?.startedBy,
         canonicalNames,

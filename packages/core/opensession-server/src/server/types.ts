@@ -101,6 +101,10 @@ export interface UnifiedSession {
    * so it's absent there and the UI falls back to a client-observed start).
    */
   runStartedAt?: string;
+  /** A script run (start_script) the session started is still going. The
+   * agent's turn may be over, so this is separate from `isRunning`: the
+   * session still takes prompts directly, but the sidebar shows it busy. */
+  scriptRunning?: boolean;
   /**
    * The run-state machine's view of this session (src/server/run-state.ts),
    * stamped by the session-cache enrichment. Only present when not "idle" —

@@ -15,7 +15,7 @@ import { cn } from "../ui/cn";
 import { SCRIPT_CARD_SHELL, SCRIPT_OUTPUT } from "../lib/script-card-classes";
 
 /** An ended run stays on screen this long, so its outcome is seen. */
-const ENDED_VISIBLE_MS = 15 * 60_000;
+const ENDED_VISIBLE_MS = 5 * 60_000;
 const OUTPUT_POLL_MS = 3_000;
 
 /**

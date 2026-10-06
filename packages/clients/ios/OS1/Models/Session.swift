@@ -49,6 +49,10 @@ struct Session: Identifiable, Decodable, Equatable, Hashable {
     var safety: SessionSafetyState?
     /// Journaled start of the current run — only present while running.
     var runStartedAt: String?
+    /// A script the session started is still going. The agent's turn may be
+    /// over, so this is not `isRunning`: the session still takes prompts, but
+    /// its row sits in In progress. Mirrors the web's `scriptRunning`.
+    var scriptRunning: Bool?
     var waitingForInput: Bool?
     /// The last run died on a terminal failure (usage limits exhausted,
     /// credit or API errors). A human must act, so while idle the session
@@ -286,7 +290,7 @@ struct Session: Identifiable, Decodable, Equatable, Hashable {
         if safety != nil { return .needsInput }
         if waitingForInput == true { return .needsInput }
         if runNeedsAttention { return .needsInput }
-        if isRunning == true { return .inProgress }
+        if isRunning == true || scriptRunning == true { return .inProgress }
         if prState == "OPEN" { return .inReview }
         if prState == "MERGED" { return .done }
         return .backlog

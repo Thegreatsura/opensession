@@ -32,7 +32,7 @@ final class SessionActionCardsModel {
     private(set) var forceMerge: PendingForceMerge?
     /// Every run the server knows for this session, newest first.
     private(set) var scriptRuns: [ScriptRun] = []
-    /// What the card shows: running runs, and ended ones for 15 minutes,
+    /// What the card shows: running runs, and ended ones for 5 minutes,
     /// less the ones closed on this device.
     private(set) var visibleScriptRuns: [ScriptRun] = []
     /// True while any card is on screen. Stored, and written only when it

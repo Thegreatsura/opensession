@@ -491,7 +491,7 @@ struct ScriptRun: Decodable, Equatable, Sendable, Identifiable {
     var canStop: Bool { isRunning && !stopping }
 
     /// An ended run stays on screen this long, so its outcome is seen.
-    static let endedVisibleFor: TimeInterval = 15 * 60
+    static let endedVisibleFor: TimeInterval = 5 * 60
 
     func isVisible(at now: Date) -> Bool {
         if isRunning { return true }
