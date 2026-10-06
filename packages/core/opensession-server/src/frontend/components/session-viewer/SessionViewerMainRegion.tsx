@@ -146,8 +146,7 @@ type SlackComposerDraft = {
 
 interface SurfaceRegion {
   showPortal: boolean;
-  /** The center Portal and, beside a wide chat, a way to pin it there. */
-  portal: Omit<Extract<PreviewSurface, { kind: "portal" }>, "kind"> | null;
+  portalTarget: SessionViewerProps["viewTabs"]["portalTarget"];
   showDesktop: boolean;
   showStaging: boolean;
   staging: Extract<PreviewSurface, { kind: "staging" }>["deployment"];
@@ -435,7 +434,7 @@ export function SessionViewerMainRegion({
 }: SessionViewerMainRegionProps) {
   const {
     showPortal,
-    portal,
+    portalTarget,
     showDesktop,
     showStaging,
     staging,
@@ -679,9 +678,9 @@ export function SessionViewerMainRegion({
         actionClearance,
       )}
     >
-      {showPortal && portal ? (
+      {showPortal && portalTarget ? (
         <SessionPreviewSurface
-          surface={{ kind: "portal", ...portal }}
+          surface={{ kind: "portal", target: portalTarget }}
           frameScope={frameScope}
         />
       ) : showDesktop ? (

@@ -21,6 +21,7 @@ import {
 } from "../lib/workspace-pane-state";
 import { useSubagentTabs } from "./useSubagentTabs";
 import type { useWebSocket } from "./useWebSocket";
+import type { TabDropTarget } from "../lib/tab-split-preview";
 
 const todosResponseSchema = z.object({ todos: z.array(z.unknown()) });
 
@@ -110,7 +111,7 @@ export function useAppViewState({
     () => onTabSplitChanged(() => setTabSplitRev((value) => value + 1)),
     [],
   );
-  const [splitDropSide, setSplitDropSide] = useState<"left" | "right" | null>(
+  const [splitDropSide, setSplitDropSide] = useState<TabDropTarget | null>(
     null,
   );
   // One-shot: the session whose Review tab should foreground once it lands, set

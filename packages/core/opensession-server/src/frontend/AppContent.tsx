@@ -885,6 +885,7 @@ export function AppContent({
         paneViewTabs: workspacePanes.paneViewTabs,
         openWsPanes: workspacePanes.openWsPanes,
         subagentStack: workspacePanes.subagentStack,
+        currentPortalTarget: workspacePanes.currentPortalTarget,
       },
       actions: {
         setActiveViewTab: workspacePanes.setActiveViewTab,
@@ -1162,7 +1163,6 @@ export function AppContent({
         closeAssetsTab: workspacePanes.closeAssetsTab,
         closeTerminalTab: workspacePanes.closeTerminalTab,
         closeDesktopTab: workspacePanes.closeDesktopTab,
-        closePortalTab: workspacePanes.closePortalTab,
       }}
       tabs={{
         context: {

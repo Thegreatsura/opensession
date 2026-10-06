@@ -48,7 +48,7 @@ import { copySessionTranscript } from "../lib/transcript-copy";
 import type { UnifiedSession, Workspace } from "../lib/types";
 import { workspaceArchivedSessions } from "../lib/workspace-archive";
 import { saveWorkspaceLastSession } from "../lib/workspace-last-session";
-import type { WorkspacePaneTab } from "../lib/workspace-pane-tabs";
+import { type WorkspacePaneTab, viewTabKind } from "../lib/workspace-pane-tabs";
 import type { useAppRoute } from "./useAppRoute";
 import type { useAppViewState } from "./useAppViewState";
 import { useArchiveUndo } from "./useArchiveUndo";
@@ -59,6 +59,8 @@ import type { useSessions } from "./useSessions";
 import { useWorkspaceArchive } from "./useWorkspaceArchive";
 import { useWorkspaceMutations } from "./useWorkspaceMutations";
 import type { useWorkspacePanes } from "./useWorkspacePanes";
+import { requestPortalPin } from "../lib/portal-pin";
+import type { TabDropTarget } from "../lib/tab-split-preview";
 
 class MissingWorkspaceSessionSourceError extends Error {}
 
@@ -141,6 +143,7 @@ interface UseSessionTabsOptions {
       | "paneViewTabs"
       | "openWsPanes"
       | "subagentStack"
+      | "currentPortalTarget"
     >;
     actions: Pick<
       ReturnType<typeof useWorkspacePanes>,
@@ -226,6 +229,7 @@ export function useSessionTabs({
       paneViewTabs,
       openWsPanes,
       subagentStack,
+      currentPortalTarget,
     },
     actions: {
       setActiveViewTab,
@@ -510,6 +514,35 @@ export function useSessionTabs({
   });
 
   /**
+   * A Portal tab dragged over the right half (or onto the side panel itself)
+   * moves into the side panel, beside the conversation. Every other drop is
+   * a split.
+   */
+  function tabDropAt(
+    draggedId: string,
+    point: { x: number; y: number },
+  ): TabDropTarget | null {
+    if (
+      !isPhone &&
+      currentPortalTarget &&
+      viewTabKind(draggedId) === "portal"
+    ) {
+      const pane = detailPaneRef.current?.getBoundingClientRect();
+      const strip = detailPaneRef.current
+        ?.querySelector<HTMLElement>(".session-tabs")
+        ?.getBoundingClientRect();
+      if (
+        pane &&
+        point.x > pane.left + pane.width / 2 &&
+        point.y > (strip?.bottom ?? pane.top) + 8 &&
+        point.y < pane.bottom
+      )
+        return "panel";
+    }
+    return splitSideAt(draggedId, point);
+  }
+
+  /**
    * Which bar a dragged tab would land in: the pane's left/right half when
    * there is no split yet (the drop that creates one), or the column actually
    * under the pointer once there is. Null when the drop would be a no-op.
@@ -670,12 +703,17 @@ export function useSessionTabs({
           setColor: (key, color) => setTabColors(setTabColor(key, color)),
           reorder: (ids) => saveTabOrder(tabOrderKey, mergeBarOrder(ids)),
           previewSplit: (id, point) => {
-            setSplitDropSide(id && point ? splitSideAt(id, point) : null);
+            setSplitDropSide(id && point ? tabDropAt(id, point) : null);
           },
           dropIntoSplit: (id, point) => {
-            const target = splitSideAt(id, point);
+            const target = tabDropAt(id, point);
             setSplitDropSide(null);
             if (!target) return false;
+            if (target === "panel") {
+              if (currentPortalTarget) requestPortalPin(currentPortalTarget);
+              closePortalTab();
+              return true;
+            }
             moveTabToSide(id, target);
             return true;
           },
