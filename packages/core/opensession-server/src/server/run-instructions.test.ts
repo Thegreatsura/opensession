@@ -190,7 +190,9 @@ describe("buildRunInstructions", () => {
     // Portals add ~50 so the PR preview link opens the feature, not the root.
     // Naming each PR once per reply adds ~60: without it a reply restates the
     // number in every sentence.
-    expect(prompt.length).toBeLessThan(3_520);
+    // The CI line in Waiting adds ~140: polling checks in a tool call was a
+    // quarter of active agent time on PR work.
+    expect(prompt.length).toBeLessThan(3_660);
   });
 
   // `sleep 240; check` blocks the turn and misses a job that finished early
@@ -211,6 +213,28 @@ describe("buildRunInstructions", () => {
     const automation = buildRunInstructions({ isAsk: false });
     expect(automation).toContain("Never wait with a fixed `sleep N`.");
     expect(automation).not.toContain("schedule_prompt");
+    expect(automation).not.toContain("`pr_checks`");
+  });
+
+  // Polling CI from a tool call was a quarter of active agent time on PR
+  // work. Where wait_for is mounted, CI waits end the turn instead.
+  test("sends CI waits to wait_for pr_checks, not a polling loop", () => {
+    const prompt = buildRunInstructions({
+      isAsk: false,
+      hasSession: true,
+      inProcessMcp: { "opensession-sessions": {}, "opensession-schedule": {} },
+    });
+    const waiting = prompt.slice(
+      prompt.indexOf("## Waiting"),
+      prompt.indexOf("## Tools"),
+    );
+    expect(waiting).toContain(
+      "For PR checks or CI, call `wait_for` with kind `pr_checks` and end your turn; " +
+        "never poll `gh pr checks`, `gh run watch`, or a sleep loop.",
+    );
+    expect(waiting).toContain("For anything else short, poll until done");
+    expect(prompt).not.toMatch(/schedule_prompt`?[^.\n]*\bCI\b/);
+    expect(prompt).toContain("Use `wait_for` kind `pr_checks` for PR checks");
   });
 
   test("tells a sandboxed run where it is, in one shared paragraph", () => {
