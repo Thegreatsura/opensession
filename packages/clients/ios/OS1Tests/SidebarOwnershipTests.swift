@@ -324,12 +324,18 @@ final class CommandPaletteArchiveTests: XCTestCase {
             workspaceNames: [:]
         )
 
-        XCTAssertEqual(entries.map(\.id), [
+        XCTAssertEqual(entries.filter(\.searchable).map(\.id), [
             "archived-workspace:ws-old",
             "archived:os-2",
             "archived:os-3",
         ])
         XCTAssertTrue(entries.allSatisfy { $0.kind == .archived })
+        // The session its same-named workspace row covers stays reachable by
+        // a conversation hit, mapped to its own session.
+        let covered = entries.first { $0.id == "archived:os-1" }
+        XCTAssertEqual(covered?.searchable, false)
+        XCTAssertEqual(covered?.sessionId, "os-1")
+        XCTAssertEqual(CommandPaletteArchive.target(for: "archived:os-1", in: try archived()), .session("os-1"))
     }
 
     func testArchivedRowsNeedAQueryAndRankBelowLiveSessions() throws {

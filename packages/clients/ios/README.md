@@ -22,8 +22,11 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   branch, workspace name) with the web's typo-tolerant matcher
   (`Models/FuzzyMatch.swift`, a port of `shared/fuzzy-match.ts`, scored off
   the main actor by `SidebarSearch`) and conversation text through
-  `/api/sessions/search`. The Mac command palette and the `@` palette's people
-  rows rank by the same scorer. iOS long-press actions
+  `/api/sessions/search`. A hyphenated term such as `pi-durable` is a phrase
+  of adjacent words. The Mac command palette and the `@` palette's people
+  rows rank by the same scorer; the palette lists conversation-only hits,
+  live and archived, in the server's order under "In conversations",
+  between live and archived metadata matches. iOS long-press actions
   include details, rename, sharing, pull request, pin, hide, Snooze/Unsnooze,
   and Archive. Swipe right pins; swipe left offers Snooze and Archive.
   Pinned rows are lifted into a Pinned band at the top in the user's own order,
@@ -243,7 +246,10 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   keychain over HTTP, never to the agent), answer a keychain ask for a
   credential you own, or confirm a force merge (only the driver confirms, with
   a second confirmation; anyone signed in may cancel). Script runs show state,
-  credential call counts, a polled output tail and Stop. `SessionActionCardsModel`
+  credential call counts, a polled output tail, Stop and Close. Close hides an
+  ended card at once and asks about a running one (hide and keep running, or
+  hide and stop); hides stay on the device for a week, per server and account
+  (`HiddenScriptRuns`). `SessionActionCardsModel`
   owns them per session and re-reads all of them on every handshake. A You
   should know note offers Learn more, Ask about this (quotes it under the
   draft), I knew this and Turn off (press twice); Preferences has the toggle.
@@ -309,6 +315,22 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
 - **AskUserQuestion:** blocking questions render as an inline card with option
   buttons + free-text answer, wired to `answer_question`. After you submit, the
   card becomes a read-only receipt showing the question and your answer.
+- **Review progress** — the PR code page tracks which files you reviewed
+  and which changed after you did. GitHub PRs use GitHub's viewed state
+  (`GET /api/pr-viewed-files`, whose `changed` list is GitHub's DIRTY state);
+  hosts without it (`capabilities.viewedState: false`) and the worktree
+  Changes view keep marks on the device, each storing the file's diff hash, so
+  an edit turns a reviewed file into "changed since review"
+  (`Models/PrReviewProgress.swift`). Groups, folders, mark all, reset and
+  invert go out as one `paths` batch, falling back to one request per file on
+  servers that predate it. The review guide's sections are the one grouping:
+  the guide lens reads them one step at a time, with file-type groups while
+  the guide is written or if it fails, and a stale guide (`stale: true`, after
+  a push) is labelled outdated and re-asked every 15s for a few minutes. Files
+  later loads no longer include are listed as removed, and resolved review
+  threads (`GET /api/pr-review-threads`) show per file and can be hidden.
+  `OS1_PR_REVIEW_FRESHNESS_FIXTURE=pushed|stale|worktree` (DEBUG) renders
+  those states for screenshots.
 - **PR panel** — sessions with a pull request expose a row in the title-opened
   workspace sheet and the overflow menu; it opens a panel with state, review
   decision, conflicts, every check with its status, and reviewers, via
@@ -620,7 +642,7 @@ OS1/
     SubagentView.swift       A Task call's sub-agent transcript, in a sheet
     SessionPanel.swift       Pushed session details + the openPanel action
     AssetsView.swift         Assets list + one asset, per-kind preview
-    ChangesView.swift        Changed files and diffs
+    ChangesView.swift        Changed files and diffs, with on-device review marks
     PortalsView.swift        Exposed services and controls
     TerminalView.swift       Session-scoped shell
     WalkthroughCard.swift    Published walkthrough: demo video, writeup, stills
@@ -628,7 +650,8 @@ OS1/
     Blocks/                  One view per block kind (choices, tree, compare, …)
     AskQuestionCard.swift    Options + free text answer
     PrPanel.swift            Pull-request overview, actions, and review entry
-    PrReviewCanvas.swift     Committed diff, inline pending comments, viewed files
+    PrReviewCanvas.swift     Committed diff, inline pending comments, guide steps
+    PrReviewProgressViews.swift  Review progress, changed-since-review, step chips
     WorktreeInfoView.swift   Workspace details sheet
     DeskSheet.swift          Desk sheet: header + voice controls over SessionView
     DeskVoiceCallView.swift  Full-screen voice call: orb, captions, call controls

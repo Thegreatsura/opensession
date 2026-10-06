@@ -177,9 +177,29 @@ export function createRepoMemoryMcpServer(ctx: RepoMemoryToolContext) {
         ),
       ];
 
+  const sync = !ctx.fileTools()
+    ? []
+    : [
+        tool(
+          "sync_memory_repository",
+          "Sync one visible memory repository with its configured upstream and report the result. This commits no changes; file writes already commit separately.",
+          { repo: z.string().trim().min(1) },
+          async ({ repo }) => {
+            const denied = checkRepo(repo);
+            if (denied) return text(denied);
+            try {
+              const result = await memoryRepo.service("syncRemote", repo);
+              return text(JSON.stringify(result));
+            } catch (error) {
+              return text(`Memory sync failed: ${errorText(error)}`);
+            }
+          },
+        ),
+      ];
+
   return createSdkMcpServer({
     name: "opensession-memory",
     version: "3.0.0",
-    tools: [...search, ...files],
+    tools: [...search, ...files, ...sync],
   });
 }

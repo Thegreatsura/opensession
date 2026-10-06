@@ -1,5 +1,33 @@
 import SwiftUI
 
+/// Where the canvas gets its data. Live by default; the screenshot fixture and
+/// tests hand it canned answers instead.
+struct PrReviewLoader {
+    var diff: @MainActor () async throws -> PrDiff?
+    var viewed: @MainActor (_ number: Int) async throws -> PrViewedFiles
+    var setViewed: @MainActor (_ prId: String, _ paths: [String], _ viewed: Bool) async throws -> Void
+    var guide: @MainActor () async throws -> PrReviewGuide?
+    var flow: @MainActor () async throws -> PrCodeFlow?
+    var threads: @MainActor (_ number: Int) async throws -> [PrReviewThread]
+    var localStore = PrLocalReviewStore()
+    /// Overrides the PR's host capability, for fixtures with no PR details.
+    var viewedState: Bool?
+    /// Files an earlier load saw, so a fixture can show removed-file history
+    /// without two loads. Live loads leave it nil.
+    var previousFiles: [String]?
+
+    static func live(sessionId: String, repo: String?) -> PrReviewLoader {
+        PrReviewLoader(
+            diff: { try await OS1API.prDiff(sessionId: sessionId) },
+            viewed: { try await OS1API.prViewedFiles(repo: repo, number: $0) },
+            setViewed: { try await OS1API.setPrFilesViewed(prId: $0, paths: $1, viewed: $2, repo: repo) },
+            guide: { try await OS1API.prReviewGuide(sessionId: sessionId) },
+            flow: { try await OS1API.prCodeFlow(sessionId: sessionId) },
+            threads: { try await OS1API.prReviewThreads(repo: repo, number: $0) }
+        )
+    }
+}
+
 /// A native committed-diff review surface. Inline notes remain local until the
 /// reviewer submits one GitHub review, matching GitHub's pending-review model.
 ///
@@ -9,8 +37,15 @@ import SwiftUI
 /// graph), and the display settings are how the diff is DRAWN (unified or side
 /// by side, long lines wrapped or scrolled). The lens resets per visit; the
 /// display settings persist, because a reader picks those once.
+///
+/// Review progress follows the web: GitHub's viewed state where the host has
+/// it (a file a later push changed comes back "changed since review"), marks
+/// on this device keyed by each file's diff hash where it does not. The
+/// guide's sections are the one grouping of the change, with file types
+/// standing in while the guide is written or if it fails.
 struct PrReviewCanvas: View {
     let viewModel: SessionViewModel
+    private let loader: PrReviewLoader
 
     /// The lenses the code page can be read through, in menu order.
     enum Lens: String, CaseIterable, Identifiable {
@@ -41,23 +76,37 @@ struct PrReviewCanvas: View {
     @Binding var lens: Lens
     @State private var diff: PrDiff?
     @State private var files: [PrPatchFile] = []
-    @State private var viewed = Set<String>()
+    /// Path → hash of that file's diff, for marks kept on this device.
+    @State private var hashes: [String: String] = [:]
+    @State private var marks = PrReviewMarks()
+    @State private var removedFiles: PrRemovedFiles?
+    @State private var resolvedThreads: [PrReviewThread] = []
+    @State private var showResolved = true
     /// Which files have been folded away. Open is the resting state, so this
     /// stays empty until a reader puts something aside.
     @State private var folded = Set<String>()
-    @State private var viewedPrId: String?
     @State private var loading = true
     @State private var errorText: String?
+    @State private var reviewError: String?
     @State private var draftComments: [PrInlineComment] = []
     @State private var commentTarget: PrLineTarget?
     @State private var submitting = false
     @State private var reviewing = false
     @State private var guide: PrReviewGuide?
     @State private var guideLoading = false
+    @State private var guideLoaded = false
     @State private var guideError: String?
+    @State private var guideStep = 0
+    @State private var guideAllSteps = false
     @State private var flow: PrCodeFlow?
     @State private var flowLoading = false
     @State private var flowError: String?
+
+    init(viewModel: SessionViewModel, lens: Binding<Lens>, loader: PrReviewLoader? = nil) {
+        self.viewModel = viewModel
+        _lens = lens
+        self.loader = loader ?? .live(sessionId: viewModel.session.id, repo: viewModel.session.repo)
+    }
 
     var body: some View {
         Group {
@@ -100,6 +149,7 @@ struct PrReviewCanvas: View {
         }
         .task { await load() }
         .task(id: lens) { await loadLens() }
+        .task(id: guidePollKey) { await pollStaleGuide() }
         .sheet(item: $commentTarget) { target in
             PrInlineCommentSheet(target: target) { text in
                 upsertComment(path: target.path, line: target.line, text: text)
@@ -117,6 +167,37 @@ struct PrReviewCanvas: View {
         }
     }
 
+    // MARK: - Derived
+
+    private var paths: [String] { files.map(\.path) }
+
+    private var resolvedByPath: [String: Int] { PrResolvedThreads.countByPath(resolvedThreads) }
+
+    /// The page's one grouping and whether the guide wrote it.
+    private var grouping: (groups: [PrReviewGroup], fromGuide: Bool) {
+        PrReviewGroups.reviewGroups(guide: guide, paths: paths)
+    }
+
+    private func groupProgress(_ grouping: (groups: [PrReviewGroup], fromGuide: Bool)) -> [PrReviewGroupProgress] {
+        PrReviewGroups.progress(
+            grouping.groups,
+            paths: paths,
+            reviewed: marks.reviewed,
+            changed: marks.changed,
+            leftoverTitle: grouping.fromGuide && guide?.stale == true
+                ? PrReviewGroups.staleLeftoverTitle
+                : PrReviewGroups.leftoverTitle
+        )
+    }
+
+    private var isLocalReview: Bool {
+        if case .local = marks.source { return true }
+        return false
+    }
+
+    private var reviewedCount: Int { paths.filter(marks.reviewed.contains).count }
+    private var changedCount: Int { paths.filter(marks.changed.contains).count }
+
     /// One file's diff. Built here rather than through a
     /// `navigationDestination(for:)`: this canvas is a PAGE of the review
     /// panel now, not a pushed view of its own, and a value-based link needs
@@ -125,46 +206,119 @@ struct PrReviewCanvas: View {
     private func fileView(_ file: PrPatchFile) -> some View {
         PrReviewFileView(
             file: file,
-            isViewed: viewed.contains(file.path),
+            reviewState: marks.isAvailable ? marks.state(of: file.path) : nil,
             commentCount: draftComments.filter { $0.path == file.path }.count,
             toggleViewed: { toggleViewed(file.path) },
             comment: { line in commentTarget = PrLineTarget(path: file.path, line: line) }
         )
     }
 
-    // MARK: - All changes
+    // MARK: - Shared chrome
 
-    private var fileList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    Text("\(files.count) file\(files.count == 1 ? "" : "s") changed")
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(OS1VisualStyle.textDim)
-                    Spacer(minLength: 8)
-                    changeCounts
+    /// Progress, the changed-since-review callout, pending notes and the
+    /// resolved-comment filter: the same block on top of both diff lenses.
+    @ViewBuilder
+    private func reviewChrome(order: [String], scroll: @escaping (String) -> Void) -> some View {
+        if marks.isAvailable {
+            PrReviewProgressHeader(
+                total: files.count,
+                reviewed: reviewedCount,
+                changed: changedCount,
+                nextUnreviewed: {
+                    if let next = PrReviewGroups.nextUnreviewed(order, after: nil, reviewed: marks.reviewed) {
+                        scroll(next)
+                    }
+                },
+                bulk: { bulk($0, paths: paths) }
+            )
+            .padding(.horizontal, 4)
+        } else {
+            HStack {
+                Text("\(files.count) file\(files.count == 1 ? "" : "s") changed")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(OS1VisualStyle.textDim)
+                Spacer(minLength: 8)
+                changeCounts
+            }
+            .padding(.horizontal, 4)
+        }
+
+        if changedCount > 0 {
+            PrReviewCallout(
+                tone: .warning,
+                symbol: "exclamationmark.arrow.circlepath",
+                title: "\(changedCount) file\(changedCount == 1 ? "" : "s") changed since you reviewed \(changedCount == 1 ? "it" : "them")",
+                message: isLocalReview
+                    ? "These files were edited after you marked them reviewed. Read them again."
+                    : "Commits pushed after your review changed these files. Read them again."
+            ) {
+                if let first = order.first(where: marks.changed.contains) {
+                    Button("Show first changed file") { scroll(first) }
+                        .font(.caption.weight(.medium))
+                        .buttonStyle(.borderless)
+                        .padding(.top, 2)
                 }
-                .padding(.horizontal, 4)
+            }
+        }
 
+        if let reviewError {
+            Text(reviewError)
+                .font(.caption)
+                .foregroundStyle(OS1VisualStyle.redInk)
+                .padding(.horizontal, 4)
+        }
+
+        let resolvedCount = resolvedThreads.count
+        if !draftComments.isEmpty || resolvedCount > 0 {
+            HStack(spacing: 10) {
                 if !draftComments.isEmpty {
                     Text("\(draftComments.count) pending inline comment\(draftComments.count == 1 ? "" : "s") · saved locally until you submit one review")
                         .font(.caption)
                         .foregroundStyle(OS1VisualStyle.yellowInk)
-                        .padding(.horizontal, 4)
                 }
-
-                ForEach(files) { file in
-                    fileCard(file)
-                }
-
-                if let skipped = diff?.skippedFiles, skipped > 0 {
-                    Text("\(skipped) file\(skipped == 1 ? " was" : "s were") omitted because the patch is too large.")
-                        .font(.caption)
-                        .foregroundStyle(OS1VisualStyle.textDim)
-                        .padding(.horizontal, 4)
+                Spacer(minLength: 0)
+                if resolvedCount > 0 {
+                    Button(showResolved ? "Hide resolved comments" : "Show \(resolvedCount) resolved") {
+                        showResolved.toggle()
+                    }
+                    .font(.caption.weight(.medium))
+                    .buttonStyle(.borderless)
                 }
             }
-            .padding(16)
+            .padding(.horizontal, 4)
+        }
+    }
+
+    @ViewBuilder
+    private var trailingSections: some View {
+        if let removed = removedFiles?.removed, !removed.isEmpty {
+            PrRemovedFilesSection(paths: removed)
+        }
+        if let skipped = diff?.skippedFiles, skipped > 0 {
+            Text("\(skipped) file\(skipped == 1 ? " was" : "s were") omitted because the patch is too large.")
+                .font(.caption)
+                .foregroundStyle(OS1VisualStyle.textDim)
+                .padding(.horizontal, 4)
+        }
+    }
+
+    // MARK: - All changes
+
+    private var fileList: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    reviewChrome(order: paths) { path in
+                        folded.remove(path)
+                        withAnimation { proxy.scrollTo(path, anchor: .top) }
+                    }
+                    ForEach(files) { file in
+                        fileCard(file).id(file.path)
+                    }
+                    trailingSections
+                }
+                .padding(16)
+            }
         }
         .background(OS1VisualStyle.background)
         .refreshable { await reload() }
@@ -174,22 +328,19 @@ struct PrReviewCanvas: View {
     /// under it. Open is the resting state, because a page of file names is
     /// not a review; folding is for putting a file you have read out of the
     /// way, and the card is what tells one file's lines from the next one's.
+    /// A file changed since review wears an amber edge and says so in words.
     @ViewBuilder
     private func fileCard(_ file: PrPatchFile) -> some View {
         let isOpen = !folded.contains(file.path)
-        let isViewed = viewed.contains(file.path)
+        let state = marks.state(of: file.path)
+        let resolved = resolvedByPath[file.path] ?? 0
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 // Marking a file read is its own target, so folding it away
                 // never claims you read it.
-                Button {
-                    toggleViewed(file.path)
-                } label: {
-                    Image(systemName: isViewed ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(isViewed ? OS1VisualStyle.green : OS1VisualStyle.textDim)
+                if marks.isAvailable {
+                    PrReviewStateButton(state: state) { toggleViewed(file.path) }
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(isViewed ? "Mark unviewed" : "Mark viewed")
 
                 Button {
                     if isOpen { folded.insert(file.path) } else { folded.remove(file.path) }
@@ -207,6 +358,14 @@ struct PrReviewCanvas: View {
                                     .foregroundStyle(OS1VisualStyle.textDim)
                                     .lineLimit(1)
                                     .truncationMode(.head)
+                            }
+                            if state == .changed || resolved > 0 {
+                                // Side by side where they fit, stacked on a phone.
+                                ViewThatFits(in: .horizontal) {
+                                    HStack(spacing: 6) { fileMarks(state: state, resolved: resolved) }
+                                    VStack(alignment: .leading, spacing: 4) { fileMarks(state: state, resolved: resolved) }
+                                }
+                                .padding(.top, 2)
                             }
                         }
                         Spacer(minLength: 8)
@@ -230,6 +389,7 @@ struct PrReviewCanvas: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
+            .contextMenu { reviewMenu(for: file.path) }
 
             if isOpen {
                 Divider()
@@ -244,6 +404,9 @@ struct PrReviewCanvas: View {
                     .padding(.horizontal, 12)
                     .padding(.top, 8)
                 }
+                if showResolved, resolved > 0 {
+                    PrResolvedThreadsList(threads: resolvedThreads.filter { $0.path == file.path })
+                }
                 PrFileDiffBody(
                     file: file,
                     comment: { line in
@@ -257,9 +420,55 @@ struct PrReviewCanvas: View {
         // Clipped, not just filled: the diff's own washes run the full width
         // of the line, and unclipped they square off the card's corners.
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            if state == .changed {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(OS1VisualStyle.yellow.opacity(0.7), lineWidth: 1.5)
+            }
+        }
         // A read file steps back rather than disappearing: it is still part of
         // the change, it just is not what you are looking for any more.
-        .opacity(isViewed && !isOpen ? 0.6 : 1)
+        .opacity(state == .reviewed && !isOpen ? 0.6 : 1)
+    }
+
+    @ViewBuilder
+    private func fileMarks(state: PrFileReviewState, resolved: Int) -> some View {
+        if state == .changed { PrChangedSinceReviewBadge().fixedSize() }
+        if resolved > 0 {
+            Label("\(resolved) resolved", systemImage: "checkmark.bubble")
+                .font(.caption2)
+                .foregroundStyle(OS1VisualStyle.textDim)
+                .lineLimit(1)
+                .fixedSize()
+        }
+    }
+
+    /// The file's and its folder's review actions, on a long press.
+    @ViewBuilder
+    private func reviewMenu(for path: String) -> some View {
+        if marks.isAvailable {
+            let reviewed = marks.reviewed.contains(path)
+            Button {
+                setReviewed([path], reviewed: !reviewed)
+            } label: {
+                Label(reviewed ? "Mark file as not reviewed" : "Mark file as reviewed",
+                      systemImage: reviewed ? "circle" : "checkmark.circle")
+            }
+            if let folder = PrReviewGroups.folder(of: path) {
+                let targets = PrReviewGroups.filesInFolder(paths, folder: folder)
+                let allReviewed = targets.allSatisfy(marks.reviewed.contains)
+                Button {
+                    setReviewed(targets, reviewed: !allReviewed)
+                } label: {
+                    Label(
+                        allReviewed
+                            ? "Mark folder as not reviewed (\(targets.count))"
+                            : "Mark folder as reviewed (\(targets.count))",
+                        systemImage: "folder"
+                    )
+                }
+            }
+        }
     }
 
     /// The file's own name carries the weight; the folder above it is context.
@@ -297,71 +506,188 @@ struct PrReviewCanvas: View {
         }
     }
 
-    private func fileRow(_ file: PrPatchFile) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: viewed.contains(file.path) ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(viewed.contains(file.path) ? .green : .secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(file.path).font(.subheadline.monospaced())
-                    .lineLimit(1).truncationMode(.middle)
-                let notes = draftComments.filter { $0.path == file.path }.count
-                if notes > 0 {
-                    Text("\(notes) pending comment\(notes == 1 ? "" : "s")")
-                        .font(.caption).foregroundStyle(.orange)
-                }
-            }
-        }
-    }
-
     // MARK: - Review guide
 
-    @ViewBuilder
+    /// The guide, one step at a time by default, so a large PR is a few
+    /// focused passes rather than one long scroll. Until it is written (or if
+    /// it fails) the same steps are file types, so the page is useful at once.
     private var guideList: some View {
-        if guideLoading && guide == nil {
-            ProgressView("Reading the change")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if let guide, !guide.sections.isEmpty {
-            List {
-                ForEach(guide.sections) { section in
-                    Section {
-                        Text(section.explanation)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .padding(.vertical, 2)
-                        ForEach(section.files, id: \.self) { path in
-                            guideFileRow(path)
+        let grouping = grouping
+        let groups = groupProgress(grouping)
+        let stepping = !guideAllSteps && groups.count > 1
+        let current = min(guideStep, max(0, groups.count - 1))
+        let order = groups.flatMap(\.files)
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    guideHeader(groups: groups, fromGuide: grouping.fromGuide, stepping: stepping, current: current, proxy: proxy)
+                    reviewChrome(order: order) { path in
+                        if stepping, let step = groups.firstIndex(where: { $0.files.contains(path) }), step != current {
+                            guideStep = step
                         }
-                    } header: {
-                        Text(section.title)
+                        folded.remove(path)
+                        Task { @MainActor in
+                            await Task.yield()
+                            withAnimation { proxy.scrollTo(path, anchor: .top) }
+                        }
                     }
+                    ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+                        if !stepping || index == current {
+                            PrReviewGroupHeader(
+                                index: index,
+                                count: groups.count,
+                                group: group,
+                                setReviewed: marks.isAvailable ? { setReviewed(group.files, reviewed: $0) } : nil
+                            )
+                            .padding(.top, index == current || !stepping ? 6 : 0)
+                            .id("step-\(index)")
+                            ForEach(group.files, id: \.self) { path in
+                                if let file = files.first(where: { $0.path == path }) {
+                                    fileCard(file).id(path)
+                                }
+                            }
+                        }
+                    }
+                    guideFooter(groups: groups, stepping: stepping, current: current, proxy: proxy)
+                    trailingSections
                 }
-            }
-            .insetGroupedListCompat()
-            .refreshable { await reload() }
-        } else {
-            ListPlaceholder(
-                symbol: "list.bullet.rectangle",
-                title: "No review guide yet",
-                message: guideError
-                    ?? "A guide is written once per commit. Try again in a moment, or read all changes."
-            ) {
-                Button("All changes") { lens = .all }
-                    .buttonStyle(PlaceholderActionStyle())
+                .padding(16)
             }
         }
+        .background(OS1VisualStyle.background)
+        .refreshable { await reload() }
     }
 
     @ViewBuilder
-    private func guideFileRow(_ path: String) -> some View {
-        if let file = files.first(where: { $0.path == path }) {
-            NavigationLink { fileView(file) } label: { fileRow(file) }
-        } else {
-            HStack(spacing: 10) {
-                Image(systemName: "doc").foregroundStyle(.secondary)
-                Text(path).font(.subheadline.monospaced())
-                    .lineLimit(1).truncationMode(.middle)
-                    .foregroundStyle(.secondary)
+    private func guideHeader(
+        groups: [PrReviewGroupProgress],
+        fromGuide: Bool,
+        stepping: Bool,
+        current: Int,
+        proxy: ScrollViewProxy
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(fromGuide ? "Review guide" : "Grouped by file type")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(OS1VisualStyle.textDim)
+                    Text("\(groups.count) focused review step\(groups.count == 1 ? "" : "s")")
+                        .font(.headline)
+                        .foregroundStyle(OS1VisualStyle.text)
+                }
+                Spacer(minLength: 8)
+                if groups.count > 1 {
+                    Picker("Guide layout", selection: $guideAllSteps) {
+                        Text("One step").tag(false)
+                        Text("All steps").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                }
             }
+
+            if fromGuide, guide?.stale == true {
+                PrReviewCallout(
+                    tone: .warning,
+                    symbol: "clock.badge.exclamationmark",
+                    title: "Outdated guide",
+                    message: "Written before the latest commits. Updating to cover them. Files the new commits added are under “\(PrReviewGroups.staleLeftoverTitle)”."
+                )
+            } else if !fromGuide && (guideLoading || !guideLoaded) {
+                PrReviewCallout(
+                    tone: .info,
+                    symbol: "sparkles",
+                    title: "Writing the review guide",
+                    message: "Files are grouped by type until it groups the change by intent."
+                )
+            } else if !fromGuide {
+                PrReviewCallout(
+                    tone: .info,
+                    symbol: "exclamationmark.triangle",
+                    title: "No review guide",
+                    message: guideError.map { "Couldn't write a guide for this PR (\($0)). Files are grouped by type instead." }
+                        ?? "Couldn't write a guide for this PR. Files are grouped by type instead."
+                ) {
+                    Button("Try again") {
+                        Task {
+                            guide = nil
+                            guideLoaded = false
+                            await loadLens()
+                        }
+                    }
+                    .font(.caption.weight(.medium))
+                    .buttonStyle(.borderless)
+                    .padding(.top, 2)
+                }
+            }
+
+            if stepping {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+                            PrGuideStepChip(
+                                index: index,
+                                group: group,
+                                isCurrent: index == current,
+                                showsProgress: marks.isAvailable
+                            ) {
+                                showStep(index, proxy: proxy)
+                            }
+                        }
+                    }
+                }
+                .accessibilityLabel("Guide steps")
+            }
+        }
+        .padding(.horizontal, 4)
+        .id("guide-top")
+    }
+
+    @ViewBuilder
+    private func guideFooter(
+        groups: [PrReviewGroupProgress],
+        stepping: Bool,
+        current: Int,
+        proxy: ScrollViewProxy
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if stepping && current < groups.count - 1 {
+                Button {
+                    showStep(current + 1, proxy: proxy)
+                } label: {
+                    Label("Next: \(groups[current + 1].title)", systemImage: "chevron.right")
+                        .lineLimit(1)
+                }
+                .buttonStyle(.borderedProminent)
+                if marks.isAvailable {
+                    Button("Mark step reviewed and continue") {
+                        setReviewed(groups[current].files.filter { !marks.reviewed.contains($0) }, reviewed: true)
+                        showStep(current + 1, proxy: proxy)
+                    }
+                    .buttonStyle(.bordered)
+                }
+            } else {
+                Label("You've reached the end of the guide.", systemImage: "flag.checkered")
+                    .font(.subheadline)
+                    .foregroundStyle(OS1VisualStyle.textDim)
+                if !draftComments.isEmpty {
+                    Button("Finish review (\(draftComments.count))") { reviewing = true }
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 4)
+        .padding(.top, 6)
+    }
+
+    private func showStep(_ step: Int, proxy: ScrollViewProxy) {
+        guideStep = step
+        Task { @MainActor in
+            await Task.yield()
+            withAnimation { proxy.scrollTo("guide-top", anchor: .top) }
         }
     }
 
@@ -448,40 +774,61 @@ struct PrReviewCanvas: View {
 
     // MARK: - Loading
 
+    /// Where review marks live for this PR: GitHub's viewed state unless the
+    /// host says it has none.
+    private var hostHasViewedState: Bool {
+        loader.viewedState ?? (viewModel.prDetails?.capabilities?.viewedState != false)
+    }
+
     private func load() async {
         loading = true
         errorText = nil
         do {
-            async let loadedDiff = OS1API.prDiff(sessionId: viewModel.session.id)
-            guard let patch = try await loadedDiff else {
+            guard let patch = try await loader.diff() else {
                 diff = nil
                 files = []
                 loading = false
                 return
             }
-            let parsed = await Task.detached(priority: .userInitiated) {
-                PrPatchParser.files(in: patch.patch)
+            let (parsed, fileHashes) = await Task.detached(priority: .userInitiated) {
+                let parsed = PrPatchParser.files(in: patch.patch)
+                return (parsed, PrReviewHash.hashes(of: parsed))
             }.value
             diff = patch
             files = parsed
-            if let fileState = try? await OS1API.prViewedFiles(
-                repo: viewModel.session.repo,
-                number: patch.number
-            ) {
-                viewedPrId = fileState.prId
-                viewed = Set(fileState.viewed)
+            hashes = fileHashes
+            let target = "\(viewModel.session.repo ?? "pr")#\(patch.number)"
+            let previous = removedFiles ?? loader.previousFiles.map {
+                PrRemovedFiles(target: target, known: $0, removed: [])
             }
+            removedFiles = PrRemovedFiles.next(previous, target: target, current: parsed.map(\.path))
+            await loadMarks(number: patch.number)
+            resolvedThreads = (try? await loader.threads(patch.number)) ?? []
         } catch {
             errorText = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
         loading = false
     }
 
+    /// GitHub's viewed and changed-since-viewed files, refetched with the diff
+    /// so a push shows up as changed. A host without viewed state keeps marks
+    /// on this device instead, checked against each file's diff hash.
+    private func loadMarks(number: Int) async {
+        if hostHasViewedState {
+            if let state = try? await loader.viewed(number) {
+                marks = .github(state)
+            }
+        } else {
+            let key = PrLocalReviewStore.pullRequestKey(repo: viewModel.session.repo, number: number)
+            marks = .local(key: key, stored: loader.localStore.read(key), hashes: hashes)
+        }
+    }
+
     /// Reload the diff and whatever lens is on screen, so pull-to-refresh means
     /// the same thing on all three pages.
     private func reload() async {
         await load()
-        guide = lens == .guide ? nil : guide
+        if lens == .guide { guide = nil; guideLoaded = false }
         flow = lens == .flow ? nil : flow
         await loadLens()
     }
@@ -498,17 +845,18 @@ struct PrReviewCanvas: View {
             guideLoading = true
             guideError = nil
             do {
-                guide = try await OS1API.prReviewGuide(sessionId: viewModel.session.id)
+                guide = try await loader.guide()
             } catch {
                 guideError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
             guideLoading = false
+            guideLoaded = true
         case .flow:
             guard flow == nil, !flowLoading else { return }
             flowLoading = true
             flowError = nil
             do {
-                flow = try await OS1API.prCodeFlow(sessionId: viewModel.session.id)
+                flow = try await loader.flow()
             } catch {
                 flowError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
@@ -516,16 +864,57 @@ struct PrReviewCanvas: View {
         }
     }
 
+    private var guidePollKey: String {
+        lens == .guide && guide?.stale == true ? "stale:\(guide?.headRefOid ?? "")" : ""
+    }
+
+    /// After a push the server answers at once with the previous guide marked
+    /// stale and updates it in the background. Ask again until the update
+    /// lands, for a few minutes at most, as the web does.
+    private func pollStaleGuide() async {
+        guard !guidePollKey.isEmpty else { return }
+        for _ in 0..<12 {
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled else { return }
+            guard let next = try? await loader.guide() else { continue }
+            guide = next
+            if !next.stale { return }
+        }
+    }
+
+    // MARK: - Review marks
+
     private func toggleViewed(_ path: String) {
-        guard let viewedPrId else { return }
-        let target = !viewed.contains(path)
-        if target { viewed.insert(path) } else { viewed.remove(path) }
-        Task {
-            do {
-                try await OS1API.setPrFileViewed(prId: viewedPrId, path: path, viewed: target)
-            } catch {
-                if target { viewed.remove(path) } else { viewed.insert(path) }
-                errorText = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        setReviewed([path], reviewed: !marks.reviewed.contains(path))
+    }
+
+    private func bulk(_ action: PrReviewBulkAction, paths targets: [String]) {
+        let change = PrReviewGroups.bulkChanges(targets, reviewed: marks.reviewed, action: action)
+        setReviewed(change.mark, reviewed: true)
+        setReviewed(change.unmark, reviewed: false)
+    }
+
+    /// Mark or unmark many files in one request. GitHub changes are applied
+    /// at once and put back if GitHub refuses; local marks save immediately.
+    private func setReviewed(_ targets: [String], reviewed next: Bool) {
+        guard !targets.isEmpty else { return }
+        reviewError = nil
+        switch marks.source {
+        case .unavailable:
+            return
+        case .local(let key):
+            let stored = loader.localStore.setReviewed(key, paths: targets, reviewed: next, hashes: hashes)
+            marks = .local(key: key, stored: stored, hashes: hashes)
+        case .github(let prId):
+            let previous = marks
+            marks.apply(targets, reviewed: next)
+            Task {
+                do {
+                    try await loader.setViewed(prId, targets, next)
+                } catch {
+                    if marks.source == previous.source { marks = previous }
+                    reviewError = "Couldn't update review progress on GitHub."
+                }
             }
         }
     }
@@ -683,7 +1072,8 @@ struct PrFileDiffBody: View {
 
 private struct PrReviewFileView: View {
     let file: PrPatchFile
-    let isViewed: Bool
+    /// Nil when this review has no marks to show.
+    let reviewState: PrFileReviewState?
     let commentCount: Int
     let toggleViewed: () -> Void
     let comment: (Int) -> Void
@@ -697,10 +1087,20 @@ private struct PrReviewFileView: View {
                 ToolbarItem(placement: .topTrailingCompat) {
                     PrDiffDisplayMenu()
                 }
-                ToolbarItem(placement: .topTrailingCompat) {
-                    Button(action: toggleViewed) {
-                        Label(isViewed ? "Mark unviewed" : "Mark viewed", systemImage: isViewed ? "eye.slash" : "eye")
+                if let reviewState {
+                    ToolbarItem(placement: .topTrailingCompat) {
+                        Button(action: toggleViewed) {
+                            Label(
+                                reviewState == .reviewed ? "Mark not reviewed" : "Mark reviewed",
+                                systemImage: reviewState == .reviewed ? "checkmark.circle.fill" : "checkmark.circle"
+                            )
+                        }
                     }
+                }
+            }
+            .safeAreaInset(edge: .top) {
+                if reviewState == .changed {
+                    PrChangedSinceReviewBadge().padding(.top, 6)
                 }
             }
             .safeAreaInset(edge: .bottom) {

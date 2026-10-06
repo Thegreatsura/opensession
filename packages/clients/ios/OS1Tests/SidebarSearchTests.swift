@@ -66,6 +66,25 @@ final class SidebarSearchTests: XCTestCase {
         XCTAssertEqual(matches.sessionIds, ["os-old"])
     }
 
+    func testAHyphenatedQueryFindsTheAdjacentPhraseOnly() throws {
+        let spaced = session("os-1", title: "Pi Durable rollout")
+        let snake = session("os-2", branch: "pi_durable-bench")
+        let apart = session("os-3", title: "Durable queue for the Pi build")
+        let archived = session("os-4", title: "Old pi/durable notes")
+        let matches = try XCTUnwrap(SidebarSearch.matches(
+            query: "pi-durable",
+            rows: [
+                row("a", title: "Pi Durable rollout", [spaced]),
+                row("b", title: "Bench", [snake]),
+                row("c", title: "Durable queue for the Pi build", [apart]),
+            ],
+            archived: [archived],
+            workspaceNames: [:]
+        ))
+        XCTAssertEqual(matches.workspaceIds, ["a", "b"])
+        XCTAssertEqual(matches.sessionIds, ["os-1", "os-2", "os-4"])
+    }
+
     func testAnIdIsAnExactSubstringOnly() {
         let hex = session("os-4a5b3c", title: "Unrelated")
         XCTAssertTrue(SidebarSearch.sessionMatches(hex, query: "4A5B"))
