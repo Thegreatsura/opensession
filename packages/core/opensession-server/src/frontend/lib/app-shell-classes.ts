@@ -128,7 +128,7 @@ export const DETAIL_PANE =
  * the header, see `TAB_STRIP`) plus the same 4px gutter the other edges keep;
  * it moves with the band.
  */
-export const tabSplitDropPreviewClass = (side: "left" | "right") =>
+export const tabSplitDropPreviewClass = (side: "left" | "right" | "panel") =>
   "pointer-events-none absolute top-[calc(var(--desktop-header-h)+36px)] bottom-2 z-[25] " +
   "w-[calc(var(--split-preview-share,50%)-12px)] " +
   "rounded-[calc(10px*var(--rf))] [corner-shape:var(--cs)] border-2 border-accent " +

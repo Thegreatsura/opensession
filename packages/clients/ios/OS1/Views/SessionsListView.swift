@@ -94,6 +94,9 @@ struct SessionsListView: View {
     /// Full-text hits from the same transcript search the PWA uses. Kept by
     /// session id so workspace rows can match any conversation behind them.
     @State private var transcriptSnippets: [String: String] = [:]
+    /// The same hits' session ids in the server's relevance order, which the
+    /// snippet map cannot keep.
+    @State private var transcriptRank: [String] = []
     @State private var transcriptSearchRevision = 0
     /// Which rows the typed query finds by their metadata, scored off the
     /// main actor (`SidebarSearch`). Holds the previous answer until the next
@@ -1890,6 +1893,7 @@ struct SessionsListView: View {
         let revision = transcriptSearchRevision
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         transcriptSnippets = [:]
+        transcriptRank = []
         guard query.count >= 2 else { return }
         do {
             try await Task.sleep(for: .milliseconds(250))
@@ -1899,10 +1903,13 @@ struct SessionsListView: View {
                   query == searchText.trimmingCharacters(in: .whitespacesAndNewlines)
             else { return }
             var next: [String: String] = [:]
+            var rank: [String] = []
             for match in matches where next[match.id] == nil {
                 next[match.id] = match.snippet
+                rank.append(match.id)
             }
             transcriptSnippets = next
+            transcriptRank = rank
         } catch {
             // Metadata search remains useful when a server predates this route
             // or the connection drops. The next query tries again.
@@ -1976,11 +1983,20 @@ struct SessionsListView: View {
         let person = person
         let agentKey = agentKey
         let matches = metadataMatches
-        return viewModel.archivedSessions.filter { session in
+        let candidates = viewModel.archivedSessions.filter { session in
             lens.matches(session, person: person, agentKey: agentKey)
                 && (repoFilter == "all" || session.effectiveRepo == repoFilter)
-                && (matches.matches(session) || transcriptSnippets[session.id] != nil)
         }
+        // Metadata matches by recency, then conversation-only hits in the
+        // server's relevance order, so the best archived conversation is not
+        // sorted below every older passing mention.
+        let byId = Dictionary(
+            candidates.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
+        )
+        return candidates.filter { matches.matches($0) }
+            + transcriptRank.compactMap { id in
+                byId[id].flatMap { matches.matches($0) ? nil : $0 }
+            }
     }
 
     private func archivedSearchSnippet(_ session: Session) -> String? {

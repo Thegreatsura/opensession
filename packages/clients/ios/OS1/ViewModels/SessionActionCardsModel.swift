@@ -32,7 +32,8 @@ final class SessionActionCardsModel {
     private(set) var forceMerge: PendingForceMerge?
     /// Every run the server knows for this session, newest first.
     private(set) var scriptRuns: [ScriptRun] = []
-    /// What the card shows: running runs, and ended ones for 15 minutes.
+    /// What the card shows: running runs, and ended ones for 15 minutes,
+    /// less the ones closed on this device.
     private(set) var visibleScriptRuns: [ScriptRun] = []
     /// True while any card is on screen. Stored, and written only when it
     /// flips, so the transcript can place its tail without observing the
@@ -62,17 +63,23 @@ final class SessionActionCardsModel {
     @ObservationIgnored private var resolvedRegistrations: Set<String> = []
     @ObservationIgnored private var resolvedForceMerges: Set<String> = []
     @ObservationIgnored private var expiryTask: Task<Void, Never>?
+    /// Device-local hides in force, read once per open and kept in step with
+    /// every hide, so frames and polls filter without touching the store.
+    @ObservationIgnored private let hiddenStore: () -> HiddenScriptRuns
+    @ObservationIgnored private var hiddenRuns: [String: Date] = [:]
 
     init(
         sessionId: String,
         client: SessionActionsClient = .live,
         now: @escaping () -> Date = Date.init,
-        user: @escaping () -> String = { ServerConfig.shared.userName }
+        user: @escaping () -> String = { ServerConfig.shared.userName },
+        hiddenRuns: @escaping () -> HiddenScriptRuns = { .current }
     ) {
         self.sessionId = sessionId
         self.client = client
         self.now = now
         self.user = user
+        self.hiddenStore = hiddenRuns
     }
 
     // MARK: - Lifecycle
@@ -84,6 +91,8 @@ final class SessionActionCardsModel {
         if holdsFixture { return }
         #endif
         active = true
+        // The account may have changed since the last open.
+        hiddenRuns = hiddenStore().load(at: now())
         reloadRegistration()
         reloadKeychainAsks()
         reloadForceMerge()
@@ -263,6 +272,28 @@ final class SessionActionCardsModel {
         try await client.stopScript(sessionId, run.id)
     }
 
+    /// Close a card on this device. The run is untouched: a running script
+    /// keeps going on the server.
+    func hideScriptRun(_ run: ScriptRun) {
+        let at = now()
+        #if DEBUG
+        if holdsFixture {
+            hiddenRuns[run.id] = at
+            refreshDerived()
+            return
+        }
+        #endif
+        hiddenRuns = hiddenStore().hide(run.id, at: at)
+        refreshDerived()
+    }
+
+    /// Stop the run, then close its card. A refused stop throws and leaves
+    /// the card up, so the error has somewhere to show.
+    func hideAndStopScript(_ run: ScriptRun) async throws {
+        try await stopScript(run)
+        hideScriptRun(run)
+    }
+
     func scriptOutput(_ run: ScriptRun) async throws -> String {
         #if DEBUG
         if holdsFixture { return Self.fixtureOutput }
@@ -299,9 +330,15 @@ final class SessionActionCardsModel {
     /// on any server, because no server holds these ids.
     @ObservationIgnored private var holdsFixture = false
 
+    /// The running fixture run whose card opens its close confirmation.
+    private(set) var fixtureConfirmCloseRunId: String?
+
     func installScreenshotFixture(_ variant: String) {
         holdsFixture = true
         active = true
+        // Fixture hides stay in memory, so a capture always starts whole.
+        hiddenRuns = [:]
+        if variant == "scripts-close" { fixtureConfirmCloseRunId = "fixture-run" }
         let driver = variant != "viewer"
         if variant == "approve" || variant == "viewer" {
             registration = PendingCredentialRegistration(
@@ -347,7 +384,7 @@ final class SessionActionCardsModel {
                 canConfirm: driver
             )
         }
-        if variant == "merge" {
+        if variant == "merge" || variant.hasPrefix("scripts") {
             let at = now()
             scriptRuns = [
                 ScriptRun(
@@ -381,7 +418,8 @@ final class SessionActionCardsModel {
 
     private func refreshDerived() {
         let at = now()
-        let visible = ScriptRun.visible(scriptRuns, at: at)
+        hiddenRuns = hiddenRuns.filter { HiddenScriptRuns.inForce($0.value, now: at) }
+        let visible = ScriptRun.visible(scriptRuns.filter { hiddenRuns[$0.id] == nil }, at: at)
         if visible != visibleScriptRuns { visibleScriptRuns = visible }
         let cards = registration != nil || !keychainAsks.isEmpty || forceMerge != nil
             || !visible.isEmpty
@@ -392,12 +430,17 @@ final class SessionActionCardsModel {
         scheduleExpiry(after: at)
     }
 
-    /// Ended runs leave the card after their window, without waiting for
-    /// another frame.
+    /// Ended runs leave the card after their window, and a week-old hide
+    /// brings its running card back, without waiting for another frame.
     private func scheduleExpiry(after at: Date) {
         expiryTask?.cancel()
         expiryTask = nil
-        guard active, let next = ScriptRun.nextExpiry(scriptRuns, after: at) else { return }
+        let hideEnds = scriptRuns.compactMap { run in
+            hiddenRuns[run.id].map { $0.addingTimeInterval(HiddenScriptRuns.ttl) }
+        }
+        let leaves = ScriptRun.nextExpiry(scriptRuns.filter { hiddenRuns[$0.id] == nil }, after: at)
+        guard active, let next = (hideEnds + [leaves].compactMap { $0 }).filter({ $0 > at }).min()
+        else { return }
         let delay = max(1, next.timeIntervalSince(at))
         expiryTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))

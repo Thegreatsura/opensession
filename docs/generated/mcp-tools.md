@@ -50,7 +50,7 @@ touches an in-process tool:
 | [`opensession-keychain`](#opensession-keychain) | 12 | interactive | Needs a session id. |
 | [`opensession-publish`](#opensession-publish) | 4 | interactive | Needs a session id. |
 | [`opensession-repos`](#opensession-repos) | 7 | interactive | Needs a session id. |
-| [`opensession-memory`](#opensession-memory) | 5 | interactive, automation | Needs a session id. |
+| [`opensession-memory`](#opensession-memory) | 6 | interactive, automation | Needs a session id. |
 | [`opensession-web`](#opensession-web) | 3 | interactive, goal wake | Needs a session id. |
 | [`opensession-portals`](#opensession-portals) | 9 | interactive | Needs a session id. |
 | [`opensession-desktop`](#opensession-desktop) | 8 | interactive | Needs a sandboxed session. |
@@ -76,7 +76,7 @@ touches an in-process tool:
 | [`opensession-github`](#opensession-github) | 4 | Slack loop | – |
 | [`opensession-goal-self`](#opensession-goal-self) | 6 | goal wake | Only on a session that carries a goalId. |
 
-35 servers, 165 tools.
+35 servers, 166 tools.
 
 ## opensession-sessions
 
@@ -691,6 +691,12 @@ Create or replace one file in a memory repository and commit it. Read the file f
 `mcp__opensession-memory__delete_memory_file` · input: `repo` (string, required), `path` (string, required), `message` (string, required)
 
 Delete one file from a memory repository and commit. History keeps it.
+
+### `sync_memory_repository`
+
+`mcp__opensession-memory__sync_memory_repository` · input: `repo` (string, required)
+
+Sync one visible memory repository with its configured upstream and report the result. This commits no changes; file writes already commit separately.
 
 ## opensession-web
 

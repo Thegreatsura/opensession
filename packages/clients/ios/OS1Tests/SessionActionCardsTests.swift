@@ -367,10 +367,138 @@ final class SessionActionCardsTests: XCTestCase {
         XCTAssertEqual(fake.asksReads, 2)
     }
 
+    // MARK: - Closing script cards
+
+    private static func running(_ id: String) -> ScriptRun {
+        ScriptRun(id: id, sessionId: "bks-1", title: id, state: "running", startedAt: .now)
+    }
+
+    func testAnEndedCardClosesWithoutTouchingTheServer() async {
+        let fake = FakeClient()
+        let ended = ScriptRun(id: "sr-done", sessionId: "bks-1", title: "Done", state: "exited",
+                              startedAt: .now.addingTimeInterval(-60), endedAt: .now, exitCode: 0)
+        fake.runs = [ended, Self.running("sr-live")]
+        let model = makeModel(fake)
+        model.rehydrate()
+        await settle()
+        XCTAssertEqual(Set(model.visibleScriptRuns.map(\.id)), ["sr-done", "sr-live"])
+
+        model.hideScriptRun(ended)
+        XCTAssertEqual(model.visibleScriptRuns.map(\.id), ["sr-live"])
+        XCTAssertTrue(fake.stops.isEmpty)
+
+        // The next snapshot, from the socket or a poll, still lists it.
+        model.scriptRunsFrame([ended, Self.running("sr-live")])
+        XCTAssertEqual(model.visibleScriptRuns.map(\.id), ["sr-live"])
+        model.rehydrate()
+        await settle()
+        XCTAssertEqual(model.visibleScriptRuns.map(\.id), ["sr-live"])
+    }
+
+    func testHideAndContinueLeavesTheScriptRunning() async {
+        let fake = FakeClient()
+        let live = Self.running("sr-live")
+        fake.runs = [live]
+        let model = makeModel(fake)
+        model.rehydrate()
+        await settle()
+
+        model.hideScriptRun(live)
+        XCTAssertTrue(model.visibleScriptRuns.isEmpty)
+        XCTAssertFalse(model.hasCards)
+        XCTAssertTrue(fake.stops.isEmpty, "hiding is not stopping")
+        model.scriptRunsFrame([live])
+        XCTAssertTrue(model.visibleScriptRuns.isEmpty)
+    }
+
+    func testHideAndStopKeepsTheCardWhenTheStopIsRefused() async throws {
+        let fake = FakeClient()
+        let live = Self.running("sr-live")
+        fake.runs = [live]
+        fake.stopError = OS1API.APIError.server("not allowed")
+        let model = makeModel(fake)
+        model.rehydrate()
+        await settle()
+
+        do {
+            try await model.hideAndStopScript(live)
+            XCTFail("a refused stop must throw")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, "not allowed")
+        }
+        XCTAssertEqual(fake.stops, [["bks-1", "sr-live"]])
+        XCTAssertEqual(model.visibleScriptRuns.map(\.id), ["sr-live"], "the card stays to show why")
+        XCTAssertTrue(hiddenStore.load(at: .now).isEmpty)
+
+        fake.stopError = nil
+        try await model.hideAndStopScript(live)
+        XCTAssertEqual(fake.stops.count, 2)
+        XCTAssertTrue(model.visibleScriptRuns.isEmpty)
+    }
+
+    func testHidesSurviveRelaunchAndExpireAfterAWeek() async {
+        let fake = FakeClient()
+        let live = Self.running("sr-live")
+        fake.runs = [live]
+        var clock = Date(timeIntervalSince1970: 1_800_000_000)
+        let first = makeModel(fake, now: { clock })
+        first.rehydrate()
+        await settle()
+        first.hideScriptRun(live)
+        first.deactivate()
+
+        // A relaunch: a new model reading the same device store.
+        clock += 6 * 24 * 60 * 60
+        let relaunched = makeModel(fake, now: { clock })
+        relaunched.rehydrate()
+        await settle()
+        XCTAssertTrue(relaunched.visibleScriptRuns.isEmpty)
+        relaunched.deactivate()
+
+        // Another account on the same device never saw the hide.
+        let other = SessionActionCardsModel(
+            sessionId: "bks-1", client: fake.client, now: { clock }, user: { "placeholder-user" },
+            hiddenRuns: { HiddenScriptRuns(defaults: self.defaults, key: "other-account") })
+        other.rehydrate()
+        await settle()
+        XCTAssertEqual(other.visibleScriptRuns.map(\.id), ["sr-live"])
+        other.deactivate()
+
+        clock += 24 * 60 * 60
+        let weekLater = makeModel(fake, now: { clock })
+        weekLater.rehydrate()
+        await settle()
+        XCTAssertEqual(weekLater.visibleScriptRuns.map(\.id), ["sr-live"], "a hide lasts one week")
+        XCTAssertTrue(hiddenStore.load(at: clock).isEmpty)
+    }
+
+    func testTheHiddenStoreDropsExpiredAndMalformedEntries() {
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        defaults.set(["old": at.addingTimeInterval(-HiddenScriptRuns.ttl).timeIntervalSince1970,
+                      "junk": "yesterday"], forKey: hiddenKey)
+        hiddenStore.hide("new", at: at)
+        XCTAssertEqual(defaults.dictionary(forKey: hiddenKey)?.keys.sorted(), ["new"])
+        XCTAssertNotEqual(
+            HiddenScriptRuns.storageKey(server: "https://a.example.test", user: "alex"),
+            HiddenScriptRuns.storageKey(server: "https://b.example.test", user: "alex"))
+    }
+
     // MARK: - Fixtures
 
-    private func makeModel(_ fake: FakeClient) -> SessionActionCardsModel {
-        SessionActionCardsModel(sessionId: "bks-1", client: fake.client, user: { "placeholder-user" })
+    private let hiddenKey = "test-hidden-script-runs"
+    private var defaults: UserDefaults!
+    private var hiddenStore: HiddenScriptRuns { HiddenScriptRuns(defaults: defaults, key: hiddenKey) }
+
+    override func setUp() {
+        super.setUp()
+        defaults = UserDefaults(suiteName: "SessionActionCardsTests")
+        defaults.removePersistentDomain(forName: "SessionActionCardsTests")
+    }
+
+    private func makeModel(_ fake: FakeClient, now: @escaping () -> Date = Date.init) -> SessionActionCardsModel {
+        let store = hiddenStore
+        return SessionActionCardsModel(sessionId: "bks-1", client: fake.client, now: now,
+                                       user: { "placeholder-user" }, hiddenRuns: { store })
     }
 
     private static func ask(_ id: String) -> SessionKeychainAsk {
@@ -395,6 +523,8 @@ private final class FakeClient {
     var runs: [ScriptRun] = []
     var mergeOutcome: ForceMergeOutcome?
     var rememberFails = false
+    var stopError: Error?
+    private(set) var stops: [[String]] = []
 
     var holdRegistration = false
     var holdScripts = false
@@ -454,7 +584,10 @@ private final class FakeClient {
                 return answer
             },
             scriptOutput: { _, _ in "" },
-            stopScript: { _, _ in },
+            stopScript: { sessionId, runId in
+                self.stops.append([sessionId, runId])
+                if let error = self.stopError { throw error }
+            },
             rememberYouShouldKnow: { user, line in
                 if self.rememberFails { throw OS1API.APIError.server("Failed to save") }
                 self.remembered.append([user, line])

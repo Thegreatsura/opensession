@@ -41,11 +41,15 @@ enum SidebarSearch {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         var out = Matches(query: query)
         guard !query.isEmpty else { return out }
+        // One prepared query for the whole pass: its typo and abbreviation
+        // checks are cached per distinct word, and an archive of thousands
+        // repeats the same few hundred words.
+        let fuzzy = FuzzyMatch.Query(query)
         for row in rows {
             if Task.isCancelled { return nil }
-            var hit = FuzzyMatch.score(query, row.title) > 0
+            var hit = fuzzy.score(FuzzyMatch.Text(row.title)) > 0
             for session in row.sessions
-            where sessionMatches(session, query: query, workspaceNames: workspaceNames) {
+            where sessionMatches(session, query: fuzzy, raw: query, workspaceNames: workspaceNames) {
                 out.sessionIds.insert(session.id)
                 hit = true
             }
@@ -53,7 +57,7 @@ enum SidebarSearch {
         }
         for session in archived {
             if Task.isCancelled { return nil }
-            if sessionMatches(session, query: query, workspaceNames: workspaceNames) {
+            if sessionMatches(session, query: fuzzy, raw: query, workspaceNames: workspaceNames) {
                 out.sessionIds.insert(session.id)
             }
         }
@@ -69,14 +73,24 @@ enum SidebarSearch {
         query: String,
         workspaceNames: [String: String] = [:]
     ) -> Bool {
+        sessionMatches(
+            session, query: FuzzyMatch.Query(query), raw: query, workspaceNames: workspaceNames
+        )
+    }
+
+    private static func sessionMatches(
+        _ session: Session,
+        query: FuzzyMatch.Query,
+        raw: String,
+        workspaceNames: [String: String]
+    ) -> Bool {
         let workspaceName = session.workspaceName
             ?? session.workspaceId.flatMap { workspaceNames[$0] }
-        if FuzzyMatch.best(
-            query,
-            in: [session.title, session.effectiveRepo, session.branch, workspaceName]
-        ) > 0 {
+        let fields = [session.title, session.effectiveRepo, session.branch, workspaceName]
+            .compactMap { $0 }
+        if query.best(in: fields.map(FuzzyMatch.Text.init)) > 0 {
             return true
         }
-        return session.id.lowercased().contains(query.lowercased())
+        return session.id.lowercased().contains(raw.lowercased())
     }
 }

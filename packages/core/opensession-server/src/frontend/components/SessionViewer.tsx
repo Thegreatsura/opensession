@@ -479,7 +479,6 @@ export function SessionViewer({
     videoTitle = null,
     showPortal = false,
     portalTarget = null,
-    onClosePortal,
     showDesktop = false,
   },
   subagents: {
@@ -739,8 +738,7 @@ export function SessionViewer({
   const { panelPage, setPanelPage } = viewState.panel;
   const { panelTerminalMounted, setPanelTerminalMounted } = viewState.panel;
   const { pinnedPortal, pinPortal, autoPinPortal } = viewState.panel;
-  const { closePinnedPortal, expandPinnedPortal, pinPortalTab } =
-    viewState.panel;
+  const { closePinnedPortal, expandPinnedPortal } = viewState.panel;
   const { assetFiles, refreshAssets, assetPaths } = viewState.assets;
   const { selectedAssetPath, setSelectedAssetPath } = viewState.assets;
   const { overlayAssetPath, setOverlayAssetPath } = viewState.assets;
@@ -1650,12 +1648,7 @@ export function SessionViewer({
           session={session}
           surfaces={{
             showPortal,
-            portal: portalTarget && {
-              target: portalTarget,
-              onPin: isPhone
-                ? undefined
-                : () => pinPortalTab(portalTarget, onClosePortal),
-            },
+            portalTarget,
             showDesktop,
             showStaging,
             staging,
@@ -1938,8 +1931,11 @@ export function SessionViewer({
             onOpenPortal: openPortalInPreferredPlacement,
             onPinPortal: isPhone
               ? undefined
-              : (target) =>
-                  pinPortalTab(target, () => openSession?.(session.id)),
+              : (target) => {
+                  pinPortal(target);
+                  setActivePanelOpen(true);
+                  openSession?.(session.id);
+                },
             pinnedPortal,
             onClosePinnedPortal: () => {
               closePinnedPortal();
