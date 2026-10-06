@@ -22,40 +22,97 @@ struct CommandPaletteItem: Identifiable {
 @Observable
 @MainActor
 final class CommandPaletteModel {
-    var query = ""
+    var query = "" { didSet { if query != oldValue { rank() } } }
     /// Whatever the arrows last landed on. `nil` means "the first result",
     /// which is also where a new query leaves it.
     var selectedID: String?
     /// The rows as of the host's last update, so a row created since the
-    /// palette opened is still the row Return runs.
-    var items: [CommandPaletteItem] = []
-    var transcriptSnippets: [String: String] = [:]
-    var searchingTranscripts = false
-    private var transcriptSearchRevision = 0
-
-    var results: [CommandPaletteEntry] {
-        let contentMatches = Set(transcriptSnippets.keys.map { "session:\($0)" })
-        let ranked = CommandPaletteRanking.results(
-            items.map(\.entry),
-            query: query,
-            contentMatches: contentMatches
-        )
-        return ranked.map { entry in
-            guard entry.kind == .session, entry.id.hasPrefix("session:"),
-                  let snippet = transcriptSnippets[String(entry.id.dropFirst(8))],
-                  CommandPaletteRanking.results([entry], query: query).isEmpty
-            else { return entry }
-            var contentMatch = entry
-            contentMatch.subtitle = snippet
-            return contentMatch
+    /// palette opened is still the row Return runs. Their search text is
+    /// prepared here, once per update, not on every keystroke.
+    var items: [CommandPaletteItem] = [] {
+        didSet {
+            prepared = items.map { CommandPaletteRanking.Prepared($0.entry) }
+            itemsByID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            rank()
         }
     }
+    /// Sessions the server found inside their conversation, best first.
+    private(set) var conversationHits: [CommandPaletteConversationHit] = [] {
+        didSet { if conversationHits != oldValue { rank() } }
+    }
+    var searchingTranscripts = false
+    /// Ranked once per change of query, rows or hits. A computed property
+    /// would re-rank the whole archive on every read, several per frame.
+    private(set) var results: [CommandPaletteEntry] = []
+    @ObservationIgnored private var prepared: [CommandPaletteRanking.Prepared] = []
+    @ObservationIgnored private var itemsByID: [String: CommandPaletteItem] = [:]
+    @ObservationIgnored private var transcriptSearchRevision = 0
+
+    private func rank() {
+        results = CommandPaletteRanking.results(
+            prepared,
+            query: query,
+            conversationHits: conversationHits
+        )
+    }
+
+    #if DEBUG
+    /// Screenshot fixture (`OS1_PALETTE_FIXTURE=1`): canned live and archived
+    /// rows and conversation hits in place of the host's rows and the server.
+    @ObservationIgnored private(set) var usesFixture = false
+
+    func loadFixture() {
+        usesFixture = true
+        let now = Date()
+        func live(_ id: String, _ title: String, hoursAgo: Double) -> CommandPaletteItem {
+            CommandPaletteItem(entry: CommandPaletteEntry(
+                id: "session:\(id)", title: title, subtitle: "acme · In progress",
+                symbol: "circle.dotted", kind: .session,
+                recency: now.addingTimeInterval(-hoursAgo * 3600), sessionId: id
+            )) {}
+        }
+        func archived(_ id: String, _ title: String, daysAgo: Double) -> CommandPaletteItem {
+            CommandPaletteItem(entry: CommandPaletteEntry(
+                id: "archived:\(id)", title: title, subtitle: "acme · Archived",
+                symbol: "archivebox", kind: .archived,
+                recency: now.addingTimeInterval(-daysAgo * 86_400), sessionId: id
+            )) {}
+        }
+        items = [
+            CommandPaletteItem(entry: CommandPaletteEntry(
+                id: "command:new-session", title: "New session",
+                subtitle: "Start a session in any repo", symbol: "plus"
+            )) {},
+            live("live-title", "Pi Durable rollout", hoursAgo: 30),
+            live("live-apart", "Durable queue for the Pi build", hoursAgo: 1),
+            live("live-1", "Tidy the release notes", hoursAgo: 2),
+            live("live-2", "Billing audit follow-up", hoursAgo: 3),
+            archived("arch-best", "Storage migration spike", daysAgo: 40),
+            archived("arch-title", "pi_durable benchmarks", daysAgo: 60),
+        ]
+        conversationHits = [
+            CommandPaletteConversationHit(
+                sessionId: "arch-best",
+                snippet: "…moved every actor onto pi-durable objects and measured…"
+            ),
+            CommandPaletteConversationHit(
+                sessionId: "live-1", snippet: "…mentions the pi-durable work in passing…"
+            ),
+            CommandPaletteConversationHit(
+                sessionId: "live-2", snippet: "…same pi durable bucket as billing…"
+            ),
+        ]
+    }
+    #endif
 
     func updateTranscriptSearch() async {
+        #if DEBUG
+        if usesFixture { return }
+        #endif
         transcriptSearchRevision += 1
         let revision = transcriptSearchRevision
         let searched = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        transcriptSnippets = [:]
+        conversationHits = []
         guard searched.count >= 2 else {
             searchingTranscripts = false
             return
@@ -68,15 +125,23 @@ final class CommandPaletteModel {
             guard !Task.isCancelled, revision == transcriptSearchRevision,
                   searched == query.trimmingCharacters(in: .whitespacesAndNewlines)
             else { return }
-            var next: [String: String] = [:]
-            for match in matches where next[match.id] == nil {
-                next[match.id] = match.snippet
-            }
-            transcriptSnippets = next
+            conversationHits = Self.conversationHits(matches)
         } catch {
             // Local command and session metadata search remains available.
         }
         if revision == transcriptSearchRevision { searchingTranscripts = false }
+    }
+
+    /// The server's matches in its relevance order, one per session.
+    nonisolated static func conversationHits(
+        _ matches: [OS1API.TranscriptSearchMatch]
+    ) -> [CommandPaletteConversationHit] {
+        var seen = Set<String>()
+        return matches.compactMap { match in
+            seen.insert(match.id).inserted
+                ? CommandPaletteConversationHit(sessionId: match.id, snippet: match.snippet)
+                : nil
+        }
     }
 
     /// The highlighted row: a query that drops the selected row must not leave
@@ -96,7 +161,7 @@ final class CommandPaletteModel {
     }
 
     func item(_ id: String) -> CommandPaletteItem? {
-        items.first { $0.id == id }
+        itemsByID[id]
     }
 }
 
@@ -143,10 +208,18 @@ struct CommandPaletteView: View {
         }
         .frame(width: 620, height: 460)
         .background(OS1VisualStyle.background)
-        .onChange(of: items.map(\.id), initial: true) { model.items = items }
+        .onChange(of: items.map(\.id), initial: true) {
+            #if DEBUG
+            if model.usesFixture { return }
+            #endif
+            model.items = items
+        }
         .onAppear {
             installKeyMonitor()
             #if DEBUG
+            if ProcessInfo.processInfo.environment["OS1_PALETTE_FIXTURE"] == "1" {
+                model.loadFixture()
+            }
             // Screenshot hook: a scripted run cannot type into the field.
             if let query = ProcessInfo.processInfo.environment["OS1_OPEN_PALETTE"],
                !query.isEmpty, model.query.isEmpty {
@@ -184,7 +257,12 @@ struct CommandPaletteView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 2) {
-                    ForEach(model.results) { entry in
+                    let rows = model.results
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, entry in
+                        if let section = entry.section,
+                           index == 0 || rows[index - 1].section != section {
+                            CommandPaletteSectionHeader(title: section.rawValue)
+                        }
                         CommandPaletteRow(
                             entry: entry,
                             selected: entry.id == model.selection
@@ -284,6 +362,22 @@ struct CommandPaletteView: View {
             NSEvent.removeMonitor(keyMonitor)
             self.keyMonitor = nil
         }
+    }
+}
+
+/// The heading over a group of rows that are not plain live matches.
+private struct CommandPaletteSectionHeader: View {
+    let title: String
+
+    var body: some View {
+        Text(verbatim: title)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(OS1VisualStyle.textFaint)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .padding(.bottom, 2)
+            .accessibilityAddTraits(.isHeader)
     }
 }
 
