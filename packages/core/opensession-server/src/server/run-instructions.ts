@@ -235,7 +235,8 @@ export function buildRunInstructions(input: {
         "`start_portal`) only when the person asks to see the change or a running app is the only " +
         "way to verify it, never as a closing step. Reuse this session's Portal; while it starts, " +
         "wait with `list_portals`, do not start it again. For user-facing web changes, set the " +
-        "exact root-relative route with `set_portal_path`, query included. " +
+        "feature's root-relative route with `set_portal_path`, query included, even without " +
+        "a Portal: the PR preview opens there. " +
         "For Tella editor routes, call `tella-stage` `lease_editor_fixture` (fixture " +
         "`multi_clip_transcript_v1`, this Open Session id as `leaseKey`) and pass only its " +
         "`leaseId` to `set_editor_preview_path`; never construct a video id yourself.",

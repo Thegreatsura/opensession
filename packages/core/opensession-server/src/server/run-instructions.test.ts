@@ -186,7 +186,8 @@ describe("buildRunInstructions", () => {
     // behavioral rule every run needs that no tool description can carry.
     // Self-contained questions add ~150: a late question that only points back
     // at an earlier turn is unanswerable once the person has lost that context.
-    expect(prompt.length).toBeLessThan(3_400);
+    // Portals add ~50 so the PR preview link opens the feature, not the root.
+    expect(prompt.length).toBeLessThan(3_450);
   });
 
   // `sleep 240; check` blocks the turn and misses a job that finished early
