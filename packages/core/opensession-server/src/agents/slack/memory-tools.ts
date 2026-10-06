@@ -11,9 +11,12 @@ import { createSdkMcpServer, tool } from "../../server/inprocess-mcp";
 import {
   ensureMemoryV2Ready,
   memoryRolloutMode,
+  v2IsRecord,
   type MemoryRecord,
   type MemoryState,
 } from "../../server/memory-v2";
+import { createRepoMemoryMcpServer } from "../../server/memory-repo/tools";
+import { retrievalScopeKeys } from "../../server/memory-repo/session";
 import {
   MemoryIdsInputSchema,
   MemoryKindSchema,
@@ -44,6 +47,13 @@ export interface MemoryToolContext {
   /** Team memory affects everyone. Only a server-verified privileged context
    * may grant this; model-authored arguments can never enable it. */
   allowTeamWrites?: boolean;
+  /** Repo mode: the run cannot write a local checkout (Sandbox, Runner or
+   *  ask mode), so mount the file tools. */
+  fileTools?: () => boolean;
+  /** Repo mode: memory repositories checked out for this session. */
+  presentRepos?: () => string[];
+  /** Repo mode: this session's web link, recorded on tool commits. */
+  sessionLink?: string;
 }
 
 function text(value: string) {
@@ -112,7 +122,20 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T | string {
 }
 
 export function createMemoryMcpServer(ctx: MemoryToolContext) {
-  if (memoryRolloutMode() !== "v2") return createLegacyMemoryMcpServer(ctx);
+  const mode = memoryRolloutMode();
+  if (mode === "repo")
+    return createRepoMemoryMcpServer({
+      scopeKeys: () =>
+        retrievalScopeKeys(
+          scopesFor(ctx).map((scope) => scope.key),
+          ctx.presentRepos?.() ?? [],
+        ),
+      sessionId: ctx.sessionId,
+      sessionLink: ctx.sessionLink,
+      author: ctx.user,
+      fileTools: () => ctx.fileTools?.() ?? false,
+    });
+  if (!v2IsRecord(mode)) return createLegacyMemoryMcpServer(ctx);
   let storesThisRun = 0;
   const tools = [
     tool(

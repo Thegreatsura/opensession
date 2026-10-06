@@ -5,7 +5,7 @@
  * refusing, and the session can withdraw its own ask.
  */
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -23,7 +23,9 @@ mock.module("./shared/user-mappings", () => ({
   resolveTeammate: (ref?: string | null) =>
     ref?.trim().toLowerCase() === "alex"
       ? { name: "Alex", slackId: "UALEX0001" }
-      : null,
+      : ref?.trim().toLowerCase() === "bea"
+        ? { name: "Bea", slackId: "UBEA00001" }
+        : null,
 }));
 
 // Slack transport: record what the owner would see instead of calling Slack.
@@ -84,6 +86,16 @@ mock.module("./asks", () => ({
   },
 }));
 
+// Session frames: record them instead of reaching any socket.
+const frames: Array<{ sessionId: string; msg: any }> = [];
+const realHub = await import("./ws-hub");
+mock.module("./ws-hub", () => ({
+  ...realHub,
+  broadcastToSession: (sessionId: string, msg: object) => {
+    frames.push({ sessionId, msg });
+  },
+}));
+
 // Delivery normally runs as a durable session-kernel effect; deliver inline.
 const realKernel = await import("./session-kernel");
 mock.module("./session-kernel", () => ({
@@ -138,6 +150,7 @@ beforeEach(() => {
   slackPosts.length = 0;
   duringReply = null;
   cards.length = 0;
+  frames.length = 0;
   kc.addCredential({
     owner: "Alex",
     service: "acme-prod",
@@ -535,6 +548,81 @@ describe("the keychain routes", () => {
   });
 });
 
+describe("the keychain card in the asking session", () => {
+  const alex = { login: "alex-gh", name: "Alex Example" };
+  const bob = { login: "bob-gh", name: "Bob Example" };
+  const list = async (
+    authUser: { login: string; name: string; automation?: boolean } | null,
+    sessionId = SESSION,
+  ) =>
+    (
+      await (
+        await route(`/api/keychain/asks?sessionId=${sessionId}`, authUser)
+      ).json()
+    ).asks;
+
+  test("shows the ask only to the credential's verified owner", async () => {
+    const client = await connect();
+    const call = client.callTool({
+      name: "request_credential",
+      arguments: { credential: "acme-prod", purpose: "read the invoices" },
+    });
+    for (let i = 0; i < 100 && !kc.listKeychainAsks().length; i++)
+      await Bun.sleep(5);
+    const ask = pendingAsk();
+
+    // The frame every viewer gets says only that something changed.
+    expect(frames).toEqual([
+      {
+        sessionId: SESSION,
+        msg: { type: "keychain_asks_changed", sessionId: SESSION },
+      },
+    ]);
+
+    // Another teammate, a claimed name, or an automation sees nothing.
+    expect(await list(bob)).toEqual([]);
+    expect(await list(null)).toEqual([]);
+    expect(await list({ ...alex, automation: true })).toEqual([]);
+    expect(await list(alex, "os-other-session")).toEqual([]);
+
+    const [card] = await list(alex);
+    expect(card).toMatchObject({
+      id: ask.id,
+      requestedBy: "Alex",
+      purpose: "read the invoices",
+      requestedMode: "once",
+      credentials: [{ service: "acme-prod", host: "api.example.test" }],
+    });
+
+    // The card answers through the owner-checked route.
+    const path = `/api/keychain/asks/${card.id}/answer`;
+    expect((await route(path, bob, { decision: "standing" })).status).toBe(403);
+    expect((await route(path, alex, { decision: "standing" })).status).toBe(
+      200,
+    );
+    expect(textOf(await call)).toContain(kc.listGrants()[0]!.id);
+    expect(frames).toHaveLength(2);
+    expect(await list(alex)).toEqual([]);
+  });
+
+  test("a withdrawn ask leaves the card too", async () => {
+    const client = await connect();
+    void client
+      .callTool({
+        name: "request_credential",
+        arguments: { credential: "acme-prod", purpose: "read the invoices" },
+      })
+      .catch(() => {});
+    for (let i = 0; i < 100 && !kc.listKeychainAsks().length; i++)
+      await Bun.sleep(5);
+    const ask = pendingAsk();
+    expect(await list(alex)).toHaveLength(1);
+    kc.cancelCredentialAsk(ask.id, SESSION);
+    expect(frames.at(-1)?.msg.type).toBe("keychain_asks_changed");
+    expect(await list(alex)).toEqual([]);
+  });
+});
+
 describe("a scripted-run ask", () => {
   const RUN = { command: "bun scripts/sync.ts", maxCalls: 40000 };
 
@@ -612,6 +700,303 @@ describe("a scripted-run ask", () => {
       }),
     );
     expect(result).toContain("no live grant");
+  });
+});
+
+describe("a scripted run with several credentials", () => {
+  const COMMAND = "bun scripts/billing-sync.ts";
+  const CREDS = ["payments-prod", "billing-prod"];
+
+  function addPair(billingOwner = "Bea") {
+    kc.addCredential({
+      owner: "Alex",
+      service: "payments-prod",
+      host: "api.payments.example.test",
+      secret: "sk-payments",
+    });
+    kc.addCredential({
+      owner: billingOwner,
+      service: "billing-prod",
+      host: "api.billing.example.test",
+      secret: "sk-billing",
+    });
+  }
+
+  async function askForRun(client: Client, owners: number) {
+    const call = client.callTool({
+      name: "request_credential",
+      arguments: {
+        credentials: CREDS,
+        purpose: "sync every subscription into billing",
+        run: {
+          command: COMMAND,
+          maxCalls: { "payments-prod": 14000, "billing-prod": 15000 },
+        },
+      },
+    });
+    const pending = () =>
+      kc
+        .listKeychainAsks({ sessionId: SESSION })
+        .filter((a) => a.status === "pending");
+    for (let i = 0; i < 100 && !pending().length; i++) await Bun.sleep(5);
+    const asks = pending();
+    const transports = [...new Set(asks.map((a) => a.humanAskId!))];
+    expect(transports).toHaveLength(owners);
+    for (const id of transports) await deliver(id);
+    const ask = (service: string) =>
+      asks.find((a) => kc.findCredential(a.credentialId)?.service === service)!;
+    return { call, asks, ask };
+  }
+
+  test("each owner approves their part, and the run is ready only once both did", async () => {
+    addPair();
+    const client = await connect();
+    const { call, asks, ask } = await askForRun(client, 2);
+    expect(asks).toHaveLength(2);
+
+    // Each owner's message lists every credential in the run, its owner and
+    // cap, and the exact command.
+    expect(slackPosts.map((p) => p.channel)).toEqual(["DALEX", "DALEX"]);
+    for (const post of slackPosts) {
+      expect(post.text).toContain(COMMAND);
+      expect(post.text).toContain("payments-prod");
+      expect(post.text).toContain("billing-prod");
+      expect(post.text).toContain("14,000");
+      expect(post.text).toContain("15,000");
+    }
+    expect(humanAsks.getAsk(ask("billing-prod").humanAskId!)?.person.name).toBe(
+      "Bea",
+    );
+    expect(humanAsks.getAsk(ask("payments-prod").humanAskId!)?.options).toEqual(
+      ["Approve run", "Decline"],
+    );
+
+    // Only each credential's own owner can answer for it.
+    expect(
+      kc.answerKeychainAsk(ask("billing-prod").id, "run", "Alex"),
+    ).toHaveProperty("error");
+    expect(
+      kc.answerKeychainAsk(ask("payments-prod").id, "run", "Alex"),
+    ).toEqual({
+      ok: true,
+      status: "approved",
+    });
+    expect(
+      kc.runGroupAnswer(SESSION, ask("payments-prod").run!.group!.id),
+    ).toContain("still waiting on Bea for billing-prod");
+    // Alex's approval waits for Bea's rather than lapsing within the hour.
+    const hoursLeft = () =>
+      kc
+        .listGrants({ sessionId: SESSION })
+        .map((g) =>
+          Math.round((Date.parse(g.expiresAt) - Date.now()) / 3_600_000),
+        );
+    expect(hoursLeft()).toEqual([24]);
+
+    expect(kc.answerKeychainAsk(ask("billing-prod").id, "run", "Bea")).toEqual({
+      ok: true,
+      status: "approved",
+    });
+    // Once both approved, the run must start within the hour.
+    expect(hoursLeft()).toEqual([1, 1]);
+    const answer = textOf(await call);
+    expect(answer).toContain("Every owner approved");
+    expect(answer).toContain(
+      `run_with_credential({ credentials: ${JSON.stringify(CREDS)}`,
+    );
+    expect(answer).toContain("KEYCHAIN_PROXY_URL_PAYMENTS_PROD");
+    expect(answer).toContain("KEYCHAIN_PROXY_URL_BILLING_PROD");
+
+    const grants = kc.listGrants({ sessionId: SESSION });
+    expect(grants.map((g) => [g.owner, g.run?.maxCalls]).sort()).toEqual([
+      ["Alex", 14000],
+      ["Bea", 15000],
+    ]);
+    expect(new Set(grants.map((g) => g.run?.group?.id)).size).toBe(1);
+
+    // Asking again hands back the same approvals instead of asking twice.
+    const again = textOf(
+      await client.callTool({
+        name: "request_credential",
+        arguments: {
+          credentials: CREDS,
+          purpose: "sync every subscription into billing",
+          run: {
+            command: COMMAND,
+            maxCalls: { "payments-prod": 14000, "billing-prod": 15000 },
+          },
+        },
+      }),
+    );
+    expect(again).toContain("already holds this run's approvals");
+    expect(kc.listKeychainAsks()).toHaveLength(2);
+  });
+
+  test("one owner declining withdraws the other's ask and mints nothing", async () => {
+    addPair();
+    const client = await connect();
+    const { call, ask } = await askForRun(client, 2);
+    expect(
+      kc.answerKeychainAsk(ask("billing-prod").id, "decline", "Bea"),
+    ).toEqual({ ok: true, status: "declined" });
+    const answer = textOf(await call);
+    expect(answer).toContain("Bea declined the scripted run");
+    expect(
+      kc
+        .listKeychainAsks()
+        .map((a) => a.status)
+        .sort(),
+    ).toEqual(["cancelled", "declined"]);
+    expect(
+      kc.answerKeychainAsk(ask("payments-prod").id, "run", "Alex"),
+    ).toHaveProperty("error");
+    expect(kc.listGrants()).toHaveLength(0);
+  });
+
+  test("asking again after an earlier approval lapsed starts a fresh request", async () => {
+    addPair();
+    const client = await connect();
+    const { call, ask } = await askForRun(client, 2);
+    kc.answerKeychainAsk(ask("payments-prod").id, "run", "Alex");
+    const alexGrant = kc.listGrants({ sessionId: SESSION })[0]!;
+    expect(kc.revokeGrant(alexGrant.id, "Alex")).toEqual({ ok: true });
+
+    slackPosts.length = 0;
+    const again = client.callTool({
+      name: "request_credential",
+      arguments: {
+        credentials: CREDS,
+        purpose: "sync every subscription into billing",
+        run: {
+          command: COMMAND,
+          maxCalls: { "payments-prod": 14000, "billing-prod": 15000 },
+        },
+      },
+    });
+    const fresh = () =>
+      kc
+        .listKeychainAsks({ sessionId: SESSION })
+        .filter(
+          (a) =>
+            a.status === "pending" &&
+            a.run?.group?.id !== ask("payments-prod").run!.group!.id,
+        );
+    for (let i = 0; i < 100 && fresh().length < 2; i++) await Bun.sleep(5);
+    // Both owners are asked afresh; Bea's stale ask is withdrawn.
+    expect(fresh()).toHaveLength(2);
+    expect(
+      kc.listKeychainAsks().find((a) => a.id === ask("billing-prod").id)
+        ?.status,
+    ).toBe("cancelled");
+    await call;
+    for (const a of fresh()) kc.cancelCredentialAsk(a.id, SESSION);
+    await again;
+  });
+
+  test("an owner of both credentials gets one message and approves both at once", async () => {
+    addPair("Alex");
+    const client = await connect();
+    const { call, ask } = await askForRun(client, 1);
+    expect(slackPosts).toHaveLength(1);
+    kc.answerKeychainAsk(ask("billing-prod").id, "run", "Alex");
+    expect(textOf(await call)).toContain("Every owner approved");
+    expect(kc.listGrants({ sessionId: SESSION })).toHaveLength(2);
+  });
+
+  test("a single credential's run ask is unchanged by a pending multi-credential one", async () => {
+    addPair();
+    const result = kc.requestCredential({
+      credential: "payments-prod",
+      sessionId: SESSION,
+      requestedBy: "Alex",
+      purpose: "sync every subscription into billing",
+      run: { command: COMMAND, maxCalls: 14000 },
+    });
+    expect(result).toHaveProperty("ask");
+    const multi = kc.requestCredentialRun({
+      credentials: CREDS,
+      sessionId: SESSION,
+      requestedBy: "Alex",
+      purpose: "sync every subscription into billing",
+      run: { command: COMMAND, maxCalls: 14000 },
+    });
+    expect("error" in multi && multi.error).toContain("already pending");
+  });
+
+  test("after a restart cuts a run off, asking again tells the owners how far it got", async () => {
+    addPair();
+    const group = {
+      id: "krg-test",
+      members: [
+        {
+          service: "payments-prod",
+          host: "api.payments.example.test",
+          owner: "Alex",
+          maxCalls: 14000,
+        },
+        {
+          service: "billing-prod",
+          host: "api.billing.example.test",
+          owner: "Bea",
+          maxCalls: 15000,
+        },
+      ],
+    };
+    for (const service of CREDS)
+      kc.__mintGrantForTest({
+        credentialId: kc.findCredential(service)!.id,
+        sessionId: SESSION,
+        requestedBy: "Alex",
+        mode: "run",
+        run: { command: COMMAND, maxCalls: 14000, group },
+      });
+    const claim = await kc.claimRunGrants({
+      sessionId: SESSION,
+      credentials: CREDS,
+      command: COMMAND,
+      runId: "kr-cut",
+      deadline: Date.now() + 3_600_000,
+    });
+    if ("error" in claim) throw new Error(claim.error);
+    await kc.saveRunProgress(
+      "kr-cut",
+      claim.claims.map(({ grant }, i) => ({
+        grantId: grant.id,
+        calls: 6000 + i,
+      })),
+    );
+
+    // The server restarts: the store is loaded afresh.
+    const restarted = join(scratch, "kc-restarted.json");
+    copyFileSync(STORE, restarted);
+    process.env.OPENSESSION_KEYCHAIN_STORE = restarted;
+    const g = globalThis as any;
+    g.__keychainCredentials.clear();
+    g.__keychainGrants.clear();
+    g.__keychainAsks.clear();
+    await kc.ensureKeychainLoaded();
+    // Boot finds no live script run for it, so the run was cut off.
+    await kc.settleOrphanRunGrants(() => false);
+    expect(
+      kc
+        .listGrants({ sessionId: SESSION })
+        .map((gr) => [gr.status, gr.interrupted]),
+    ).toEqual([
+      ["used", true],
+      ["used", true],
+    ]);
+
+    const client = await connect();
+    const { call } = await askForRun(client, 2);
+    for (const post of slackPosts) {
+      expect(post.text).toContain("that run was cut off before it finished");
+      expect(post.text).toContain("6,000 calls with payments-prod");
+      expect(post.text).toContain("6,001 calls with billing-prod");
+    }
+    for (const a of kc.listKeychainAsks({ sessionId: SESSION }))
+      if (a.status === "pending") kc.cancelCredentialAsk(a.id, SESSION);
+    await call;
+    rmSync(restarted, { force: true });
   });
 });
 

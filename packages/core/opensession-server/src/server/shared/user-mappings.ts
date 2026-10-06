@@ -267,6 +267,8 @@ export function githubLoginForTrustedSlackId(
  * issue creators to the same identity.
  */
 const TEAM_GIT_IDENTITY: TeamGitIdentityEntry[] = tables.teamGitIdentity;
+const GIT_IDENTITY_MEMO_MAX = 10_000;
+const gitIdentityMemo = new Map<string, GitIdentity | null>();
 
 /**
  * Resolve a prompt author — a web user-picker name, a Slack user id, or an email
@@ -276,6 +278,20 @@ const TEAM_GIT_IDENTITY: TeamGitIdentityEntry[] = tables.teamGitIdentity;
  */
 export function gitIdentityFor(user?: string | null): GitIdentity | null {
   if (!user) return null;
+  // Sidebar scoping compares people for every row on every live update, and
+  // each uncached lookup is several linear roster scans. The roster only
+  // changes through applyDerivedTables, which clears this memo.
+  if (gitIdentityMemo.has(user)) {
+    const hit = gitIdentityMemo.get(user);
+    return hit ? { ...hit } : null;
+  }
+  const resolved = resolveGitIdentity(user);
+  if (gitIdentityMemo.size >= GIT_IDENTITY_MEMO_MAX) gitIdentityMemo.clear();
+  gitIdentityMemo.set(user, resolved);
+  return resolved ? { ...resolved } : null;
+}
+
+function resolveGitIdentity(user: string): GitIdentity | null {
   // Drop a trailing parenthetical like " (loop)" the queue/loop paths append.
   const key = user
     .trim()
@@ -423,6 +439,7 @@ export function __setIdentitiesForTest(
 }
 
 function applyDerivedTables(next: DerivedIdentityTables): void {
+  gitIdentityMemo.clear();
   for (const [target, source] of [
     [GITHUB_TO_SLACK, next.githubToSlack],
     [LINEAR_EMAIL_TO_GITHUB, next.linearEmailToGithub],

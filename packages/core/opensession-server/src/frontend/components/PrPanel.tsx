@@ -34,7 +34,7 @@ import {
   API_BASE,
   fetchPrViewedFiles,
   fetchPrFile,
-  setPrFileViewed,
+  setPrFilesViewed,
   fetchGitStatus,
   fetchWorktreeFile,
   saveWorktreeFile,
@@ -120,7 +120,9 @@ import { useCopy } from "../ui/copy";
 import { useDeferredMergePhase } from "../hooks/useDeferredMerge";
 import { useOptionalSessionSocket } from "../hooks/useSessionSocket";
 import { usePrData } from "../hooks/usePrData";
-import { sectionsWithPatches } from "../lib/pr-review-guide";
+import { sectionsForFiles, splitPatchByFile } from "../lib/pr-review-guide";
+import { ruleGroups } from "../lib/review-groups";
+import { useLocalReviewedFiles } from "../hooks/useLocalReviewedFiles";
 import {
   cancelDeferredMergeByKey,
   deferredMergeKey,
@@ -408,6 +410,8 @@ export function PrPanel({
     key: string;
     prId: string;
     viewed: ReadonlySet<string>;
+    /** Viewed earlier, then changed by later commits (GitHub's DIRTY). */
+    changed: ReadonlySet<string>;
   } | null>(null);
   const prViewedRef = useRef(prViewed);
   useLayoutEffect(() => {
@@ -447,6 +451,11 @@ export function PrPanel({
   const loadBranch = active?.branch;
   const loadLinked = active?.linked;
   const showingGuide = page === "files" && codeView === "guide";
+  // The guide's sections are the one AI grouping of a PR: the Guide lens,
+  // the grouped Changes view and the file tree all read them.
+  const wantGuide =
+    showingGuide ||
+    (page === "files" && codeView === "all" && grouping === "ai");
   const showingFlow = page === "files" && codeView === "flow";
   const {
     pr,
@@ -455,8 +464,6 @@ export function PrPanel({
     diff,
     diffOutOfDate,
     diffLoadPolicy,
-    diffGroups,
-    diffGroupsLoading,
     loading,
     loadError,
     diffLoading,
@@ -486,7 +493,7 @@ export function PrPanel({
     loadBranch,
     loadLinked,
     addHandler,
-    showingGuide,
+    wantGuide,
     showingFlow,
     onCodeViewChange: setCodeView,
     onTargetReset: () => {
@@ -622,7 +629,7 @@ export function PrPanel({
     const actionTargetKey = loadTargetKey;
     confirmMerge({
       title: `Merge #${pr.number}?`,
-      description: `Squash “${pr.title}” into ${pr.baseRefName}.${pending.length ? " Pending review comments will not be submitted." : ""}`,
+      description: `Squash “${pr.title}” into ${pr.baseRefName}.${checkSummary.pending ? " Some checks are still running." : ""}${pending.length ? " Pending review comments will not be submitted." : ""}`,
       confirmLabel: "Squash and merge",
       onConfirm: () => {
         if (actionTargetKey !== activeLoadTargetRef.current) return;
@@ -890,6 +897,7 @@ export function PrPanel({
           key: viewedKey,
           prId: res.prId,
           viewed: new Set(res.viewed),
+          changed: new Set(res.changed ?? []),
         });
       })
       .catch(() => {
@@ -906,31 +914,49 @@ export function PrPanel({
     caps.viewedState,
   ]);
 
-  const handleToggleViewed = (path: string, next: boolean) => {
+  // Hosts without per-viewer viewed state (code.storage) keep review marks in
+  // this browser instead, so progress tracking works on every review.
+  const localReview = useLocalReviewedFiles(
+    !caps.viewedState && viewedKey ? `pr:${viewedKey}` : null,
+    diff?.patch ?? "",
+  );
+  const setReviewed = (paths: string[], next: boolean) => {
+    if (!paths.length) return;
+    if (!caps.viewedState) {
+      localReview.setReviewed(paths, next);
+      return;
+    }
     const info = prViewedRef.current;
     if (!info) return;
-    const apply = (set: ReadonlySet<string>, add: boolean) => {
-      const v = new Set(set);
-      if (add) v.add(path);
-      else v.delete(path);
-      return v;
+    const apply = (
+      state: NonNullable<typeof prViewed>,
+      add: boolean,
+    ): NonNullable<typeof prViewed> => {
+      const viewed = new Set(state.viewed);
+      const changed = new Set(state.changed);
+      for (const path of paths) {
+        if (add) viewed.add(path);
+        else viewed.delete(path);
+        changed.delete(path);
+      }
+      return { ...state, viewed, changed };
     };
-    // Optimistic: flip locally, revert if GitHub rejects the mutation.
-    setPrViewed({ ...info, viewed: apply(info.viewed, next) });
-    void setPrFileViewed(
+    // Optimistic: flip locally, put the previous state back if GitHub
+    // rejects the mutation.
+    setPrViewed(apply(info, next));
+    void setPrFilesViewed(
       activeRepoId,
       info.prId,
-      path,
+      paths,
       next,
       getCurrentUser(),
     ).catch(() => {
-      setPrViewed((prev) =>
-        prev && prev.key === info.key
-          ? { ...prev, viewed: apply(prev.viewed, !next) }
-          : prev,
-      );
+      setPrViewed((prev) => (prev && prev.key === info.key ? info : prev));
+      toast("Couldn't update review progress on GitHub");
     });
   };
+  const handleToggleViewed = (path: string, next: boolean) =>
+    setReviewed([path], next);
 
   function handleLinked(all: LinkedPrEntry[], justLinked: LinkedPrEntry) {
     setLinkedLocal(all);
@@ -984,8 +1010,16 @@ export function PrPanel({
   ) : null;
 
   const files = pr?.files ?? NO_PR_FILES;
-  const reviewedFiles =
-    prViewed?.key === viewedKey ? prViewed.viewed : undefined;
+  const reviewedFiles = !caps.viewedState
+    ? localReview.reviewed
+    : prViewed?.key === viewedKey
+      ? prViewed.viewed
+      : undefined;
+  const changedFiles = !caps.viewedState
+    ? localReview.changed
+    : prViewed?.key === viewedKey
+      ? prViewed.changed
+      : undefined;
   const reviewFiles = (() => {
     const visible =
       hideReviewed && reviewedFiles
@@ -1002,15 +1036,70 @@ export function PrPanel({
       return (result || left.path.localeCompare(right.path)) * direction;
     });
   })();
-  const visibleFileOrder = reviewFiles.map((file) => file.path);
 
   // Slicing the patch per section walks every byte of it, so it cannot run on
   // renders it has nothing to do with — while the guide is the open lens, that
   // would be once per keystroke in the review summary.
+  const patchByFile = diff?.patch ? splitPatchByFile(diff.patch) : null;
   const guideSections =
-    currentGuide && diff?.patch
-      ? sectionsWithPatches(currentGuide, diff.patch)
+    currentGuide && patchByFile
+      ? sectionsForFiles(currentGuide, patchByFile)
       : [];
+  // One grouping for the whole page: the guide's sections once written, and
+  // file roles until then, so the tree and the diff never disagree.
+  const groupsActive = showingGuide || grouping === "ai";
+  const reviewGroups = !groupsActive
+    ? undefined
+    : guideSections.length
+      ? guideSections.map(({ title, files: paths }) => ({
+          title,
+          files: paths,
+        }))
+      : ruleGroups(files.map((file) => file.path));
+  const groupsFromGuide = groupsActive && guideSections.length > 0;
+  // j/k and "next unreviewed" walk files in the order the groups show them.
+  const orderedReviewFiles = reviewGroups
+    ? (() => {
+        const byPath = new Map(reviewFiles.map((file) => [file.path, file]));
+        const ordered = reviewGroups.flatMap((group) =>
+          group.files.flatMap((path) => {
+            const file = byPath.get(path);
+            if (!file) return [];
+            byPath.delete(path);
+            return [file];
+          }),
+        );
+        return [...ordered, ...byPath.values()];
+      })()
+    : reviewFiles;
+  const visibleFileOrder = orderedReviewFiles.map((file) => file.path);
+
+  // Files an earlier head of this PR had that later commits removed. Tracked
+  // per target while the panel is open, so a reviewer partway through sees
+  // what disappeared rather than having it silently drop out of the list.
+  const filesKey = files.map((file) => file.path).join("\0");
+  const [removedFiles, setRemovedFiles] = useState<{
+    target: string;
+    known: string[];
+    removed: string[];
+  } | null>(null);
+  if (pr && files.length && removedFiles?.known.join("\0") !== filesKey) {
+    const current = files.map((file) => file.path);
+    const now = new Set(current);
+    const removed =
+      removedFiles?.target === loadTargetKey
+        ? [
+            ...new Set([
+              ...removedFiles.removed,
+              ...removedFiles.known.filter((path) => !now.has(path)),
+            ]),
+          ].filter((path) => !now.has(path))
+        : [];
+    setRemovedFiles({ target: loadTargetKey, known: current, removed });
+  }
+  const [showReviewThreads, setShowReviewThreads] = useState(true);
+  const loadedThreads =
+    reviewThreads?.key === loadTargetKey ? reviewThreads.threads : undefined;
 
   // Every diff on the code page is the same commentable surface; only the
   // patch it is handed differs (the whole PR, or one guide section). The React
@@ -1028,7 +1117,8 @@ export function PrPanel({
     stickyFileHeaders: true,
     defaultExpandedFiles: diffLoadPolicy.defaultExpandedFiles,
     allowExpandAll: diffLoadPolicy.allowExpandAll,
-    viewedFiles: prViewed?.key === viewedKey ? prViewed.viewed : undefined,
+    viewedFiles: reviewedFiles,
+    changedFiles,
     onToggleViewed: handleToggleViewed,
     disabled: !canCommentOnReview(pr?.state, caps.reviewComments),
     disabledHint: !caps.reviewComments
@@ -1038,8 +1128,7 @@ export function PrPanel({
     placeholder: `Comment on #${diff.number}, added to your pending review…`,
     pendingComments: pending,
     onRemovePending: handleRemovePending,
-    reviewThreads:
-      reviewThreads?.key === loadTargetKey ? reviewThreads.threads : undefined,
+    reviewThreads: showReviewThreads ? loadedThreads : undefined,
     commentRepo: markdownRepo,
     onSubmit: handleAddPending,
     imageSrcs,
@@ -1294,12 +1383,13 @@ export function PrPanel({
   // for this PR, including the states a badge cannot show at all: a conflict,
   // or checks still running.
   const statusMark = prStatusMark({ ...pr, checks: checkSummary });
+  // Running checks do not block a merge: the host still enforces required
+  // checks, and waiting on a slow optional check should not hide the button.
   const canMergeAfterReview =
     pr.state === "OPEN" &&
     !pr.isDraft &&
     pr.mergeable !== "CONFLICTING" &&
-    checkSummary.failed === 0 &&
-    checkSummary.pending === 0;
+    checkSummary.failed === 0;
   const phoneMergeAction =
     pr.state === "OPEN" && pr.isDraft ? (
       <Button
@@ -1319,7 +1409,7 @@ export function PrPanel({
         onClick={handleMerge}
         title={
           !canMergeAfterReview
-            ? "Resolve conflicts and wait for checks before merging"
+            ? "Resolve conflicts and fix failing checks before merging"
             : "Squash and merge"
         }
       >
@@ -1807,6 +1897,18 @@ export function PrPanel({
           fileListMode={fileListMode}
           files={files}
           reviewedFiles={reviewedFiles}
+          changedFiles={changedFiles}
+          onSetReviewed={reviewedFiles ? setReviewed : undefined}
+          reviewGroups={reviewGroups}
+          groupsFromGuide={groupsFromGuide}
+          removedFiles={
+            removedFiles?.target === loadTargetKey
+              ? removedFiles.removed
+              : undefined
+          }
+          resolvedThreadCount={loadedThreads?.length ?? 0}
+          showReviewThreads={showReviewThreads}
+          onShowReviewThreadsChange={setShowReviewThreads}
           pendingCount={pending.length}
           onFinishReview={() => setReviewOpen(true)}
           mergeAction={phoneMergeAction}
@@ -1815,7 +1917,7 @@ export function PrPanel({
               ? provider.name
               : undefined
           }
-          reviewFiles={reviewFiles}
+          reviewFiles={orderedReviewFiles}
           showFileStats={showFileStats}
           onOpenFile={scrollToFile}
           sessionId={sessionId}
@@ -1843,9 +1945,7 @@ export function PrPanel({
           guideFailed={guideFailed}
           onRetryGuide={() => void loadGuide()}
           guideSections={guideSections}
-          grouping={grouping}
-          diffGroups={diffGroups}
-          diffGroupsLoading={diffGroupsLoading}
+          groupDiff={grouping === "ai" && diffLoadPolicy.groupFiles}
         />
       )}
 

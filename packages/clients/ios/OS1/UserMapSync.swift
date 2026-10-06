@@ -33,6 +33,7 @@ enum UserMapSync {
         case .lanes: await LaneStore.shared.hydrate()
         case .snoozes: await WorkspaceSnoozeStore.shared.hydrate()
         case .hides: await HideStore.shared.hydrate()
+        case .tabColors: await RowColorStore.shared.hydrate()
         }
         NotificationCenter.default.post(name: didResyncNotification, object: map)
     }

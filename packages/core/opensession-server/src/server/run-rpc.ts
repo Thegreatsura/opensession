@@ -26,6 +26,7 @@ import { dirname } from "path";
 import { timingSafeEqual } from "crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { lazyJsonSchemaValidator } from "./inprocess-mcp";
 import { OPENSESSION_SESSIONS_DIR } from "./paths";
 import { audit } from "./audit";
 import { devInstanceBootError, isDevInstance } from "./dev-mode";
@@ -215,7 +216,10 @@ export async function dispatchRunRpc(
 
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: "backstage-run-rpc", version: "1.0.0" });
+  const client = new Client(
+    { name: "backstage-run-rpc", version: "1.0.0" },
+    { jsonSchemaValidator: lazyJsonSchemaValidator() },
+  );
   const cleanup = async () => {
     try {
       await client.close();

@@ -12,7 +12,12 @@ import {
 } from "./legacy-import";
 import { MemoryStore } from "./store";
 
-export type MemoryRolloutMode = "legacy" | "shadow" | "v2";
+export type MemoryRolloutMode =
+  | "legacy"
+  | "shadow"
+  | "v2"
+  | "repo-mirror"
+  | "repo";
 
 interface RuntimeStore {
   path: string;
@@ -25,12 +30,29 @@ const LEGACY_MIGRATION_SEAL = "legacy-migration-v2";
 const LEGACY_MIGRATION_VERSION = 2;
 
 /**
- * Memory rollout mode. V2 is the default; legacy and shadow exist as fast
- * rollback and comparison seams while an instance is being migrated.
+ * Memory rollout mode.
+ *
+ *   repo         (default) git memory repositories are the record
+ *                (memory-repo/); the v2 SQLite store is kept read-only for
+ *                rollback.
+ *   repo-mirror  v2 SQLite is the record and is mirrored one way into the
+ *                repositories, with a parity check, before a flip.
+ *   v2           SQLite memory-v2 is the record. Rollback target.
+ *   legacy/shadow JSON stores; comparison seams from the v2 migration.
  */
 export function memoryRolloutMode(): MemoryRolloutMode {
   const value = process.env.OPENSESSION_MEMORY_MODE?.trim().toLowerCase();
-  return value === "legacy" || value === "shadow" ? value : "v2";
+  return value === "legacy" ||
+    value === "shadow" ||
+    value === "v2" ||
+    value === "repo-mirror"
+    ? value
+    : "repo";
+}
+
+/** Modes where memory-v2 SQLite is the record. */
+export function v2IsRecord(mode = memoryRolloutMode()): boolean {
+  return mode === "v2" || mode === "repo-mirror";
 }
 
 export function memoryDatabasePath(): string {
@@ -114,7 +136,7 @@ export async function ensureMemoryV2Ready(): Promise<{
       result.mapped === result.discovered - result.skipped;
     result.sourceDigest = digest.digest("hex");
 
-    if (memoryRolloutMode() === "v2") {
+    if (memoryRolloutMode() !== "legacy" && memoryRolloutMode() !== "shadow") {
       if (!result.complete) {
         throw new Error(
           `Memory v2 migration is incomplete: ${result.mapped}/${result.discovered - result.skipped} valid rows mapped, ${result.errors.length} errors.`,
@@ -145,7 +167,10 @@ export async function ensureMemoryV2Ready(): Promise<{
       errors: result.errors.length,
       complete: result.complete,
       source_digest: result.sourceDigest,
-      sealed: memoryRolloutMode() === "v2" && result.complete,
+      sealed:
+        memoryRolloutMode() !== "legacy" &&
+        memoryRolloutMode() !== "shadow" &&
+        result.complete,
     });
     return result;
   })();

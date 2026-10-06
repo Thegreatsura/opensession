@@ -43,6 +43,7 @@ import {
   IconX,
 } from "../icons";
 import { getCurrentUser } from "../UserPicker";
+import { MemoryRepoPage, MemoryReposCard } from "./MemoryRepoPage";
 import {
   addStructuredMemory,
   fetchMemoryPage,
@@ -582,6 +583,11 @@ function MemoryRow({
           <div className="mt-0.5">
             {relativeTime(memoryCreatedAt(row.entry))}
           </div>
+          {row.entry.path && (
+            <div className="mt-0.5 break-all font-mono" title={row.entry.path}>
+              {row.entry.path}
+            </div>
+          )}
           {row.entry.expiresAt && (
             <div className="mt-0.5">
               Expires {new Date(row.entry.expiresAt).toLocaleDateString()}
@@ -1251,6 +1257,7 @@ export function MemoryPanel() {
   const [scopes, setScopes] = useState<MemoryScopeSummaryDto[] | null>(null);
   const [stats, setStats] = useState<MemoryV2Stats | null>(null);
   const [selectedKind, setSelectedKind] = useState<MemoryKind | null>(null);
+  const [selectedRepo, setSelectedRepo] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   function reload() {
@@ -1314,6 +1321,15 @@ export function MemoryPanel() {
     );
   }
 
+  if (selectedRepo) {
+    return (
+      <MemoryRepoPage
+        repo={selectedRepo}
+        onBack={() => setSelectedRepo(null)}
+      />
+    );
+  }
+
   const selectedCategory = MEMORY_CATEGORIES.find(
     (category) => category.kind === selectedKind,
   );
@@ -1349,7 +1365,9 @@ export function MemoryPanel() {
               <div className="mt-1 text-supporting text-dim">
                 {stats.mode === "legacy"
                   ? "Legacy rollback is active. Current facts are injected without v2 retrieval budgets."
-                  : "Only pinned, trusted summaries are ambient. Other memories are retrieved when relevant."}
+                  : stats.mode === "repo"
+                    ? "Memory lives in git repositories. Each session gets the relevant MEMORY.md files and a checkout it can edit and push."
+                    : "Only pinned, trusted summaries are ambient. Other memories are retrieved when relevant."}
               </div>
             </div>
             <div className="shrink-0 text-right phone:text-left">
@@ -1382,6 +1400,7 @@ export function MemoryPanel() {
           </div>
         </SettingCard>
       )}
+      {stats?.mode === "repo" && <MemoryReposCard onOpen={setSelectedRepo} />}
       <div className="grid gap-3">
         {MEMORY_CATEGORIES.map((category) => (
           <CategoryCard

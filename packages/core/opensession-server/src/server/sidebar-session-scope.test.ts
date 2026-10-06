@@ -135,6 +135,27 @@ describe("scopeSessionsForSidebar", () => {
     ).toEqual(["shared"]);
   });
 
+  test("keeps a collaborator's workspace in their named-person lens", () => {
+    const rows = [
+      session("shared", { workspaceId: "ws-shared", startedBy: "Grace" }),
+      session("private", { workspaceId: "ws-private", startedBy: "Grace" }),
+    ];
+    const workspaces = new Map([
+      [
+        "ws-shared",
+        { createdBy: "Grace", repo: "opensession", collaborators: ["Ada"] },
+      ],
+      ["ws-private", { createdBy: "Grace", repo: "opensession" }],
+    ]);
+    expect(
+      scopeSessionsForSidebar(
+        rows,
+        scope({ person: "Ada" }),
+        context({ workspaces }),
+      ).map((row) => row.id),
+    ).toEqual(["shared"]);
+  });
+
   test("adds every person's active window outside the current lens and repo", () => {
     const now = Date.parse("2026-08-27T12:00:00.000Z");
     const rows = [

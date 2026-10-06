@@ -11,15 +11,7 @@ import type { UnifiedSession, TranscriptEntry } from "../lib/types";
 import type { LiveTurnStore } from "../lib/live-turn-store";
 import type { TranscriptViewStore } from "../lib/transcript-view-store";
 import { withModelSwitches } from "../components/session-viewer/model-switches";
-import {
-  cacheTranscriptView,
-  cachedTranscriptView,
-  peekCachedTranscriptView,
-} from "../components/session-viewer/transcript-cache";
-import {
-  pickScrollAnchor,
-  readFollowingLive,
-} from "../components/session-viewer/transcript-anchor";
+import { cacheTranscriptView } from "../components/session-viewer/transcript-cache";
 import { onTranscriptDisclosure } from "../lib/transcript-disclosures";
 import { historyPageRequest } from "../lib/transcript-history-controller";
 import { HISTORY_PAGE_ENTRIES } from "../lib/transcript-history";
@@ -179,15 +171,19 @@ export function useTranscriptReaderLayout({
   // no height to the transcript's flex layout. Publish its real height without
   // re-rendering on each draft line: the scroll padding can then clear the
   // whole composer instead of assuming the resting one-row pill.
+  // The value goes on the scroller itself, the only reader, and the property
+  // is registered non-inherited (base-keyframes.css). Changing an inherited
+  // custom property restyles every transcript node, and this runs in the
+  // mount commit right before relayout forces style, so on a session switch
+  // that was a second full style recalc of the new transcript.
   useLayoutEffect(() => {
-    if (!viewerInput || typeof ResizeObserver === "undefined") return;
-    const region = viewerInput.parentElement;
-    if (!region) return;
+    const scroller = messagesRef.current;
+    if (!viewerInput || !scroller || typeof ResizeObserver === "undefined")
+      return;
     const measure = () => {
-      region.style.setProperty(
-        "--viewer-input-height",
-        `${Math.ceil(viewerInput.getBoundingClientRect().height)}px`,
-      );
+      const height = `${Math.ceil(viewerInput.getBoundingClientRect().height)}px`;
+      if (scroller.style.getPropertyValue("--viewer-input-height") !== height)
+        scroller.style.setProperty("--viewer-input-height", height);
       relayout();
     };
     measure();
@@ -196,9 +192,9 @@ export function useTranscriptReaderLayout({
     observer.observe(viewerInput, { box: "border-box" });
     return () => {
       observer.disconnect();
-      region.style.removeProperty("--viewer-input-height");
+      scroller.style.removeProperty("--viewer-input-height");
     };
-  }, [relayout, viewerInput]);
+  }, [messagesRef, relayout, viewerInput]);
 
   useTranscriptIndexAnchor({
     indexState: transcriptIndexState,
@@ -209,14 +205,11 @@ export function useTranscriptReaderLayout({
   });
 
   // Keep the cached snapshot current as live frames and history pages land.
-  // Scroll position is updated synchronously in handleMessagesScroll below;
-  // the anchor is carried rather than recomputed, because this runs on every
-  // streamed frame and pickScrollAnchor reads a rect per [data-eid] node.
+  // Only what a remount resumes from belongs here: every session reopens at
+  // the live edge, so no scroll position is carried.
   useEffect(() => {
     const cursors = transcriptHistoryRef.current.cursors;
     if (cursors.transcriptReadySessionRef.current !== session.id) return;
-    const previous = cachedTranscriptView(session.id);
-    const el = messagesRef.current;
     cacheTranscriptView(session.id, {
       entries,
       cursor: cursors.transcriptCursorRef.current,
@@ -225,57 +218,14 @@ export function useTranscriptReaderLayout({
       historyStart: cursors.historyStartRef.current,
       index: transcriptIndex,
       indexEpoch: transcriptIndexEpochRef.current,
-      scrollTop: el?.scrollTop ?? previous?.scrollTop ?? 0,
-      following,
-      anchorEid: previous?.anchorEid ?? null,
-      anchorTop: previous?.anchorTop ?? null,
     });
   }, [
     entries,
-    following,
     historyTruncated,
-    messagesRef,
     session.id,
     transcriptIndex,
     transcriptIndexEpochRef,
   ]);
-  // Where the anchor is computed. Nothing reads it until this session is
-  // opened again, and pickScrollAnchor reads a rect per [data-eid] node, so
-  // it runs once the reader settles instead of on every scroll event and
-  // every streamed frame.
-  const captureScrollAnchor = useCallback(() => {
-    const el = messagesRef.current;
-    const cached = peekCachedTranscriptView(session.id);
-    if (!el || !cached) return;
-    // Nothing qualifying at the top edge clears the pair, rather than
-    // leaving one the reader has scrolled away from.
-    const anchor = pickScrollAnchor(el);
-    cacheTranscriptView(session.id, {
-      ...cached,
-      scrollTop: el.scrollTop,
-      following: readFollowingLive(followingLive),
-      anchorEid: anchor?.dataset.eid ?? null,
-      anchorTop: anchor
-        ? anchor.getBoundingClientRect().top - el.getBoundingClientRect().top
-        : null,
-    });
-  }, [followingLive, messagesRef, session.id]);
-  const anchorCaptureRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const scheduleAnchorCapture = useCallback(() => {
-    if (anchorCaptureRef.current) clearTimeout(anchorCaptureRef.current);
-    anchorCaptureRef.current = setTimeout(captureScrollAnchor, 250);
-  }, [captureScrollAnchor]);
-  // And once more on the way out, so the last thing the reader did is what a
-  // switch back restores to. App keys SessionViewer on the session id
-  // (App.tsx), so this cleanup still sees the transcript it measures: React
-  // commits deletions before insertions.
-  useLayoutEffect(() => {
-    return () => {
-      if (anchorCaptureRef.current) clearTimeout(anchorCaptureRef.current);
-      anchorCaptureRef.current = null;
-      captureScrollAnchor();
-    };
-  }, [captureScrollAnchor]);
   useEffect(() => {
     setEntries((prev) => withModelSwitches(prev, session.modelHistory));
   }, [session.modelHistory, setEntries]);
@@ -386,7 +336,6 @@ export function useTranscriptReaderLayout({
       shouldMaintainEnd,
       relayout,
       onScroll,
-      scheduleAnchorCapture,
     },
     settle: {
       tailActionNeedsLayoutScrollRef,
@@ -436,7 +385,6 @@ interface ReaderLifecycleScroll {
   leaveLatest: () => void;
   relayout: () => void;
   onScroll: () => void;
-  scheduleAnchorCapture: () => void;
   endTurn: () => void;
 }
 
@@ -484,7 +432,6 @@ export function useTranscriptReaderLifecycle({
     leaveLatest,
     relayout,
     onScroll,
-    scheduleAnchorCapture,
     endTurn,
   },
   runtime: { queued, steered, pending, ask, isBusy },
@@ -745,7 +692,7 @@ export function useTranscriptReaderLifecycle({
   // fetching history while still preloading a page as the reader approaches it.
   const handleMessagesScroll = useCallback(() => {
     handleTranscriptHistoryScroll(
-      { sessionId: session.id, messagesRef, followingLive },
+      { messagesRef },
       {
         lastScrollTopRef:
           transcriptHistoryRef.current.gesture.lastHistoryScrollTopRef,
@@ -756,16 +703,9 @@ export function useTranscriptReaderLifecycle({
         gestureUntilRef:
           transcriptHistoryRef.current.gesture.historyGestureUntilRef,
       },
-      { onScroll, scheduleAnchorCapture, loadEarlierHistory },
+      { onScroll, loadEarlierHistory },
     );
-  }, [
-    followingLive,
-    loadEarlierHistory,
-    messagesRef,
-    onScroll,
-    scheduleAnchorCapture,
-    session.id,
-  ]);
+  }, [loadEarlierHistory, messagesRef, onScroll]);
   useEffect(() => {
     const controller = transcriptHistoryRef.current;
     const {

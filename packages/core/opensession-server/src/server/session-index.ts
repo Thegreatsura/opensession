@@ -25,23 +25,18 @@ import {
   sessionKernel,
   type DurableTimer,
 } from "./session-kernel";
-import {
-  SessionSearchStore,
-  type SearchHit,
-  type SearchRecord,
-} from "./session-search-store";
+import { callSearchIndex } from "./session-search-client";
+import type { SearchHit, SearchRecord } from "./session-search-store";
+import { transcriptIndexRows } from "./transcript-text-index";
 import { mergedSessionTranscriptAsync } from "./sessions";
 import { oneShot } from "./one-shot";
-import { stateDir } from "./paths";
 import type { TranscriptEntry, UnifiedSession } from "./types";
 
 const g = globalThis as typeof globalThis & {
-  __sessionSearchStore?: SessionSearchStore;
   __sessionHistoryTimerRegistered?: boolean;
   __sessionHistoryDistillBusy?: boolean;
 };
 
-const DB_PATH = process.env.OPENSESSION_SEARCH_DB || stateDir("search.db");
 const TIMER_KIND = "session_history_index";
 const DISTILL_TIMER_ID = "session-history:distill";
 const INDEX_HEAD_ENTRIES = 80;
@@ -55,20 +50,26 @@ const DISTILL_BUSY_MIN_MS = 15_000;
 const DISTILL_BUSY_JITTER_MS = 15_000;
 const MIN_DISTILL_CHARS = 400;
 
-export function searchIndex(): SessionSearchStore {
-  return (g.__sessionSearchStore ??= new SessionSearchStore(DB_PATH));
+/** Records in the search index. */
+export function searchIndexCount(): Promise<number> {
+  return callSearchIndex("count");
+}
+
+/** Drop one record (e.g. `session:<id>`) from the search index. */
+export function removeFromSearchIndex(id: string): Promise<void> {
+  return callSearchIndex("remove", id);
 }
 
 const FOLD_POOL = 60;
 const MAX_RESULTS = 25;
 
-export function searchSessionHistory(
+export async function searchSessionHistory(
   query: string,
   opts: { repo?: string; limit?: number; days?: number } = {},
-): Folded<SearchHit>[] {
+): Promise<Folded<SearchHit>[]> {
   const sinceTs = opts.days ? Date.now() - opts.days * 86_400_000 : undefined;
   const limit = Math.min(Math.max(opts.limit ?? 8, 1), MAX_RESULTS);
-  const hits = searchIndex().search(query, {
+  const hits = await callSearchIndex("search", query, {
     repo: opts.repo,
     limit: FOLD_POOL,
     sinceTs,
@@ -281,8 +282,72 @@ async function boundedIndexEntries(
   return mergedSessionTranscriptAsync(session);
 }
 
+const TRANSCRIPT_PAGE = 500;
+/** Changes one firing applies; a longer backlog continues next turn. */
+const TRANSCRIPT_MAX_CHANGES = 50_000;
+
+/**
+ * Bring one session's conversation index up to date: read its transcript
+ * changes since the stored cursor, one page at a time, and apply each page.
+ * A new reset epoch, or a transcript recreated under the same id, starts the
+ * session over. Reads only this session, through its actor.
+ */
+export async function indexSessionTranscript(
+  sessionId: string,
+  activityTs: number,
+): Promise<{ applied: number }> {
+  if (sessionId.startsWith("plain-")) return { applied: 0 };
+  const [epoch, lastChangeSeq] = await Promise.all([
+    transcript.getLastResetChangeSeq(sessionId),
+    transcript.getLastChangeSeq(sessionId),
+  ]);
+  let stored = await callSearchIndex("transcriptCursor", sessionId);
+  let cursor =
+    stored && stored.epoch === epoch && stored.changeSeq <= lastChangeSeq
+      ? stored.changeSeq
+      : 0;
+  let applied = 0;
+  let conflicts = 0;
+  while (applied < TRANSCRIPT_MAX_CHANGES) {
+    const page = await transcript.readChangesSince(
+      sessionId,
+      cursor,
+      TRANSCRIPT_PAGE,
+    );
+    const through = page.entries.reduce(
+      (max, entry) => Math.max(max, entry.changeSeq),
+      cursor,
+    );
+    if (page.entries.length === 0 && stored && cursor === stored.changeSeq)
+      break;
+    const ok = await callSearchIndex("applyTranscript", {
+      sessionId,
+      epoch,
+      fromChangeSeq: cursor,
+      throughChangeSeq: through,
+      activityTs,
+      rows: transcriptIndexRows(page.entries),
+    });
+    if (!ok) {
+      // Another writer (the offline backfill) moved the cursor: continue
+      // from where it left off, or give up after a few rounds.
+      if (++conflicts > 3) break;
+      stored = await callSearchIndex("transcriptCursor", sessionId);
+      cursor = stored && stored.epoch === epoch ? stored.changeSeq : 0;
+      continue;
+    }
+    stored = { epoch, changeSeq: through };
+    cursor = through;
+    applied += page.entries.length;
+    if (page.entries.length < TRANSCRIPT_PAGE) break;
+  }
+  return { applied };
+}
+
 export type SessionHistoryIndexResult =
-  | { kind: "missing" | "stale" | "ineligible" }
+  | { kind: "missing" | "stale" }
+  /** activityTs is 0 when the session has no usable activity time. */
+  | { kind: "ineligible"; activityTs: number }
   | {
       kind: "indexed";
       activityTs: number;
@@ -300,13 +365,15 @@ export async function indexSessionHistory(
 ): Promise<SessionHistoryIndexResult> {
   const session = await findSessionAsync(sessionId);
   if (!session) {
-    searchIndex().remove(`session:${sessionId}`);
+    await removeFromSearchIndex(`session:${sessionId}`);
+    await callSearchIndex("removeTranscript", sessionId);
     return { kind: "missing" };
   }
   const activityTs = Date.parse(
     session.lastActivity || session.createdAt || "",
   );
-  if (!activityTs || Number.isNaN(activityTs)) return { kind: "ineligible" };
+  if (!activityTs || Number.isNaN(activityTs))
+    return { kind: "ineligible", activityTs: 0 };
   if (
     options.expectedActivityTs !== undefined &&
     options.expectedActivityTs !== activityTs
@@ -321,26 +388,26 @@ export async function indexSessionHistory(
       now - activityTs < IDLE_MS ||
       activityTs < now - DISTILL_RECENT_DAYS * 86_400_000)
   )
-    return { kind: "ineligible" };
+    return { kind: "ineligible", activityTs };
 
   const extracted = extractSessionIndexTexts(
     await boundedIndexEntries(session),
   );
   if (extracted.totalChars < 120 && !session.title)
-    return { kind: "ineligible" };
+    return { kind: "ineligible", activityTs };
 
   const base = mechanicalRecord(session, extracted, activityTs);
   const distillable = extracted.totalChars >= MIN_DISTILL_CHARS;
   if (mode === "distill" && distillable) {
     const distilled = await distillWithLlm(session, extracted, base);
     if (distilled) {
-      searchIndex().upsert(distilled);
+      await callSearchIndex("upsert", distilled);
       return { kind: "indexed", activityTs, distillable, distilled: true };
     }
     return { kind: "indexed", activityTs, distillable, distilled: false };
   }
 
-  searchIndex().upsert(base);
+  await callSearchIndex("upsert", base);
   return { kind: "indexed", activityTs, distillable, distilled: false };
 }
 
@@ -441,6 +508,18 @@ async function handleSessionHistoryTimer(timer: DurableTimer): Promise<void> {
 
   if (payload.phase === "mechanical") {
     const result = await indexSessionHistory(timer.sessionId);
+    if (result.kind === "indexed" || result.kind === "ineligible") {
+      // The conversation index wants every session's words, including the
+      // short ones history distillation skips.
+      try {
+        await indexSessionTranscript(timer.sessionId, result.activityTs);
+      } catch (error) {
+        console.warn(
+          `[session-index] transcript index failed for ${timer.sessionId}:`,
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }
     if (result.kind !== "indexed" || !result.distillable) return;
     await scheduleDistillation(
       timer.sessionId,
@@ -506,8 +585,7 @@ export async function backfillSessionHistoryIndexBatch(
     BACKFILL_BATCH,
     Math.max(1, Number.isFinite(limit) ? Math.floor(limit) : BACKFILL_BATCH),
   );
-  const store = searchIndex();
-  const state = store.indexState();
+  const state = await callSearchIndex("indexState");
   const sessions = [...(await getSessionListSnapshotAsync())].sort(
     (left, right) =>
       (right.lastActivity || "").localeCompare(left.lastActivity || ""),
@@ -531,7 +609,7 @@ export async function backfillSessionHistoryIndexBatch(
     msg: "session_history_backfill",
     scanned,
     indexed,
-    total: store.count(),
+    total: await searchIndexCount(),
     duration_ms: Date.now() - startedAt,
   });
   return { scanned, indexed };

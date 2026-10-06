@@ -3,6 +3,7 @@ import {
   findSlackChannel,
   forgetSlackChannelsForUser,
   isSlackChannelId,
+  joinSlackChannelIfNeeded,
   mergeSlackChannels,
   resolveSlackChannel,
   slackChannelsForUser,
@@ -44,6 +45,7 @@ afterEach(() => {
 describe("slackChannelsForUser", () => {
   test("pages users.conversations with the caller's token and sorts by name", async () => {
     mockSlack((url) => {
+      if (url.pathname === "/api/conversations.list") return { ok: true };
       expect(url.pathname).toBe("/api/users.conversations");
       expect(url.searchParams.get("types")).toBe(
         "public_channel,private_channel",
@@ -69,21 +71,50 @@ describe("slackChannelsForUser", () => {
       { id: "C2", name: "mid" },
       { id: "C1", name: "zeta" },
     ]);
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
+  });
+
+  test("lists public channels the caller has not joined", async () => {
+    mockSlack((url) =>
+      url.pathname === "/api/conversations.list"
+        ? {
+            ok: true,
+            channels: [
+              { id: "C1", name: "os", is_member: true },
+              { id: "C4", name: "agents", is_member: false },
+            ],
+          }
+        : {
+            ok: true,
+            channels: [
+              { id: "C1", name: "os" },
+              { id: "G1", name: "private-team" },
+            ],
+          },
+    );
+    expect(await slackChannelsForUser("acme-dev", "xoxp-token")).toEqual([
+      { id: "C4", name: "agents", member: false },
+      { id: "C1", name: "os" },
+      { id: "G1", name: "private-team" },
+    ]);
   });
 
   test("caches per caller and coalesces a concurrent load", async () => {
-    mockSlack(() => ({ ok: true, channels: [{ id: "C1", name: "os" }] }));
+    mockSlack((url) =>
+      url.pathname === "/api/users.conversations"
+        ? { ok: true, channels: [{ id: "C1", name: "os" }] }
+        : { ok: true, channels: [] },
+    );
     const [first, second] = await Promise.all([
       slackChannelsForUser("acme-dev", "xoxp-token"),
       slackChannelsForUser("acme-dev", "xoxp-token"),
     ]);
     expect(first).toEqual(second);
     await slackChannelsForUser("acme-dev", "xoxp-token");
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(2);
     // A reconnect hands out a new token; the old list must not answer for it.
     await slackChannelsForUser("acme-dev", "xoxp-newer");
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(4);
   });
 
   test("treats a grant without channels:read as an empty directory", async () => {
@@ -154,5 +185,48 @@ describe("resolveSlackChannel", () => {
     ).toBeUndefined();
     expect(isSlackChannelId("C7ABCDEF")).toBe(true);
     expect(isSlackChannelId("../etc")).toBe(false);
+  });
+});
+
+describe("joinSlackChannelIfNeeded", () => {
+  const auth = { caller: "acme-dev", token: "xoxp-token" };
+
+  function mockDirectory(join: unknown) {
+    mockSlack((url) => {
+      if (url.pathname === "/api/conversations.join") return join;
+      if (url.pathname === "/api/conversations.list")
+        return {
+          ok: true,
+          channels: [
+            { id: "C1", name: "os", is_member: true },
+            { id: "C4", name: "agents", is_member: false },
+          ],
+        };
+      return { ok: true, channels: [{ id: "C1", name: "os" }] };
+    });
+  }
+
+  const joins = () =>
+    calls.filter((url) => url.pathname === "/api/conversations.join");
+
+  test("joins a public channel the caller is not in, once", async () => {
+    mockDirectory({ ok: true });
+    const agents = { id: "C4", name: "agents" };
+    await joinSlackChannelIfNeeded(agents, auth);
+    await joinSlackChannelIfNeeded(agents, auth);
+    expect(joins()).toHaveLength(1);
+  });
+
+  test("leaves channels the caller is already in alone", async () => {
+    mockDirectory({ ok: true });
+    await joinSlackChannelIfNeeded({ id: "C1", name: "os" }, auth);
+    expect(joins()).toHaveLength(0);
+  });
+
+  test("explains a grant that cannot join", async () => {
+    mockDirectory({ ok: false, error: "missing_scope" });
+    await expect(
+      joinSlackChannelIfNeeded({ id: "C4", name: "agents" }, auth),
+    ).rejects.toThrow(/Reconnect Slack/);
   });
 });

@@ -14,6 +14,7 @@ import {
   answerKeychainAsk,
   deleteCredential,
   ensureKeychainLoaded,
+  keychainAsksInSession,
   keychainViewFor,
   revokeGrant,
 } from "../keychain";
@@ -84,7 +85,22 @@ export async function handleKeychainRoutes(
     });
   }
 
-  // The owner answers a teammate's request from Settings. A verified sign-in
+  // The card in the requesting session. Only the credential's owner, by
+  // verified sign-in, gets anything back; every other viewer an empty list.
+  if (path === "/api/keychain/asks" && req.method === "GET") {
+    await ensureKeychainLoaded();
+    return Response.json(
+      {
+        asks: keychainAsksInSession(
+          ctx.url.searchParams.get("sessionId") || "",
+          verifiedPerson(ctx),
+        ),
+      },
+      { headers: { "Cache-Control": "no-store" } },
+    );
+  }
+
+  // The owner answers a teammate's request from Settings or the session card. A verified sign-in
   // is required: a claimed name (the no-auth picker) or an automation token
   // must never approve access to someone's credential.
   const askMatch = path.match(/^\/api\/keychain\/asks\/([^/]+)\/answer$/);

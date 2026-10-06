@@ -218,6 +218,65 @@ enum OS1API {
         let createdBy: String?
         let createdAt: String?
         let draft: WorkspaceDraft?
+        /// Teammates added to the workspace. The server files it into each
+        /// one's sidebar as their own work, the way it files it for its
+        /// creator (`src/server/routes/workspace-collaborators.ts`). Optional
+        /// so a server that predates collaborators still decodes.
+        var collaborators: [WorkspaceCollaborator]? = nil
+
+        func hasCollaborator(_ name: String) -> Bool {
+            let key = name.trimmingCharacters(in: .whitespaces).lowercased()
+            return !key.isEmpty && (collaborators ?? []).contains {
+                $0.name.trimmingCharacters(in: .whitespaces).lowercased() == key
+            }
+        }
+    }
+
+    struct WorkspaceCollaborator: Decodable, Equatable, Sendable {
+        let name: String
+        let by: String?
+        let at: String?
+    }
+
+    private struct CollaboratorResponse: Decodable, Sendable {
+        let workspace: WorkspaceSummary?
+    }
+
+    /// Add a teammate to a workspace. `sessionId` is where they get their
+    /// one-time mention badge. Adding someone already listed is a no-op
+    /// server-side, so a double tap never notifies twice.
+    static func addCollaborator(
+        workspaceId: String,
+        name: String,
+        sessionId: String?
+    ) async throws -> WorkspaceSummary? {
+        var body: [String: Any] = ["name": name, "user": ServerConfig.shared.userName]
+        if let sessionId, !sessionId.isEmpty { body["sessionId"] = sessionId }
+        let response: CollaboratorResponse = try await post(
+            "/api/workspaces/\(pathComponent(workspaceId))/collaborators",
+            body: body
+        )
+        return response.workspace
+    }
+
+    static func removeCollaborator(
+        workspaceId: String,
+        name: String
+    ) async throws -> WorkspaceSummary? {
+        let response: CollaboratorResponse = try await mutate(
+            "/api/workspaces/\(pathComponent(workspaceId))/collaborators/\(pathComponent(name))",
+            method: "DELETE",
+            body: [:]
+        )
+        return response.workspace
+    }
+
+    /// One percent-encoded path segment: a slash or space in an id or a name
+    /// must not split the route.
+    nonisolated static func pathComponent(_ value: String) -> String {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "/?#")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
     }
 
     /// Canonical workspace names for collapsing sibling sessions into one row.
@@ -752,6 +811,14 @@ enum OS1API {
             "/api/sessions/\(sessionId)/pr-close",
             body: [:]
         )
+    }
+
+    /// Take a draft PR out of draft. A session target reaches the session's
+    /// primary PR or, with repo and branch, one of its attached-repo PRs; a
+    /// preview target needs no session at all.
+    static func markPrReady(_ target: PrReadyTarget) async throws {
+        struct ReadyResponse: Decodable { let ok: Bool? }
+        let _: ReadyResponse = try await post(target.path, body: target.body)
     }
 
     /// What the agent can be asked to do with a pull request, from the
@@ -1713,7 +1780,7 @@ enum OS1API {
         checkoutMode: String = "default",
         model: String? = nil,
         effort: String? = nil,
-        fastMode: Bool = false,
+        speed: SessionSpeed = .standard,
         images: [String] = [],
         files: [AttachedFile] = [],
         workspaceId: String? = nil,
@@ -1729,7 +1796,7 @@ enum OS1API {
             checkoutMode: checkoutMode,
             model: model,
             effort: effort,
-            fastMode: fastMode,
+            speed: speed,
             images: images,
             files: files,
             workspaceId: workspaceId,
@@ -1760,7 +1827,7 @@ enum OS1API {
         checkoutMode: String = "default",
         model: String? = nil,
         effort: String? = nil,
-        fastMode: Bool = false,
+        speed: SessionSpeed = .standard,
         images: [String] = [],
         files: [AttachedFile] = [],
         workspaceId: String? = nil,
@@ -1790,7 +1857,12 @@ enum OS1API {
         if let forkFrom { body["forkFrom"] = forkFrom.wireValue }
         if let model, !model.isEmpty { body["model"] = model }
         if let effort, !effort.isEmpty { body["effort"] = effort }
-        if fastMode { body["fastMode"] = true }
+        // `fastMode` for servers that predate `speed`; a newer one reads
+        // `speed` and ignores the mirror.
+        if speed != .standard {
+            body["fastMode"] = true
+            body["speed"] = speed.rawValue
+        }
         if !images.isEmpty { body["images"] = images }
         let stagedFiles = files.compactMap(\.wireValue)
         if !stagedFiles.isEmpty { body["files"] = stagedFiles }
@@ -1841,6 +1913,30 @@ enum OS1API {
     /// Deliver one message. The reply is the acknowledgement the outbox waits
     /// for; `clientId` makes a retry idempotent, so a reply lost on the way
     /// back can never post the message twice.
+    /// The `POST /api/sessions/:id/prompt` body. `speed` wins on servers
+    /// that know it; `fastMode` is what older ones read. An item queued
+    /// before `speed` existed carries `fastMode` alone, which the server
+    /// applies without downgrading a stored Ultrafast.
+    static func deliverPromptBody(
+        content: String,
+        images: [String],
+        user: String,
+        busyMode: String,
+        effort: String?,
+        fastMode: Bool?,
+        speed: String?,
+        clientId: String
+    ) -> [String: Any] {
+        var body: [String: Any] = ["content": content, "clientId": clientId]
+        if busyMode == "queue" || busyMode == "steer" { body["busy"] = busyMode }
+        if !user.isEmpty { body["user"] = user }
+        if !images.isEmpty { body["images"] = images }
+        if let effort, !effort.isEmpty { body["effort"] = effort }
+        if let fastMode { body["fastMode"] = fastMode }
+        if let speed { body["speed"] = speed }
+        return body
+    }
+
     static func deliverPrompt(
         sessionId: String,
         content: String,
@@ -1849,6 +1945,7 @@ enum OS1API {
         busyMode: String,
         effort: String? = nil,
         fastMode: Bool? = nil,
+        speed: String? = nil,
         clientId: String
     ) async -> PromptDelivery {
         struct DeliverResponse: Decodable, Sendable {
@@ -1873,12 +1970,10 @@ enum OS1API {
         guard normalizedImages.count == images.count else {
             return .rejected("An attached image could not be prepared. Attach it again.")
         }
-        var body: [String: Any] = ["content": content, "clientId": clientId]
-        if busyMode == "queue" || busyMode == "steer" { body["busy"] = busyMode }
-        if !user.isEmpty { body["user"] = user }
-        if !normalizedImages.isEmpty { body["images"] = normalizedImages }
-        if let effort, !effort.isEmpty { body["effort"] = effort }
-        if let fastMode { body["fastMode"] = fastMode }
+        let body = deliverPromptBody(
+            content: content, images: normalizedImages, user: user, busyMode: busyMode,
+            effort: effort, fastMode: fastMode, speed: speed, clientId: clientId
+        )
 
         var request = config.authorizedRequest(url)
         request.httpMethod = "POST"

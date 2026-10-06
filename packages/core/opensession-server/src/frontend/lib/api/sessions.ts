@@ -1,6 +1,6 @@
 import type { SessionSpeed } from "@tellahq/opensession-protocol/session";
 import { ApiError, BASE, request } from "./request";
-import type { SessionNote, TranscriptEntry, UnifiedSession } from "../types";
+import type { TranscriptEntry, UnifiedSession } from "../types";
 import { resolveAnonymousUserPath } from "../auth-ready";
 import { preparePromptImages } from "../images";
 
@@ -505,60 +505,4 @@ export async function acceptReviewApi(
     body: { accept, by },
     label: "Failed to update review",
   });
-}
-
-/** Team notes on a session (agent-invisible; src/server/session-notes.ts). */
-export async function fetchSessionNotesApi(
-  sessionId: string,
-): Promise<SessionNote[]> {
-  const data = await request<{ notes?: SessionNote[] }>(
-    `/sessions/${encodeURIComponent(sessionId)}/notes`,
-    { label: "Failed to load notes" },
-  );
-  return data?.notes || [];
-}
-
-/** Post a team note. The server broadcasts it back, so callers don't echo it
- *  locally — every viewer (including this one) renders the stored record. */
-export async function postSessionNoteApi(
-  sessionId: string,
-  text: string,
-  user: string,
-  images?: string[],
-): Promise<SessionNote> {
-  const data = await request<{ note: SessionNote }>(
-    `/sessions/${encodeURIComponent(sessionId)}/notes`,
-    {
-      method: "POST",
-      body: { text, user, images },
-      label: "Failed to add note",
-    },
-  );
-  return data.note;
-}
-
-/** Edit a note. Author-only; the server rejects anyone else with a 403. */
-export async function editSessionNoteApi(
-  sessionId: string,
-  noteId: string,
-  text: string,
-  user: string,
-): Promise<SessionNote> {
-  const data = await request<{ note: SessionNote }>(
-    `/sessions/${encodeURIComponent(sessionId)}/notes/${encodeURIComponent(noteId)}`,
-    { method: "PATCH", body: { text, user }, label: "Failed to edit note" },
-  );
-  return data.note;
-}
-
-/** Delete a note. Author-only, same as editing. */
-export async function deleteSessionNoteApi(
-  sessionId: string,
-  noteId: string,
-  user: string,
-): Promise<void> {
-  await request<void>(
-    `/sessions/${encodeURIComponent(sessionId)}/notes/${encodeURIComponent(noteId)}?user=${encodeURIComponent(user)}`,
-    { method: "DELETE", label: "Failed to delete note" },
-  );
 }

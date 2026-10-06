@@ -186,7 +186,18 @@ export interface KeychainCredentialDto {
 
 export interface KeychainScriptedRunDto {
   command: string;
+  /** This credential's cap. */
   maxCalls: number;
+  /** A run with several credentials: all of them, each with its cap. */
+  group?: {
+    id: string;
+    members: Array<{
+      service: string;
+      host: string;
+      owner: string;
+      maxCalls: number;
+    }>;
+  };
 }
 
 export interface KeychainGrantDto {
@@ -341,6 +352,34 @@ export async function savePersonalOutputStyle(
   return request("/personal-output-style", {
     method: "PUT",
     body: { user, outputStyle },
+  });
+}
+
+export async function fetchYouShouldKnow(
+  user: string,
+): Promise<{ enabled: boolean }> {
+  return request(`/personal-you-should-know?user=${encodeURIComponent(user)}`, {
+    label: "Failed to fetch You should know",
+  });
+}
+
+export async function saveYouShouldKnow(
+  user: string,
+  enabled: boolean,
+): Promise<{ enabled: boolean }> {
+  return request("/personal-you-should-know", {
+    method: "PUT",
+    body: { user, enabled },
+  });
+}
+
+export async function addYouShouldKnowTopic(
+  user: string,
+  line: string,
+): Promise<{ known: string[] }> {
+  return request("/personal-you-should-know/known", {
+    method: "POST",
+    body: { user, line },
   });
 }
 

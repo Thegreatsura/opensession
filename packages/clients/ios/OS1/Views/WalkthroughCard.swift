@@ -378,7 +378,12 @@ private struct MediaImage: View {
             guard data == nil else { return }
             failed = false
             do {
-                let loaded = try await OS1API.media(path: path)
+                guard let loaded = await DisplayableImageData.prepare(
+                    try await OS1API.media(path: path)
+                ) else {
+                    failed = true
+                    return
+                }
                 ratio = Self.aspectRatio(of: loaded)
                 data = loaded
             } catch {

@@ -21,7 +21,7 @@ import {
   onNextChatButtonChanged,
 } from "../lib/next-chat-pref";
 import type {
-  SessionNote,
+  CommentThread,
   TranscriptEntry,
   UnifiedSession,
 } from "../lib/types";
@@ -40,8 +40,8 @@ import { useSidePanel } from "./useSidePanel";
 import { useSessionAssets } from "../components/AssetsPanel";
 import { useSessionReports } from "../components/SessionReportsPanel";
 import { useSessionDatabases } from "../components/SessionDatabasesPanel";
-import { fetchSessionNotesApi } from "../lib/api";
-import { markNotesRead } from "../lib/note-reads";
+import { fetchThreadsApi } from "../lib/api";
+import { timelineThreads, upsertThread } from "../lib/comment-threads";
 import { clearMention, onMentionsChanged } from "../lib/mentions";
 import { watchSessionNotifications } from "../lib/notifications";
 import { useCopy } from "../ui/copy";
@@ -376,7 +376,13 @@ export function useSessionViewStateController({
   }, []);
   const sessionReports = useSessionReports(session.id, addHandler);
   const sessionDatabases = useSessionDatabases(session.id, addHandler);
-  const [notes, setNotes] = useState<SessionNote[]>([]);
+  const [threads, setThreads] = useState<CommentThread[]>([]);
+  // The timeline's team notes are the threads without a passage. Derived
+  // once here so the transcript's memoized blocks see a stable array.
+  const comments = useMemo(
+    () => ({ threads, notes: timelineThreads(threads) }),
+    [threads],
+  );
   const [noteMode, setNoteMode] = useState(false);
   const attachmentDrop = useSessionAttachmentDrop({
     identity: {
@@ -387,12 +393,12 @@ export function useSessionViewStateController({
     draft: { draftKey, setImages, setFiles, uploads },
   });
   useEffect(() => {
-    setNotes([]);
+    setThreads([]);
     setNoteMode(false);
     let cancelled = false;
-    fetchSessionNotesApi(session.id)
+    fetchThreadsApi(session.id)
       .then((loaded) => {
-        if (!cancelled && loaded.length) setNotes(loaded);
+        if (!cancelled && loaded.length) setThreads(loaded);
       })
       .catch(() => {});
     return () => {
@@ -403,29 +409,19 @@ export function useSessionViewStateController({
     () =>
       addHandler((msg) => {
         if (
-          (msg.type !== "session_note" &&
-            msg.type !== "session_note_deleted") ||
+          (msg.type !== "comment_thread" &&
+            msg.type !== "comment_thread_deleted") ||
           msg.sessionId !== session.id
         )
           return;
-        if (msg.type === "session_note_deleted") {
-          setNotes((prev) => prev.filter((note) => note.id !== msg.noteId));
+        if (msg.type === "comment_thread_deleted") {
+          setThreads((prev) => prev.filter((t) => t.id !== msg.threadId));
           return;
         }
-        setNotes((prev) => {
-          const index = prev.findIndex((note) => note.id === msg.note.id);
-          if (index < 0) return [...prev, msg.note];
-          const next = [...prev];
-          next[index] = msg.note;
-          return next;
-        });
+        setThreads((prev) => upsertThread(prev, msg.thread));
       }),
     [addHandler, session.id],
   );
-  useEffect(() => {
-    if (!notes.length) return;
-    markNotesRead(session.id, notes[notes.length - 1]!.ts);
-  }, [notes, session.id]);
   useEffect(() => {
     clearMention(session.id);
     return onMentionsChanged(() => clearMention(session.id));
@@ -508,8 +504,8 @@ export function useSessionViewStateController({
     notes: {
       sessionReports,
       sessionDatabases,
-      notes,
-      setNotes,
+      comments,
+      setThreads,
       noteMode,
       setNoteMode,
       ...attachmentDrop,

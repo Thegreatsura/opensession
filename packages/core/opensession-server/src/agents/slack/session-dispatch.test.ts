@@ -58,10 +58,14 @@ mock.module("../../server/shared/user-mappings", () => ({
     id === "U1" ? "verified-login" : undefined,
   slackIdToFirstName: () => "Michiel",
 }));
+mock.module("../../server/uploads", () => ({
+  STAGED_UPLOADS_DIR: "/uploads/staged",
+}));
 mock.module("./slack-api", () => ({
   getChannelKind: async () => ({ isDM: false, isPrivate: true }),
-  downloadSlackImages: async () => ({
+  downloadSlackAttachments: async () => ({
     images: [{ mediaType: "image/png", data: "aW1hZ2U=" }],
+    files: [{ name: "terms.pdf", path: "/uploads/staged/slack-F1/terms.pdf" }],
     note: "Attachment note",
   }),
 }));
@@ -202,8 +206,32 @@ test("follow-ups including images go to native delivery, not a second runner", a
       busy: "queue",
       deliveryId: "slack:C1:124.1",
       images: [{ mediaType: "image/png", data: "aW1hZ2U=" }],
+      files: [
+        { name: "terms.pdf", path: "/uploads/staged/slack-F1/terms.pdf" },
+      ],
     }),
   ]);
+});
+
+test("an opening message's documents reach native creation as file refs", async () => {
+  await dispatchSlackSessionMessage(
+    "C1-123.1",
+    message({
+      files: [
+        {
+          id: "F1",
+          name: "terms.pdf",
+          mimetype: "application/pdf",
+          url: "https://slack.test/file",
+          size: 5,
+        },
+      ],
+    }),
+  );
+  expect(created[0]).toMatchObject({
+    files: [{ name: "terms.pdf", path: "/uploads/staged/slack-F1/terms.pdf" }],
+  });
+  expect(created[0]?.prompt).toContain("Attachment note");
 });
 
 test("code task, question, then edit continue the same native session", async () => {

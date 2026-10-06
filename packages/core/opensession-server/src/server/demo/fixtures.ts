@@ -22,8 +22,10 @@ import {
   transcriptLineToolResult,
   transcriptLineToolUse,
   transcriptLineUser,
+  transcriptLineYouShouldKnow,
 } from "../transcript-persistence";
 import type { NativeSessionFile } from "../types";
+import { youShouldKnowRecordContent } from "@tellahq/opensession-protocol/notices";
 
 type JsonlLine = Record<string, unknown>;
 
@@ -288,6 +290,19 @@ export function demoSessions(opts: {
           { command: "bun test src/upload.test.ts --rerun-each 100" },
           "100 pass\n0 fail",
           t0 + 140_000,
+        ),
+        transcriptLineYouShouldKnow(
+          youShouldKnowRecordContent(
+            "Heads up",
+            "Old upload failure logs say 3 attempts, but only 2 ever ran, so past failure counts overstate how hard uploads tried.",
+            "**Old upload errors overstate the retries**\n\n" +
+              "* The error reads `upload failed after 3 attempts` because it prints the retry setting, not a count of tries.\n" +
+              "* Before this fix, only two attempts ran, so every one of those old errors gave up one try early.\n" +
+              "* Anyone reading those logs would think a third try also failed, when it never ran.\n" +
+              "* **Treat failure counts from before this fix as two-try numbers** when comparing against new ones.",
+          ),
+          "demo-pr-ysk1",
+          iso(t0 + 145_000),
         ),
         transcriptLineAssistantText(
           "Fixed and verified — 100/100 green. The loop now honors the configured retry budget. I committed the change on `demo/fix-flaky-upload` and opened a PR with the regression note in the description.\n\n" +

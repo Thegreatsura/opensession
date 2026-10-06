@@ -518,12 +518,13 @@ export async function handleWorkspaceRoutes(
             .filter((id): id is string => typeof id === "string" && !!id),
       );
       const openPrs = getOpenPrSummaries();
+      const defaultRepoId = defaultRepo().id;
       workspaces = workspaces.filter(
         (workspace) =>
           workspace.id === includeWorkspaceId ||
           activeWorkspaceIds.has(workspace.id) ||
           !!workspace.draft ||
-          workspaceBacksOpenPr(workspace, openPrs, defaultRepo().id),
+          workspaceBacksOpenPr(workspace, openPrs, defaultRepoId),
       );
     }
     return conditionalJsonResponse(

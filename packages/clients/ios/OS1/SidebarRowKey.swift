@@ -16,6 +16,23 @@ enum SidebarRowKeys {
         return id
     }
 
+    /// The key a row's per-user colour and Active-order entry are stored
+    /// under, as the web sidebar writes them.
+    ///
+    /// The Mac draws one row per session, so its row key is the session id,
+    /// while the web and the phone draw the workspace. A colour or a place in
+    /// the order is about the piece of work, so a Mac session row inside a
+    /// workspace reads and writes the workspace's key; otherwise a row
+    /// coloured in the browser would come up plain on the Mac.
+    static func sharedRowKey(for workspace: SidebarWorkspace) -> String {
+        if workspace.id.hasPrefix("session:"),
+           let workspaceId = workspace.mainSession.workspaceId,
+           !workspaceId.isEmpty {
+            return "workspace:\(workspaceId)"
+        }
+        return rowKey(for: workspace)
+    }
+
     /// Every row key a session can sit under. Used to clear an overlay entry
     /// (over-clearing is safe — it only ever restores a row) and to spot the
     /// hidden rows a blocked session should resurface.

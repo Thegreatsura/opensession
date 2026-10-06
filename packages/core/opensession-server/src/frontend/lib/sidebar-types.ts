@@ -243,6 +243,13 @@ export type CtxEntry =
       sessionId?: string;
     }
   | {
+      kind: "color";
+      /** The row's swatch key, or null when it has none. */
+      current: string | null;
+      /** A swatch key, or null to clear. */
+      onPick: (color: string | null) => void;
+    }
+  | {
       kind: "snooze";
       /** Active snooze expiry (ISO), or null when not snoozed. */
       until: string | null;

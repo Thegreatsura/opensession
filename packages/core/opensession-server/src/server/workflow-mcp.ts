@@ -57,6 +57,7 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { readFileSync } from "fs";
 import { filterMcpServers, STRIPE_CONFIRM_TOOLS } from "./runner-shared";
 import { WORKFLOW_LIMITS } from "./workflow-types";
+import { workloadCommand } from "./workload-scope";
 
 const HOME = homeDir();
 
@@ -259,8 +260,10 @@ export function workflowInProcessServers(
   carried: Record<string, unknown>,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const [name, cfg] of Object.entries(carried)) {
+  // Read only allowed names: `carried` may build each server on first read.
+  for (const name of Object.keys(carried)) {
     if (!WORKFLOW_INPROCESS_ALLOWED.has(name)) continue;
+    const cfg = carried[name];
     // Only the sdk shape can be mounted over an in-memory pair. A proxy
     // config (a detached host's stdio shim) would point back at this process
     // through a socket we have no token for, so it is skipped rather than
@@ -419,8 +422,11 @@ export function createWorkflowMcpHost(
     }
     await client.connect(
       new StdioClientTransport({
-        command: String(cfg.command),
-        args: (cfg.args || []).map(String),
+        ...workloadCommand(
+          String(cfg.command),
+          (cfg.args || []).map(String),
+          "mcp",
+        ),
         // The SDK's default environment is already a minimal safe set
         // (PATH/HOME/…); the server's own credentials come from its config
         // entry — never the server process's full secret-bearing env.

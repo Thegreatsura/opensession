@@ -15,6 +15,7 @@ import { startAnalyticsPrewarm } from "./src/server/analytics";
 import { startDiskGc } from "./src/server/disk-gc";
 import { installUnhandledRejectionGuard } from "./src/server/process-guards";
 import { startWorktreeReaper } from "./src/server/worktree-reaper";
+import { startMemoryRepoMaintenance } from "./src/server/memory-repo/maintenance";
 import { startPortalReaper } from "./src/server/portal-supervisor";
 import { startRunnerPortalReaper } from "./src/server/runner-portals";
 import { startTodoReminderTicker } from "./src/server/todos";
@@ -101,6 +102,8 @@ import {
 import { startGoalTicker } from "./src/server/goal-runner";
 import { startSessionHistoryIndexing } from "./src/server/session-index";
 import { startEventLoopLagMonitor } from "./src/server/system-stats";
+import { startGatewayProfilerSignal } from "./src/server/gateway-profiler";
+import { startDerivedCatalogRepair } from "./src/server/catalog-documents";
 import { ensureWarmTemplateScheduler } from "./src/server/warm-template";
 import { handleRunnerWsUpgrade } from "./src/server/runner-ws";
 import { handleSandboxPortalRelayUpgrade } from "./src/server/sandbox-portal-relay";
@@ -139,6 +142,7 @@ import {
 import { configureWebhookRoutes } from "./src/server/webhook-server";
 import { boatWebhookRoutes } from "./src/server/sandbox/boat-webhook";
 import { prImagePublicRoutes } from "./src/server/pr-images";
+import { mcpOauthPublicRoutes } from "./src/server/mcp-oauth";
 import {
   sessionHtmlWithSocialMeta,
   sessionSocialCardPublicRoutes,
@@ -384,7 +388,7 @@ const sessionSpaEntry = (() => {
     const session = id ? await findSessionAsync(id) : undefined;
     return new Response(
       session
-        ? sessionHtmlWithSocialMeta(bundle.indexHtml, session, pathname)
+        ? await sessionHtmlWithSocialMeta(bundle.indexHtml, session, pathname)
         : bundle.indexHtml,
       { headers: SPA_HEADERS },
     );
@@ -840,6 +844,9 @@ if (!g.__opensessionBooted) {
     for (const [key, handler] of sessionSocialCardPublicRoutes()) {
       webhookRoutes.set(key, handler);
     }
+    for (const [key, handler] of mcpOauthPublicRoutes()) {
+      webhookRoutes.set(key, handler);
+    }
     for (const [key, handler] of boatWebhookRoutes()) {
       webhookRoutes.set(key, handler);
     }
@@ -920,6 +927,10 @@ if (!g.__opensessionBooted) {
     // live Pi/actor run state, and reaping an old-but-running session is destructive.
     startWorktreeReaper(() => enrichSessionRuntime(getCachedSessions()));
 
+    // Memory repositories: one-time import from memory-v2, receive hooks for
+    // this release, Dreaming automations, remote sync (memory-repo/).
+    startMemoryRepoMaintenance();
+
     // Portal processes survive a coordinator restart by design. Reconcile their
     // durable owner records immediately and keep reaping deleted-session husks.
     startPortalReaper(getSessionListSnapshotAsync);
@@ -950,6 +961,12 @@ if (!g.__opensessionBooted) {
     // (system-stats.ts). The session-performance contract only measures the
     // client; this is the server-side counterpart.
     startEventLoopLagMonitor();
+    // `kill -USR1` samples this thread and writes what blocked it.
+    startGatewayProfilerSignal();
+
+    // Catalog projections imported by this boot get a one-time repair once
+    // the previous gateway has drained (catalog-documents.ts).
+    startDerivedCatalogRepair();
 
     // Re-try sidebar titles whose one-shot died in flight (a restart, or an
     // engine-spawn outage) — without this they stay raw forever.
@@ -965,10 +982,16 @@ if (!g.__opensessionBooted) {
   // Script runs (script-runs.ts) live in their own scopes and outlive this
   // process. Reattach to the ones recorded as running, settle the ones that
   // ended while it was down, and wake their sessions. Every boot mode: the
-  // registry is in this instance's own state dir.
-  void import("./src/server/script-runs")
-    .then((m) => m.startScriptRuns())
-    .catch((e) => console.error("[scripts] recovery failed:", e));
+  // registry is in this instance's own state dir. Scripted keychain runs
+  // (keychain-runs.ts) are script runs with credential relays.
+  // Keychain hooks first: a credential run that ended while this process
+  // was down settles its grants as it is reattached.
+  void (async () => {
+    const keychainRuns = await import("./src/server/keychain-runs");
+    keychainRuns.hookKeychainRuns();
+    await (await import("./src/server/script-runs")).startScriptRuns();
+    await keychainRuns.startKeychainRuns();
+  })().catch((e) => console.error("[scripts] recovery failed:", e));
 
   // code.storage-hosted repos: make sure existing main checkouts have the
   // URL-scoped credential helper wired, so ambient git fetch/push mints fresh
@@ -1171,7 +1194,7 @@ if (!g.__opensessionBooted) {
         } catch (error) {
           throw error;
         }
-        markInterruptedWorkflows();
+        await markInterruptedWorkflows();
         const recoveredWorkflows = await recoverInterruptedWorkflows();
         if (recoveredWorkflows.length)
           console.log(
@@ -1310,6 +1333,11 @@ if (!g.__opensessionBooted) {
     // instances skip it (nothing resumes them, and a snapshot must never
     // make the production boot try to wake dev sessions).
     if (!devInstance) snapshotActiveSessions();
+    // Script runs keep going; save their latest credential call counts so
+    // the next boot reattaches them with nothing lost.
+    void import("./src/server/script-runs")
+      .then((m) => m.flushScriptRuns())
+      .catch(() => {});
     const pausedWorkflows = pauseWorkflowsForShutdown();
     if (pausedWorkflows)
       console.log(

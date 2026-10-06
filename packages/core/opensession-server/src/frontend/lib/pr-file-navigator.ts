@@ -20,8 +20,21 @@ export function filterReviewFiles(
 export function reviewFileDecoration(
   path: string,
   reviewedFiles?: ReadonlySet<string>,
+  changedFiles?: ReadonlySet<string>,
 ): { text: string; title: string } | null {
-  return reviewedFiles?.has(path) ? { text: "✓", title: "Reviewed" } : null;
+  if (reviewedFiles?.has(path)) return { text: "✓", title: "Reviewed" };
+  if (changedFiles?.has(path))
+    return { text: "changed", title: "Changed since you reviewed it" };
+  return null;
+}
+
+/** Every changed file under a folder in the tree. */
+export function filesInFolder(
+  paths: readonly string[],
+  folder: string,
+): string[] {
+  const prefix = folder.endsWith("/") ? folder : `${folder}/`;
+  return paths.filter((path) => path.startsWith(prefix));
 }
 
 /** Selection is visual only: never focuses, scrolls, or opens the diff. */

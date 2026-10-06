@@ -155,6 +155,40 @@ describe("MCP OAuth resource discovery", () => {
     },
   );
 
+  test("accepts origin-wide resource metadata for a path endpoint", async () => {
+    // GET on the endpoint is not a 401, there is no path-inserted document,
+    // and the origin-root document names the origin as the resource.
+    const authkit = "https://authkit.example.test";
+    responses.set(resource, () => new Response(null, { status: 405 }));
+    responses.delete(inserted);
+    responses.set(root, () =>
+      Response.json({
+        resource: "https://mcp.example.test",
+        authorization_servers: [authkit],
+        scopes_supported: ["openid", "offline_access"],
+      }),
+    );
+    responses.set(`${authkit}/.well-known/oauth-authorization-server`, () =>
+      Response.json({
+        issuer: authkit,
+        authorization_endpoint: `${authkit}/oauth2/authorize`,
+        token_endpoint: `${authkit}/oauth2/token`,
+        registration_endpoint: `${authkit}/oauth2/register`,
+      }),
+    );
+    responses.set(`${authkit}/oauth2/register`, () =>
+      Response.json({ client_id: "acme-origin-client" }),
+    );
+    expect(await discoverMcpOauth(resource)).toMatchObject({
+      resource: "https://mcp.example.test",
+      endpoints: { token: `${authkit}/oauth2/token` },
+    });
+    const { url } = await startMcpOauthFlow("origin-resource", resource);
+    expect(new URL(url).searchParams.get("resource")).toBe(
+      "https://mcp.example.test",
+    );
+  });
+
   test("accepts a trailing root slash in the guessed legacy issuer", async () => {
     responses.delete(inserted);
     responses.set(
@@ -399,6 +433,9 @@ describe("MCP OAuth resource discovery", () => {
 
   test.each([
     { ...pr, resource: "https://mcp.example.test/other" },
+    { ...pr, resource: "https://mcp.example.test/mc" },
+    { ...pr, resource: "https://mcp.example.test/?tenant=other" },
+    { ...pr, resource: "http://mcp.example.test" },
     { ...pr, resource: `${resource}/` },
     { ...pr, resource: `${resource}?tenant=other` },
     { ...pr, resource: "https://other.example.test/mcp" },

@@ -237,6 +237,9 @@ export interface Automation {
    * person claims it. Read it through {@link automationOwner}.
    */
   owner?: string;
+  /** Set on the built-in Dreaming automations (memory-repo/dreaming.ts):
+   *  the one memory repository this automation consolidates. */
+  memoryDreaming?: { repo: string };
   /**
    * Workspace this automation files under. The automation belongs to the
    * workspace; its RUNS stay in the Automations band rather than becoming
@@ -1302,6 +1305,50 @@ export function automationWorkflowSessionPolicy(
   };
 }
 
+/**
+ * Repo-mode memory for automation runs: search plus file tools that commit
+ * through the memory service (an unattended run's shell may not push).
+ * Dreaming automations also read past sessions through opensession-search.
+ */
+interface AutomationMemoryServers {
+  memory: unknown;
+  /** Dreaming only: past sessions to review. */
+  search?: unknown;
+}
+
+async function automationMemoryMcp(
+  a: Automation,
+  sessionId: string,
+): Promise<AutomationMemoryServers | undefined> {
+  const { memoryRolloutMode } = await import("./memory-v2");
+  if (memoryRolloutMode() !== "repo") return undefined;
+  const { createRepoMemoryMcpServer } = await import("./memory-repo/tools");
+  const { sessionLink } = await import("./run-instructions");
+  let scopeKeys: string[];
+  if (a.memoryDreaming) {
+    const { dreamingScopeKeys } = await import("./memory-repo/dreaming");
+    scopeKeys = await dreamingScopeKeys(a.memoryDreaming.repo);
+  } else {
+    const { sessionMemoryScopes } = await import("./session-memory");
+    scopeKeys = sessionMemoryScopes({
+      repos: [getRepo(a.repo).id],
+      includeTeam: !a.slackWatch,
+    }).map((scope) => scope.key);
+    if (a.slackWatch) scopeKeys.push(`channel-${a.slackWatch.channel}`);
+  }
+  const memory = createRepoMemoryMcpServer({
+    scopeKeys: () => scopeKeys,
+    sessionId,
+    sessionLink: sessionLink(sessionId),
+    author: `${a.name} (automation)`,
+    fileTools: () => true,
+  });
+  if (!a.memoryDreaming) return { memory };
+  const { createSearchMcpServer } =
+    await import("../agents/slack/search-tools");
+  return { memory, search: createSearchMcpServer() };
+}
+
 export async function automationRunMcpForSession(
   session: {
     automation?: string;
@@ -1318,6 +1365,7 @@ export async function automationRunMcpForSession(
   const servers: Record<string, unknown> = {
     ...automationBaselineMcpServers(a, sessionId),
     ...incidentDeclarerMcp(a, session.automationEvent),
+    ...memoryServerEntries(await automationMemoryMcp(a, sessionId)),
   };
   if (a.workflows) {
     const cwd = session.worktreeDir || getRepo(a.repo).repo;
@@ -1371,11 +1419,22 @@ function automationRunInProcessMcp(
     model: () => string | undefined;
     /** The run's triggering event payload (scopes opensession-incident). */
     eventContext?: string;
+    /** Repo-mode memory servers (automationMemoryMcp), built ahead because
+     *  they are async. */
+    memory?: AutomationMemoryServers;
   },
 ): Record<string, unknown> {
   return {
     ...automationBaselineMcpServers(a, sessionId),
     ...incidentDeclarerMcp(a, ctx.eventContext),
+    ...(ctx.memory
+      ? {
+          "opensession-memory": ctx.memory.memory,
+          ...(ctx.memory.search
+            ? { "opensession-search": ctx.memory.search }
+            : {}),
+        }
+      : {}),
     ...(papercutsEnabledForRepo(ctx.repoId)
       ? {
           "opensession-papercuts": createPapercutsMcpServer({
@@ -1437,6 +1496,7 @@ export async function automationResumeMcpForSession(
     cwd: session.worktreeDir || repo.repo,
     model: () => session.model,
     eventContext: session.automationEvent,
+    memory: await automationMemoryMcp(a, sessionId),
   });
 }
 
@@ -1879,6 +1939,76 @@ export async function resumePendingAutomationRuns(
   return resumed;
 }
 
+class SkipLegacyMemory extends Error {}
+
+function memoryServerEntries(
+  servers: AutomationMemoryServers | undefined,
+): Record<string, unknown> {
+  if (!servers) return {};
+  const entries: Record<string, unknown> = {
+    "opensession-memory": servers.memory,
+  };
+  if (servers.search) entries["opensession-search"] = servers.search;
+  return entries;
+}
+
+/**
+ * Repo-mode memory for an automation run: the same checkouts and loop as an
+ * interactive run (Cognition's model; automations write memory too). A
+ * Dreaming automation sees exactly its own repository and gets the recent
+ * sessions to review.
+ */
+async function automationRepoMemory(
+  automation: Automation,
+  sessionId: string,
+  opts: { scopeKeys: string[]; primaryRepoKey?: string; query: string },
+): Promise<string> {
+  const {
+    prepareSessionMemory,
+    renderRepoMemoryNote,
+    retrieveRepoMemoryForPrompt,
+  } = await import("./memory-repo/session");
+  const { sessionLink } = await import("./run-instructions");
+  const dreaming = automation.memoryDreaming?.repo;
+  const owner = dreaming?.startsWith("user-")
+    ? automation.owner || undefined
+    : undefined;
+  let scopeKeys = opts.scopeKeys;
+  if (dreaming) {
+    const { dreamingScopeKeys } = await import("./memory-repo/dreaming");
+    scopeKeys = await dreamingScopeKeys(dreaming);
+  } else if (automation.slackWatch) {
+    scopeKeys = [...scopeKeys, `channel-${automation.slackWatch.channel}`];
+  }
+  const prepared = await prepareSessionMemory({
+    sessionId,
+    scopeKeys,
+    user: owner,
+    remote: !!automation.sandbox,
+  });
+  const parts = [
+    await renderRepoMemoryNote({
+      scopeKeys,
+      prepared,
+      user: owner,
+      sessionLink: sessionLink(sessionId),
+      tools: true,
+    }),
+  ];
+  if (dreaming) {
+    const { dreamingContext } = await import("./memory-repo/dreaming");
+    parts.push(await dreamingContext(dreaming, automation, prepared));
+  } else {
+    const retrieved = await retrieveRepoMemoryForPrompt(
+      opts.query,
+      scopeKeys,
+      opts.primaryRepoKey,
+    );
+    if (retrieved.text) parts.push(retrieved.text);
+  }
+  return `\n\n${parts.filter(Boolean).join("\n\n")}`;
+}
+
 export async function runAutomation(
   automation: Automation,
   onSessionCreated?: (sessionId: string) => void,
@@ -2102,19 +2232,26 @@ export async function runAutomation(
         repos: [getRepo(automation.repo).id],
         includeTeam: !automation.slackWatch,
       });
-      const { memoryRolloutMode, retrieveMemoryForPrompt } =
+      const { memoryRolloutMode, retrieveMemoryForPrompt, v2IsRecord } =
         await import("./memory-v2");
       const mode = memoryRolloutMode();
-      const note =
-        mode === "v2"
-          ? (
-              await retrieveMemoryForPrompt(memoryQuery, {
-                scopeKeys: scopes.map((scope) => scope.key),
-                primaryRepoKey: scopes.find((scope) => scope.kind === "repo")
-                  ?.key,
-              })
-            ).text
-          : await renderSessionMemoryNote(scopes);
+      if (mode === "repo") {
+        prompt += await automationRepoMemory(automation, bksId, {
+          scopeKeys: scopes.map((scope) => scope.key),
+          primaryRepoKey: scopes.find((scope) => scope.kind === "repo")?.key,
+          query: memoryQuery,
+        });
+        throw new SkipLegacyMemory();
+      }
+      const note = v2IsRecord(mode)
+        ? (
+            await retrieveMemoryForPrompt(memoryQuery, {
+              scopeKeys: scopes.map((scope) => scope.key),
+              primaryRepoKey: scopes.find((scope) => scope.kind === "repo")
+                ?.key,
+            })
+          ).text
+        : await renderSessionMemoryNote(scopes);
       if (mode === "shadow") {
         void retrieveMemoryForPrompt(memoryQuery, {
           scopeKeys: scopes.map((scope) => scope.key),
@@ -2122,7 +2259,10 @@ export async function runAutomation(
         }).catch(() => {});
       }
       if (note) prompt += `\n\n${note}`;
-    } catch {}
+    } catch (error) {
+      if (!(error instanceof SkipLegacyMemory))
+        console.warn("[automations] memory note failed:", error);
+    }
 
     // Tie the session to its Plain thread (if the event carries one) so it
     // can be archived when the ticket is done, and use the ticket's
@@ -2279,6 +2419,7 @@ export async function runAutomation(
       cwd,
       model: () => effectiveModel,
       eventContext: options?.eventContext,
+      memory: await automationMemoryMcp(automation, bksId),
     });
     registerSessionMcpServers(bksId, inProcessMcp);
 

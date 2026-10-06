@@ -24,6 +24,10 @@ const TOKEN_CONNECT_URL_VALUES = {
     url: "https://help.getvero.com/vero-ai/mcp-authentication",
     label: "Vero's MCP authentication guide",
   },
+  oneleet: {
+    url: "https://docs.oneleet.com/api-and-mcp/connecting-ai-assistants-with-oauth/",
+    label: "Oneleet's MCP connection guide",
+  },
 } satisfies Readonly<Record<string, { url: string; label: string }>>;
 
 export const TOKEN_CONNECT_URLS = Object.fromEntries(

@@ -13,7 +13,7 @@ import type { FilterState } from "./sidebar-filter";
 import { fuzzyMatch } from "../../shared/fuzzy-match";
 import { includesEmptyRepoBands, sessionRepo } from "./sidebar-filter";
 import { mergeRepoOrder, normalizeRepoOrder } from "./repo-order";
-import { ownerKeyOf, sessionOwners } from "./session-owner";
+import { ownerKey, ownerKeyOf, sessionOwners } from "./session-owner";
 import { personNameForKey } from "./people";
 import { sessionSharesSelectedSidebarGroup } from "./sidebar-workspaces";
 import {
@@ -304,12 +304,28 @@ export function filterSidebarSessions({
     filter.person !== "everyone" &&
     filter.person !== "unassigned"
   ) {
+    // A teammate's session in a workspace the person created or collaborates
+    // on stays: the row is theirs, the same as in their own Me lens.
+    const person = filter.person;
+    const personWorkspaceIds = new Set(
+      workspaces
+        .filter(
+          (workspace) =>
+            ownerKey(workspace.createdBy, canonicalNames) === person ||
+            workspace.collaborators?.some(
+              (collaborator) =>
+                ownerKey(collaborator.name, canonicalNames) === person,
+            ),
+        )
+        .map((workspace) => workspace.id),
+    );
     visible = visible.filter(
       (session) =>
         belongsToSelection(session) ||
         !!session.automation ||
-        (!!session.startedBy &&
-          ownerKeyOf(session, canonicalNames) === filter.person),
+        (!!session.workspaceId &&
+          personWorkspaceIds.has(session.workspaceId)) ||
+        (!!session.startedBy && ownerKeyOf(session, canonicalNames) === person),
     );
   }
 
@@ -427,6 +443,38 @@ export function rowHasCollaborator(row: WsRow, person: string): boolean {
   );
 }
 
+// Whether a row files under `person`'s own lanes: they own it, started it, collaborate on it,
+// or (for the viewer) it mentions them or they claimed it. The sidebar's
+// person lens and the row menu's Keep/Hide choice both read this, so the menu
+// offers Hide exactly for the rows your own sidebar already holds.
+export function rowBelongsToPerson(
+  row: WsRow,
+  person: string,
+  {
+    currentUser,
+    isClaimed,
+    showAutoCreated = true,
+  }: {
+    currentUser: string;
+    isClaimed: (session: UnifiedSession) => boolean;
+    showAutoCreated?: boolean;
+  },
+): boolean {
+  const focus = person.toLowerCase();
+  const viewer = focus === currentUser.toLowerCase();
+  return (
+    (row.owner === focus && (showAutoCreated || !rowWasAutoCreated(row))) ||
+    rowHasCollaborator(row, focus) ||
+    (!!row.mention && viewer) ||
+    row.sessions.some(
+      (session) =>
+        !session.automation &&
+        (session.startedBy || "").toLowerCase() === focus,
+    ) ||
+    ((row.owner === "" || viewer) && row.sessions.some(isClaimed))
+  );
+}
+
 interface DeriveWorkspacePlacementInput {
   rows: WsRow[];
   filter: FilterState;
@@ -456,17 +504,11 @@ export function deriveWorkspacePlacement({
       (showAutoCreated && rowAutoCreatedInLens(row, filter.person)) ||
       (focus === "unassigned"
         ? row.status === "pending"
-        : (row.owner === focus &&
-            (showAutoCreated || !rowWasAutoCreated(row))) ||
-          rowHasCollaborator(row, focus) ||
-          (!!row.mention && focus === currentUser.toLowerCase()) ||
-          row.sessions.some(
-            (session) =>
-              !session.automation &&
-              (session.startedBy || "").toLowerCase() === focus,
-          ) ||
-          ((row.owner === "" || focus === currentUser.toLowerCase()) &&
-            row.sessions.some(isClaimed)))) &&
+        : rowBelongsToPerson(row, focus, {
+            currentUser,
+            isClaimed,
+            showAutoCreated,
+          }))) &&
     (!workspaceRowIsFeedOnly(row, feedRefKinds) ||
       row.running ||
       row.status === "needsinput");

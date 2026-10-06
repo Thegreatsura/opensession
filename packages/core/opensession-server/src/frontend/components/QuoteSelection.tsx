@@ -1,6 +1,7 @@
 import React, {
   useCallback,
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useRef,
   useState,
@@ -16,8 +17,10 @@ import {
   type OfferPlacement,
 } from "../lib/quote-offer";
 import { Button } from "../ui/button";
+import { cn } from "../ui/cn";
 import { duration, ease } from "../ui/motion";
-import { IconBrowserTab, IconCursor } from "./icons";
+import { matchesShortcut } from "../lib/shortcuts";
+import { IconBrowserTab, IconCursor, IconMessage } from "./icons";
 
 interface Props {
   /** The region whose text can be quoted: the transcript scroller. */
@@ -33,8 +36,12 @@ interface Props {
   /** Focuses the composer: after a passage is added, and when typing or
    *  pasting outside the composer indicates input intent. */
   onInputIntent?: () => HTMLTextAreaElement | null;
-  /** Read-only viewers (no composer to carry the quote into) pass true. */
+  /** Read-only viewers (no composer to carry the quote into) pass true.
+   *  They can still comment when `onComment` is set. */
   disabled?: boolean;
+  /** Starts an inline comment thread on the selected passage. Returns false
+   *  when the passage can't take one (it spans two messages). */
+  onComment?: (range: Range) => boolean;
 }
 
 /** Registry name for the staged passage's own highlight. See base.css. */
@@ -77,7 +84,11 @@ export function QuoteSelection({
   onClear,
   onInputIntent,
   disabled,
+  onComment,
 }: Props) {
+  // Quoting needs a composer; commenting does not.
+  const quoting = !disabled;
+  const inert = disabled && !onComment;
   const stagedRef = useRef<Range | null>(null);
   const offerRangeRef = useRef<Range | null>(null);
   const actionsRef = useRef<HTMLDivElement>(null);
@@ -131,7 +142,7 @@ export function QuoteSelection({
   );
 
   const capture = useCallback(() => {
-    if (!containerRef.current || disabled) return;
+    if (!containerRef.current || inert) return;
     const selection = window.getSelection();
     if (
       !selection ||
@@ -143,7 +154,7 @@ export function QuoteSelection({
     }
     const selected = readSelection();
     if (selected) offerSelection(selected);
-  }, [containerRef, disabled, readSelection, offerSelection]);
+  }, [containerRef, inert, readSelection, offerSelection]);
 
   const add = () => {
     const range = offerRangeRef.current;
@@ -155,6 +166,14 @@ export function QuoteSelection({
     onInputIntent?.();
   };
 
+  const comment = () => {
+    const range = offerRangeRef.current;
+    if (!range || !onComment) return;
+    if (!onComment(range.cloneRange())) return;
+    window.getSelection()?.removeAllRanges();
+    setOffer(null);
+  };
+
   const startNewChat = () => {
     if (!offer) return;
     window.getSelection()?.removeAllRanges();
@@ -163,7 +182,7 @@ export function QuoteSelection({
   };
 
   useEffect(() => {
-    if (disabled) return;
+    if (inert) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const settle = (event: Event) => {
       if (event instanceof MouseEvent || event instanceof TouchEvent) {
@@ -194,7 +213,7 @@ export function QuoteSelection({
       document.removeEventListener("keyup", settle);
       clearTimeout(timer);
     };
-  }, [capture, containerRef, disabled]);
+  }, [capture, containerRef, inert]);
 
   // Measured, not guessed: the pill's width decides whether it fits beside a
   // passage that ends near the right edge, and its own label is what sets
@@ -238,6 +257,19 @@ export function QuoteSelection({
       window.removeEventListener("resize", follow);
     };
   }, [offered, containerRef]);
+
+  // The comment shortcut acts on the offered passage, like the pill's button.
+  const commentFromKey = useEffectEvent(() => comment());
+  useEffect(() => {
+    if (!offered || !onComment) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!matchesShortcut(event, "transcript-comment")) return;
+      event.preventDefault();
+      commentFromKey();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [offered, onComment]);
 
   // Any press that isn't on the pill withdraws the offer: it is either the
   // start of a new selection (which offers itself on release) or a decision
@@ -388,24 +420,42 @@ export function QuoteSelection({
       // the passage stays visibly selected right up to the click.
       onMouseDown={(event) => event.preventDefault()}
     >
-      <Button
-        variant="ghost"
-        size="md"
-        icon={<IconCursor size={20} />}
-        onClick={add}
-        className="rounded-none text-fg hover:text-fg focus-visible:z-[1]"
-      >
-        Add to chat
-      </Button>
-      <Button
-        variant="ghost"
-        size="md"
-        icon={<IconBrowserTab size={20} />}
-        onClick={startNewChat}
-        className="rounded-none border-l-line-strong text-fg hover:text-fg focus-visible:z-[1]"
-      >
-        Start new chat
-      </Button>
+      {quoting && (
+        <Button
+          variant="ghost"
+          size="md"
+          icon={<IconCursor size={20} />}
+          onClick={add}
+          className="rounded-none text-fg hover:text-fg focus-visible:z-[1]"
+        >
+          Add to chat
+        </Button>
+      )}
+      {onComment && (
+        <Button
+          variant="ghost"
+          size="md"
+          icon={<IconMessage size={20} />}
+          onClick={comment}
+          className={cn(
+            "rounded-none text-fg hover:text-fg focus-visible:z-[1]",
+            quoting && "border-l-line-strong",
+          )}
+        >
+          Comment
+        </Button>
+      )}
+      {quoting && (
+        <Button
+          variant="ghost"
+          size="md"
+          icon={<IconBrowserTab size={20} />}
+          onClick={startNewChat}
+          className="rounded-none border-l-line-strong text-fg hover:text-fg focus-visible:z-[1]"
+        >
+          Start new chat
+        </Button>
+      )}
     </motion.div>,
     document.body,
   );

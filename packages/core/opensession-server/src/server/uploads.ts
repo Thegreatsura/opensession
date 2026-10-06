@@ -141,8 +141,9 @@ function readStagedImage(url: string): ImageInput | undefined {
 
 export const UPLOADS_DIR = `${SESSIONS_DIR}/uploads`;
 // The HTTP endpoint stages here — a brand-new session has no session id yet, so the
-// reference is resolved back (and validated) at send time.
-const STAGED_UPLOADS_DIR = `${UPLOADS_DIR}/staged`;
+// reference is resolved back (and validated) at send time. Other ingresses that
+// hand a run a file by {name, path} reference (Slack) stage here too.
+export const STAGED_UPLOADS_DIR = `${UPLOADS_DIR}/staged`;
 const MAX_CREATION_ATTACHMENTS = 32;
 // The reverse of INLINE_IMAGE_EXTENSIONS, for reading a staged image back off
 // disk. Deliberately the same four types: a staged ref carries no media type of

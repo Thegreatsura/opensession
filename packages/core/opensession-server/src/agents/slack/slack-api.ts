@@ -9,8 +9,10 @@ import { MAX_PROMPT_IMAGES } from "@tellahq/opensession-protocol/session";
 import { fetchWithTimeout } from "../../server/shared/fetch-with-timeout";
 import { personaName } from "../../server/config";
 import type { ImageInput } from "../../server/run-events";
-import { readFile, stat } from "node:fs/promises";
-import { basename } from "path";
+import { sanitizeAttachmentName } from "../../server/prompt-attachments";
+import { mkdir, readFile, rm, stat } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { basename, join } from "path";
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 export const MAX_SLACK_UPLOAD_BYTES = 20 * 1024 * 1024;
@@ -23,8 +25,8 @@ export const MAX_SLACK_UPLOAD_BYTES = 20 * 1024 * 1024;
  * A file attached to a Slack message. Queued messages carry these small refs
  * (id/name/url — never the bytes, so the persisted queue stays tiny) and the
  * actual download happens right before the run starts, so images land in the
- * opening prompt as native image parts instead of the agent having to fetch
- * them afterwards.
+ * opening prompt as native image parts and other files reach the run on disk,
+ * instead of the agent having to fetch them afterwards.
  */
 export interface SlackFileRef {
   id: string;
@@ -49,22 +51,51 @@ export function slackFileRefs(files: any[] | undefined): SlackFileRef[] {
 
 // Anthropic caps images at 5MB; stay under it, and bound the total payload.
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+/** Largest non-image attachment downloaded for a run (a contract PDF, a
+ *  spreadsheet). The same cap a composer upload read whole has. */
+export const MAX_SLACK_FILE_BYTES = 50 * 1024 * 1024;
+
+export interface SlackAttachments {
+  images: ImageInput[];
+  /** Non-image files on disk, as the {name, path} refs a composer upload
+   *  produces, so a run receives them the same way. */
+  files: { name: string; path: string }[];
+  note: string;
+}
 
 /**
- * Download the image attachments among `files` (bot-token auth) and return
- * them as prompt-ready image parts, plus a prompt note listing every
- * attachment — including non-images and anything skipped, so the agent knows
- * what else came with the message.
+ * Download the attachments among `files` (bot-token auth). Images become
+ * prompt-ready image parts; any other file is streamed to its own directory
+ * under `fileDir` and returned as a file ref, so a PDF or document reaches the
+ * run by path instead of being dropped. The note lists every attachment,
+ * including anything skipped, so the agent knows what came with the message.
+ * Without `fileDir`, non-image files are only listed.
  */
-export async function downloadSlackImages(
+export async function downloadSlackAttachments(
   files: SlackFileRef[],
-): Promise<{ images: ImageInput[]; note: string }> {
+  fileDir?: string,
+): Promise<SlackAttachments> {
   const images: ImageInput[] = [];
+  const staged: { name: string; path: string }[] = [];
   const lines: string[] = [];
   for (const f of files) {
-    const isImage = f.mimetype.startsWith("image/");
-    if (!isImage) {
-      lines.push(`- ${f.name} (${f.mimetype || "unknown type"}) — not inlined`);
+    const type = f.mimetype || "unknown type";
+    if (!f.mimetype.startsWith("image/")) {
+      if (!fileDir) {
+        lines.push(`- ${f.name} (${type}) — not inlined`);
+        continue;
+      }
+      if (f.size > MAX_SLACK_FILE_BYTES) {
+        lines.push(`- ${f.name} (${type}) — skipped, too large to download`);
+        continue;
+      }
+      try {
+        staged.push(await downloadSlackFile(f, fileDir));
+        lines.push(`- ${f.name} (${type}) — saved to disk, path below`);
+      } catch (e) {
+        console.warn(`[slack] Failed to download attachment ${f.name}:`, e);
+        lines.push(`- ${f.name} (${type}) — download failed`);
+      }
       continue;
     }
     if (images.length >= MAX_PROMPT_IMAGES) {
@@ -76,15 +107,8 @@ export async function downloadSlackImages(
       continue;
     }
     try {
-      const resp = await fetchWithTimeout(f.url, {
-        headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` },
-      });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const resp = await fetchSlackFile(f);
       const buf = await resp.arrayBuffer();
-      // Slack serves an HTML login page (not the file) when auth fails — a
-      // real image is never text/html.
-      const ct = resp.headers.get("content-type") || "";
-      if (ct.includes("text/html")) throw new Error("auth redirect");
       if (buf.byteLength > MAX_IMAGE_BYTES) throw new Error("too large");
       images.push({
         mediaType: f.mimetype,
@@ -97,7 +121,42 @@ export async function downloadSlackImages(
     }
   }
   const note = lines.length ? `Attached files:\n${lines.join("\n")}` : "";
-  return { images, note };
+  return { images, files: staged, note };
+}
+
+async function fetchSlackFile(f: SlackFileRef): Promise<Response> {
+  const resp = await fetchWithTimeout(f.url, {
+    headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` },
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  // Slack serves an HTML login page (not the file) when auth fails. A real
+  // HTML attachment is reported as text/html by Slack itself, so only treat
+  // HTML as a login page when the file was not supposed to be HTML.
+  const ct = resp.headers.get("content-type") || "";
+  if (ct.includes("text/html") && !f.mimetype.includes("html"))
+    throw new Error("auth redirect");
+  return resp;
+}
+
+/** Stream one file to `<fileDir>/slack-<file id>/<name>`. Keyed by the Slack
+ *  file id, so a retried delivery rewrites the same path. */
+async function downloadSlackFile(
+  f: SlackFileRef,
+  fileDir: string,
+): Promise<{ name: string; path: string }> {
+  const resp = await fetchSlackFile(f);
+  const dir = join(
+    fileDir,
+    `slack-${sanitizeAttachmentName(f.id || randomUUID())}`,
+  );
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, sanitizeAttachmentName(f.name));
+  const written = await Bun.write(path, resp);
+  if (written === 0 || written > MAX_SLACK_FILE_BYTES) {
+    await rm(dir, { recursive: true, force: true });
+    throw new Error(written ? "too large" : "empty file");
+  }
+  return { name: f.name, path };
 }
 
 // ---------------------------------------------------------------------------

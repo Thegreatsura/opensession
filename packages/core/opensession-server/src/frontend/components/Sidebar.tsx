@@ -73,7 +73,8 @@ import {
   setFilter,
   useSidebarFilter,
 } from "../lib/sidebar-filter";
-import { sortInboxByCreation } from "../lib/sidebar-inbox";
+import { sortActiveRows } from "../lib/active-order";
+import { useActiveRowDrag } from "../hooks/useActiveRowDrag";
 import { useSidebarInventory } from "../lib/sidebar-inventory";
 import { isClaimed } from "../lib/sidebar-lanes";
 import { nextRenderedSidebarItem } from "../lib/sidebar-next";
@@ -125,7 +126,8 @@ import { cn } from "../ui/cn";
 import { useConfirm } from "../ui/confirm";
 import { ContextMenu } from "../ui/menu";
 import { EmptyState, ListSkeleton } from "../ui/state";
-import { IconFilter, IconMessages } from "./icons";
+import { IconDotsHorizontal, IconMessages } from "./icons";
+import { AddRepositoryDialog } from "./SetupRepos";
 import { PrRow } from "./PrRow";
 import { AutomationsBand } from "./sidebar/AutomationsBand";
 import { DraftRow } from "./sidebar/DraftRow";
@@ -220,6 +222,7 @@ export const Sidebar = React.forwardRef<SidebarHandle, Props>(function Sidebar(
     togglePinnedKeys,
     createPinnedDrag,
   } = useSidebarDnd({ onSetStatus });
+  const activeDrag = useActiveRowDrag(isPhone);
   // Per-user workspace snoozes (row key → ISO until). An overlay like pins:
   // actively-snoozed rows park in the Snoozed section; the wake sweep below
   // prunes lapsed entries and marks their rows unread.
@@ -262,6 +265,7 @@ export const Sidebar = React.forwardRef<SidebarHandle, Props>(function Sidebar(
   // a face picked there is the sidebar you come back to.
   const filter = useSidebarFilter();
   const [filterOpen, setFilterOpen] = useState(false);
+  const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [filterButton, setFilterButton] = useState<HTMLButtonElement | null>(
     null,
@@ -643,9 +647,10 @@ export const Sidebar = React.forwardRef<SidebarHandle, Props>(function Sidebar(
 
   // ── Inbox rows ──────────────────────────────────────────────────────────
   // Snoozed rows already left `focusWsRows` through placement. The remaining
-  // inbox stays stable by creation time. Pinned is an orthogonal quick-access
-  // facet, so a pinned row still keeps its primary Active/status placement.
-  const activeFocusWsRows = sortInboxByCreation(focusWsRows);
+  // inbox stays stable: creation time, newest first, until you drag rows into
+  // your own order. Pinned is an orthogonal quick-access facet, so a pinned
+  // row still keeps its primary Active/status placement.
+  const activeFocusWsRows = sortActiveRows(focusWsRows, activeDrag.order);
   // ── PR rows in the project lanes ────────────────────────────────────────
   // The retired standalone Pull-requests band dissolved into the project
   // groups: every open PR classifies into a lane (ready → Ready to merge,
@@ -961,6 +966,7 @@ export const Sidebar = React.forwardRef<SidebarHandle, Props>(function Sidebar(
     renderWsRow,
     renderWsRowImpl,
     rowIsSnoozed,
+    rowColors,
     toggleWorkspaceSnooze,
     workspaceOverlays,
   } = useSidebarWorkspaceController({
@@ -1009,6 +1015,8 @@ export const Sidebar = React.forwardRef<SidebarHandle, Props>(function Sidebar(
       workspacePinState,
       togglePinnedKeys,
       togglePinKey,
+      liftActiveRow: activeDrag.liftActiveRow,
+      endActiveLift: activeDrag.endActiveLift,
     },
     actions: {
       confirmDeleteDraft,
@@ -1053,6 +1061,7 @@ export const Sidebar = React.forwardRef<SidebarHandle, Props>(function Sidebar(
       groupBy: filter.groupBy,
       pinDragMeta,
       laneDropHover,
+      activeDrag,
       isOpen,
       onToggleGroup: toggleGroup,
       ownsSelection: rowOwnsSelection,
@@ -1138,12 +1147,23 @@ export const Sidebar = React.forwardRef<SidebarHandle, Props>(function Sidebar(
     const rowSessionIds = new Set(
       wsRows.flatMap((r) => r.sessions.map((c) => c.id)),
     );
-    const pinnedLoose = pins
+    const loosePinIds = pins
       .filter((e) => !e.startsWith("workspace:"))
-      .filter((id) => !rowSessionIds.has(id))
-      .map((id) =>
-        sessions.find((s) => s.id === id || s.aliasIds?.includes(id)),
-      )
+      .filter((id) => !rowSessionIds.has(id));
+    // One pass over the sessions, not one per pin: stale pins never match
+    // and would each scan the whole list, on every sidebar render.
+    const sessionByPinId = new Map<string, UnifiedSession>();
+    if (loosePinIds.length > 0) {
+      const wanted = new Set(loosePinIds);
+      for (const s of sessions) {
+        for (const id of [s.id, ...(s.aliasIds ?? [])]) {
+          if (wanted.has(id) && !sessionByPinId.has(id))
+            sessionByPinId.set(id, s);
+        }
+      }
+    }
+    const pinnedLoose = loosePinIds
+      .map((id) => sessionByPinId.get(id))
       // An archived session must never surface in Pinned — its pin is
       // stale (archiving drops it server-side, but a resurrected or
       // legacy pin can still point at it). Skip it so it can't render
@@ -1450,9 +1470,9 @@ export const Sidebar = React.forwardRef<SidebarHandle, Props>(function Sidebar(
                     ref={setMobileFilterButton}
                     className={mobileFilterBtn(filterOpen)}
                     onClick={() => setFilterOpen((o) => !o)}
-                    aria-label="Group, filter & sort"
+                    aria-label="Workspace options"
                   >
-                    <IconFilter size={22} />
+                    <IconDotsHorizontal size={22} />
                   </button>
                 </>,
                 headerActionsEl,
@@ -1471,8 +1491,16 @@ export const Sidebar = React.forwardRef<SidebarHandle, Props>(function Sidebar(
                   setFilterOpen(false);
                   setCustomizeOpen(true);
                 }}
+                onAddProject={() => {
+                  setFilterOpen(false);
+                  setAddProjectOpen(true);
+                }}
               />
             )}
+            <AddRepositoryDialog
+              open={addProjectOpen}
+              onOpenChange={setAddProjectOpen}
+            />
 
             {workspaceMenu && (
               <WorkspaceContextMenu
@@ -1484,6 +1512,7 @@ export const Sidebar = React.forwardRef<SidebarHandle, Props>(function Sidebar(
                 activeSnoozeKeys={activeSnoozeKeys}
                 snoozes={snoozes}
                 hiddenRowKeys={hiddenRowKeys}
+                rowColors={rowColors}
                 onPinsChange={replacePins}
                 onSetStatus={onSetStatus}
                 onSnooze={(row, until) =>

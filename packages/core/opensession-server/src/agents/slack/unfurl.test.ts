@@ -20,6 +20,7 @@ process.env.OPENSESSION_SESSION_CARD_SECRET =
 const { cardTitle, handleLinkShared, unfurlForSession } =
   await import("./unfurl");
 const { UPLOADS_DIR } = await import("../../server/uploads");
+const { createWorkspace } = await import("../../server/workspaces");
 mkdirSync(UPLOADS_DIR, { recursive: true });
 const uploadsDir = mkdtempSync(join(UPLOADS_DIR, "unfurl-tests-"));
 const screenshot = join(uploadsDir, "screenshot.png");
@@ -227,27 +228,35 @@ function session(patch: Partial<UnifiedSession>): UnifiedSession {
 }
 
 describe("cardTitle", () => {
-  test("uses the session title even when it belongs to a workspace", () => {
+  test("uses the workspace title when the session belongs to one", async () => {
+    const workspace = await createWorkspace({
+      name: "Slack previews",
+      createdBy: "Kent",
+    });
     expect(
-      cardTitle(session({ title: "Fix the seek bar", workspaceId: "ws-1" })),
-    ).toEqual({ title: "Fix the seek bar" });
+      await cardTitle(
+        session({ title: "Fix the seek bar", workspaceId: workspace.id }),
+      ),
+    ).toEqual({ title: "Slack previews" });
   });
 
-  test("uses the session title when there is no workspace", () => {
-    expect(cardTitle(session({ title: "Triage the ticket" }))).toEqual({
+  test("uses the session title when there is no workspace", async () => {
+    expect(await cardTitle(session({ title: "Triage the ticket" }))).toEqual({
       title: "Triage the ticket",
     });
   });
 
-  test("falls back when the workspace id no longer resolves", () => {
+  test("falls back when the workspace id no longer resolves", async () => {
     expect(
-      cardTitle(
+      await cardTitle(
         session({ title: "Triage the ticket", workspaceId: "ws-gone" }),
       ),
     ).toEqual({ title: "Triage the ticket" });
   });
 
-  test("falls back to the session id when the session is untitled", () => {
-    expect(cardTitle(session({ id: "sess-42" }))).toEqual({ title: "sess-42" });
+  test("falls back to the session id when the session is untitled", async () => {
+    expect(await cardTitle(session({ id: "sess-42" }))).toEqual({
+      title: "sess-42",
+    });
   });
 });

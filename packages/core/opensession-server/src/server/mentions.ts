@@ -6,7 +6,7 @@
  *
  * One record per (person, session) — the badge is per row, so a second mention
  * in the same session updates the record rather than stacking. Storage is the
- * flat-file pattern of session-notes.ts/pins.ts, keyed on the picker first
+ * flat-file pattern of pins.ts, keyed on the picker first
  * name, which is also what push subscriptions and the identity table use.
  *
  * The store is append/clear only. It is never replaced wholesale, so a client
@@ -30,7 +30,7 @@ export interface Mention {
   by: string;
   /** Where it came from: a prompt in the transcript, a team note, or being
    *  added as a workspace collaborator. */
-  source: "prompt" | "note" | "collaborator";
+  source: "prompt" | "note" | "comment" | "collaborator";
   /** First line or so of the text, for a hover card or a mentions list. */
   preview: string;
   /** ms epoch */
@@ -60,6 +60,7 @@ function cleanMentions(value: unknown): Mention[] {
       "source" in value &&
       (value.source === "prompt" ||
         value.source === "note" ||
+        value.source === "comment" ||
         value.source === "collaborator"),
   );
 }
@@ -146,6 +147,8 @@ export async function notifyMentions(
   sender: string,
   sessionId: string,
   source: Mention["source"],
+  /** Deep link for the notification; the session itself by default. */
+  url?: string,
 ): Promise<string[]> {
   const { broadcastToAll } = await import("./ws-hub");
   const mentioned = await recordMentions(
@@ -166,10 +169,10 @@ export async function notifyMentions(
     void notifyUser(name, {
       kind: "mention",
       subject: sessionSubject(sessionId, session),
-      reason: `${sender || "Someone"} mentioned you${source === "note" ? " in a note" : ""}`,
+      reason: `${sender || "Someone"} mentioned you${source === "note" ? " in a note" : source === "comment" ? " in a comment" : ""}`,
       body,
       actor: sender || undefined,
-      url: sessionUrl(sessionId),
+      url: url ?? sessionUrl(sessionId),
     });
   return mentioned;
 }

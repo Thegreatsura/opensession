@@ -1,5 +1,6 @@
 import type { UnifiedSession, Workspace } from "../../lib/types";
-import { isClaimed, ownedBy, pinnedLane } from "../../lib/sidebar-lanes";
+import { isClaimed, pinnedLane } from "../../lib/sidebar-lanes";
+import { rowBelongsToPerson } from "../../lib/sidebar-derived";
 import { togglePin } from "../../lib/pins";
 import { markRead, markUnread } from "../../lib/reads";
 import {
@@ -21,6 +22,7 @@ import {
   IconTrash,
 } from "../icons";
 import { SidebarCtxMenu } from "./SidebarCtxMenu";
+import { rowColorKey, setRowColor } from "../../lib/row-colors";
 
 export interface WorkspaceMenuTarget {
   id: string;
@@ -38,6 +40,7 @@ interface WorkspaceContextMenuProps {
   activeSnoozeKeys: Set<string>;
   snoozes: Record<string, string>;
   hiddenRowKeys: Set<string>;
+  rowColors: Record<string, string>;
   onPinsChange: (pins: string[]) => void;
   onSetStatus: Props["onSetStatus"];
   onSnooze: (row: WsRow, until: string | null) => void;
@@ -60,6 +63,7 @@ export function WorkspaceContextMenu({
   activeSnoozeKeys,
   snoozes,
   hiddenRowKeys,
+  rowColors,
   onPinsChange,
   onSetStatus,
   onSnooze,
@@ -123,22 +127,6 @@ export function WorkspaceContextMenu({
     });
   }
 
-  const rowClaimed = sessions.some((session) => isClaimed(session));
-  const rowNaturallyInSidebar = sessions.some(
-    (session) =>
-      !session.spawnedBy &&
-      !session.automation &&
-      ownedBy(session, currentUser),
-  );
-  if (sessions.length > 0 && (!rowNaturallyInSidebar || rowClaimed)) {
-    entries.push({
-      kind: "item",
-      icon: <IconInbox size={20} />,
-      label: rowClaimed ? "Stop keeping in sidebar" : "Keep in sidebar",
-      onClick: () => onSetStatus(sessions, rowClaimed ? null : "mine"),
-    });
-  }
-
   entries.push({
     kind: "item",
     icon: <IconPin size={20} fill={pinned ? "currentColor" : "none"} />,
@@ -157,6 +145,14 @@ export function WorkspaceContextMenu({
       kind: "snooze",
       until: activeSnoozeKeys.has(row.key) ? (snoozes[row.key] ?? null) : null,
       onPick: (until) => onSnooze(row, until),
+    });
+  }
+
+  if (row) {
+    entries.push({
+      kind: "color",
+      current: rowColorKey(rowColors, row.key),
+      onPick: (color) => setRowColor(row.key, color),
     });
   }
 
@@ -207,12 +203,29 @@ export function WorkspaceContextMenu({
   if (row && sessions.length > 0) {
     entries.push({ kind: "sep" });
     const hidden = hiddenRowKeys.has(row.key);
-    entries.push({
-      kind: "item",
-      icon: hidden ? <IconEye size={20} /> : <IconEyeOff size={20} />,
-      label: hidden ? "Restore to my sidebar" : "Hide from my sidebar",
-      onClick: () => onHide(row, hidden),
+    // One sidebar-membership action. A row your own sidebar already holds
+    // (the same test the "me" lens uses) offers Hide; a row you only see
+    // because it is open or through another view offers Keep. A hidden row
+    // offers Restore.
+    const inMySidebar = rowBelongsToPerson(row, currentUser, {
+      currentUser,
+      isClaimed,
     });
+    if (hidden || inMySidebar) {
+      entries.push({
+        kind: "item",
+        icon: hidden ? <IconEye size={20} /> : <IconEyeOff size={20} />,
+        label: hidden ? "Restore to my sidebar" : "Hide from my sidebar",
+        onClick: () => onHide(row, hidden),
+      });
+    } else {
+      entries.push({
+        kind: "item",
+        icon: <IconInbox size={20} />,
+        label: "Keep in sidebar",
+        onClick: () => onSetStatus(sessions, "mine"),
+      });
+    }
     entries.push({
       kind: "item",
       icon: <IconArchive size={20} />,

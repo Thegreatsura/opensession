@@ -1,4 +1,7 @@
-import { catalogDocuments } from "./catalog-documents";
+import {
+  catalogDocuments,
+  catalogNamespaceWriteCount,
+} from "./catalog-documents";
 import { documentField } from "./shared/catalog-user-store";
 import { canonicalRepoId, defaultRepo } from "./config";
 import { getHides } from "./hides";
@@ -89,31 +92,87 @@ export function sidebarSessionScopeKey(scope: SidebarSessionScope): string {
   ].join("\u0000");
 }
 
+function stringField(value: unknown, field: string): string | undefined {
+  const entry = documentField(value, field);
+  return typeof entry === "string" ? entry : undefined;
+}
+
+interface AutomationAudienceRow {
+  id: string;
+  name?: string;
+  owner?: string;
+  repo?: string;
+  workspaceId?: string;
+}
+
+/**
+ * How long a read of every automation definition answers sidebar scoping.
+ * Every live row update consults it for each viewing person, and reading and
+ * parsing the whole namespace each time was the largest share of gateway
+ * thread time. This process's own automation writes drop it at once; the TTL
+ * only bounds how long another process's edit can go unseen.
+ */
+const AUTOMATION_AUDIENCE_TTL_MS = 10_000;
+let automationAudience:
+  | {
+      rows: Promise<AutomationAudienceRow[]>;
+      writes: number;
+      expiresAt: number;
+    }
+  | undefined;
+
+function automationAudienceRows(): Promise<AutomationAudienceRow[]> {
+  const writes = catalogNamespaceWriteCount("automations");
+  const now = Date.now();
+  if (
+    automationAudience &&
+    automationAudience.writes === writes &&
+    automationAudience.expiresAt > now
+  )
+    return automationAudience.rows;
+  const rows = catalogDocuments("automations")
+    .list()
+    .then((definitions) =>
+      definitions.map(({ key, value }) => ({
+        id: stringField(value, "id") ?? key,
+        name: stringField(value, "name"),
+        owner: stringField(value, "owner"),
+        repo: stringField(value, "repo"),
+        workspaceId: stringField(value, "workspaceId"),
+      })),
+    );
+  const entry = {
+    rows,
+    writes,
+    expiresAt: now + AUTOMATION_AUDIENCE_TTL_MS,
+  };
+  automationAudience = entry;
+  // A failed read must not be served for the rest of the window.
+  rows.catch(() => {
+    if (automationAudience === entry) automationAudience = undefined;
+  });
+  return rows;
+}
+
+/** Test seam: forget the cached automation audience. */
+export function __resetAutomationAudienceForTest(): void {
+  automationAudience = undefined;
+}
+
 /** Read catalog-owned overlays. This path has no file or SQLite fallback. */
 export async function loadSidebarSessionScopeContext(
   scope: SidebarSessionScope,
   sessions: readonly UnifiedSession[],
 ): Promise<SidebarSessionScopeContext> {
-  const [definitions, pins, lanes, snoozes, hides, mentions] =
+  const [automationRows, pins, lanes, snoozes, hides, mentions] =
     await Promise.all([
-      catalogDocuments("automations").list(),
+      automationAudienceRows(),
       getPins(scope.user),
       getLanes(scope.user),
       getSnoozes(scope.user),
       getHides(scope.user),
       listMentions(scope.user),
     ]);
-  const stringField = (value: unknown, field: string): string | undefined => {
-    const entry = documentField(value, field);
-    return typeof entry === "string" ? entry : undefined;
-  };
-  const automationRows = definitions.map(({ key, value }) => ({
-    id: stringField(value, "id") ?? key,
-    name: stringField(value, "name"),
-    owner: stringField(value, "owner"),
-    repo: stringField(value, "repo"),
-    workspaceId: stringField(value, "workspaceId"),
-  }));
   const workspaceIds = [
     ...new Set(
       [
@@ -178,6 +237,24 @@ function personMatches(
   person: string,
 ): boolean {
   return !!value && userMatchesAny(value, [person]);
+}
+
+/** The person created the session's workspace or collaborates on it. */
+function workspaceIncludesPerson(
+  session: UnifiedSession,
+  person: string,
+  context: SidebarSessionScopeContext,
+): boolean {
+  const workspace = session.workspaceId
+    ? context.workspaces.get(session.workspaceId)
+    : undefined;
+  return (
+    !!workspace &&
+    (personMatches(workspace.createdBy, person) ||
+      (workspace.collaborators || []).some((name) =>
+        personMatches(name, person),
+      ))
+  );
 }
 
 function sessionGroupKey(session: UnifiedSession): string {
@@ -463,7 +540,9 @@ export function scopeSessionsForSidebar<T extends SidebarScopeSession>(
       scope.person !== "everyone" &&
       scope.person !== "unassigned" &&
       !session.automation &&
-      !personMatches(session.startedBy, scope.person)
+      !personMatches(session.startedBy, scope.person) &&
+      // A teammate's session still belongs to the person's own workspace.
+      !workspaceIncludesPerson(session, scope.person, context)
     )
       continue;
     const key = sessionGroupKey(session);
@@ -483,14 +562,8 @@ export function scopeSessionsForSidebar<T extends SidebarScopeSession>(
     const review =
       scope.person === "me" &&
       rows.some((row) => requestInvolvesPerson(row, scope.user));
-    const workspace = key.startsWith("workspace:")
-      ? context.workspaces.get(key.slice("workspace:".length))
-      : undefined;
     const owned =
-      personMatches(workspace?.createdBy, focus) ||
-      (workspace?.collaborators || []).some((name) =>
-        personMatches(name, focus),
-      ) ||
+      workspaceIncludesPerson(rows[0]!, focus, context) ||
       rows.some(
         (row) => !row.automation && personMatches(row.startedBy, focus),
       );

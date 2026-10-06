@@ -78,15 +78,15 @@ export const INTERNAL_MCP_CAPABILITIES = {
   },
   "opensession-repos": {
     summary:
-      "Attach or switch repos, link a PR to this session, label PRs, and check whether a PR is ready to merge.",
+      "Attach or switch repos, link a PR to this session, label PRs, check whether a PR is ready to merge, and ask the driver to force merge one.",
     guidance:
-      "Attach or switch repositories and link pull requests while preserving this session's multi-repo context. Use label_pull_request to label a PR in any registered repo, including one your shell cannot reach. Use check_pr_ready for one deterministic merge-readiness verdict (checks, reviews, conflicts, draft, branch rules) instead of reading transcripts or raw gh output.",
+      "Attach or switch repositories and link pull requests while preserving this session's multi-repo context. Use label_pull_request to label a PR in any registered repo, including one your shell cannot reach. Use check_pr_ready for one deterministic merge-readiness verdict (checks, reviews, conflicts, draft, branch rules) instead of transcripts or raw gh output. To merge past blockers on request, use force_merge_pull_request.",
   },
   "opensession-memory": {
     summary:
       "Durable repo / user / team memory, shared with Slack channel memory.",
     guidance:
-      "Search or manage durable repo, user, and team facts. Store only information worth carrying into future sessions, especially when the user says to remember it.",
+      "Search repo, user, and team memory. Memory is git repositories of Markdown: to remember, edit the memory checkout and push, or use the file tools without a checkout. Store only what future sessions need, especially when asked to remember it.",
   },
   "opensession-web": {
     summary:
@@ -154,6 +154,11 @@ export const INTERNAL_MCP_CAPABILITIES = {
       "Validate a Vega-Lite spec and get the ```vega-lite fence that renders as an interactive chart.",
     guidance:
       "Show quantitative results as an interactive chart: pass a Vega-Lite spec (and optionally the rows) to make_chart, then paste the returned ```vega-lite fence into your reply. Prefer this to a hand-built HTML chart asset or a static image of a chart.",
+  },
+  "opensession-comments": {
+    summary: "Comment threads people left on this session's transcript.",
+    guidance:
+      "When a comment thread is sent to you, answer back in it with reply_to_comment_thread.",
   },
   "opensession-todos": {
     summary: "The user's Desk todo list.",

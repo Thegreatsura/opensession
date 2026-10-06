@@ -1,14 +1,18 @@
 /**
- * Second chance for a flowchart mermaid refuses. Models write labels the
- * way people read them, `A[foo (bar)]` or `-->|@mention|`, and mermaid's
- * flowchart grammar reads the punctuation as syntax: `(` opens a node, `@`
- * starts an edge id. Quoting the label (`A["foo (bar)"]`) is the documented
- * fix and never changes what renders, so when the source as written does
- * not parse, mermaid.ts retries it with every unquoted label quoted.
+ * Second chance for a diagram mermaid refuses. Models write labels the way
+ * people read them, and mermaid's grammars read some of that as syntax:
  *
- * Pure text, no DOM: this runs before mermaid is even loaded for the retry.
- * Only flowcharts are touched; other diagram types use brackets for their
- * own grammar (class members, state descriptions) and are left alone.
+ * - Flowcharts: `A[foo (bar)]` or `-->|@mention|`, where `(` opens a node
+ *   and `@` starts an edge id. Quoting the label (`A["foo (bar)"]`) is the
+ *   documented fix.
+ * - ER diagrams: an attribute named `pk`, `fk` or `uk` (any case) lexes as a
+ *   key marker, and a type like `Vec<Track>` is not an attribute word.
+ *   Backticks (`` `pk` ``) make either one a plain word.
+ *
+ * Neither changes what renders, so when the source as written does not
+ * parse, mermaid.ts retries it repaired. Pure text, no DOM: this runs before
+ * mermaid is even loaded for the retry. Other diagram types use brackets for
+ * their own grammar (class members, state descriptions) and are left alone.
  */
 
 /** Node bracket pairs, longest opener first so `[[` wins over `[`. The closer list
@@ -38,13 +42,18 @@ const OPENER_CHARS = new Set(["(", "[", "{", ">"]);
 /** Lines whose brackets are not node labels. */
 const DIRECTIVE = /^\s*(%%|click\b|style\b|classDef\b|class\b|linkStyle\b)/;
 
-/** True when the diagram is a flowchart (or its `graph` alias). */
-export function isFlowchart(src: string): boolean {
+/** The diagram header: the first line that is not blank or a directive. */
+function headerLine(src: string): string {
   const first = src.split("\n").find((line) => {
     const t = line.trim();
     return t && !t.startsWith("%%");
   });
-  return /^(flowchart|graph)\b/.test(first?.trim() ?? "");
+  return first?.trim() ?? "";
+}
+
+/** True when the diagram is a flowchart (or its `graph` alias). */
+export function isFlowchart(src: string): boolean {
+  return /^(flowchart|graph)\b/.test(headerLine(src));
 }
 
 /** The label's delimiter must not appear inside it: `A[x] y]` is not one
@@ -131,4 +140,51 @@ export function quoteFlowchartLabels(src: string): string | null {
   });
   const out = repaired.join("\n");
   return out === src ? null : out;
+}
+
+/** What mermaid's ER lexer accepts as a bare attribute type or name. */
+const ER_ATTRIBUTE_WORD =
+  /^[*A-Za-z_\u00C0-\uFFFF][A-Za-z0-9\-_[\]().,\u00C0-\uFFFF*]*$/;
+const ER_KEY = /^(pk|fk|uk)$/i;
+
+/** Backtick-quote a type or name the ER lexer would not read as a word. */
+function quoteErWord(word: string): string {
+  if (word.includes("`")) return word;
+  return ER_KEY.test(word) || !ER_ATTRIBUTE_WORD.test(word)
+    ? `\`${word}\``
+    : word;
+}
+
+/**
+ * The ER diagram with every attribute type and name that mermaid would read
+ * as syntax wrapped in backticks, or null when the source is not an ER
+ * diagram or nothing needed quoting. Only the leading `type name` pair of a
+ * line inside an entity's `{ ... }` block is touched: keys and the quoted
+ * comment after them already parse.
+ */
+export function quoteErAttributes(src: string): string | null {
+  if (!/^erDiagram\b/.test(headerLine(src))) return null;
+  let inBlock = false;
+  const repaired = src.split("\n").map((line) => {
+    const t = line.trim();
+    if (!inBlock) {
+      if (t.endsWith("{") && !t.startsWith("%%")) inBlock = true;
+      return line;
+    }
+    if (t.startsWith("}")) {
+      inBlock = false;
+      return line;
+    }
+    const attr = /^(\s*)(\S+)(\s+)(\S+)(.*)$/.exec(line);
+    if (!attr || t.startsWith("%%") || attr[2].startsWith('"')) return line;
+    const [, indent, type, gap, name, rest] = attr;
+    return `${indent}${quoteErWord(type)}${gap}${quoteErWord(name)}${rest}`;
+  });
+  const out = repaired.join("\n");
+  return out === src ? null : out;
+}
+
+/** The repaired source for any diagram type this module knows, or null. */
+export function repairMermaidSource(src: string): string | null {
+  return quoteFlowchartLabels(src) ?? quoteErAttributes(src);
 }

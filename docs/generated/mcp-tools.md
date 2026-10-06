@@ -44,13 +44,13 @@ touches an in-process tool:
 | [`opensession-admin`](#opensession-admin) | 14 | interactive, Slack loop | – |
 | [`opensession-runners`](#opensession-runners) | 5 | interactive | – |
 | [`opensession-goals`](#opensession-goals) | 8 | interactive | – |
-| [`opensession-search`](#opensession-search) | 2 | interactive | – |
+| [`opensession-search`](#opensession-search) | 2 | interactive, automation | – |
 | [`opensession-self-deploy`](#opensession-self-deploy) | 2 | interactive | Withheld from dev instances (isDevInstance()) — the script targets the production service and state. |
 | [`opensession-humans`](#opensession-humans) | 3 | interactive, Slack loop, goal wake | Interactive runs need a session id (the answer routes back to it). |
 | [`opensession-keychain`](#opensession-keychain) | 12 | interactive | Needs a session id. |
 | [`opensession-publish`](#opensession-publish) | 4 | interactive | Needs a session id. |
-| [`opensession-repos`](#opensession-repos) | 6 | interactive | Needs a session id. |
-| [`opensession-memory`](#opensession-memory) | 9 | interactive | Needs a session id. |
+| [`opensession-repos`](#opensession-repos) | 7 | interactive | Needs a session id. |
+| [`opensession-memory`](#opensession-memory) | 6 | interactive, automation | Needs a session id. |
 | [`opensession-web`](#opensession-web) | 3 | interactive, goal wake | Needs a session id. |
 | [`opensession-portals`](#opensession-portals) | 9 | interactive | Needs a session id. |
 | [`opensession-desktop`](#opensession-desktop) | 8 | interactive | Needs a sandboxed session. |
@@ -63,6 +63,7 @@ touches an in-process tool:
 | [`opensession-workflows`](#opensession-workflows) | 8 | interactive, automation | Automation runs get it ONLY with the human-set `workflows` flag. |
 | [`opensession-assets`](#opensession-assets) | 4 | interactive | Needs a session id. Works in read-only Ask mode — assets land outside the checkout. |
 | [`opensession-charts`](#opensession-charts) | 1 | interactive, automation | Needs a session id. Held to the automation bar: its only write is offloaded chart data into the calling session's own assets. |
+| [`opensession-comments`](#opensession-comments) | 2 | interactive | Needs a session id. Reads and replies only within the run's own session. |
 | [`opensession-todos`](#opensession-todos) | 5 | interactive | Needs a session id. |
 | [`opensession-schedule`](#opensession-schedule) | 3 | interactive | Needs a session id. |
 | [`opensession-papercuts`](#opensession-papercuts) | 2 | interactive, automation | Dropped when the session's repo opted out (Settings → Papercuts). |
@@ -75,7 +76,7 @@ touches an in-process tool:
 | [`opensession-github`](#opensession-github) | 4 | Slack loop | – |
 | [`opensession-goal-self`](#opensession-goal-self) | 6 | goal wake | Only on a session that carries a goalId. |
 
-34 servers, 166 tools.
+35 servers, 166 tools.
 
 ## opensession-sessions
 
@@ -422,8 +423,9 @@ Delete a goal and its ledger. Permanent. The opensession session it created is l
 Search and read the distilled record of past sessions.
 
 - **Source** `packages/core/opensession-server/src/agents/slack/search-tools.ts`
-- **Wired in** `packages/core/opensession-server/src/server/interactive-mcp.ts`
-- **Runs** interactive
+- **Wired in** `packages/core/opensession-server/src/server/interactive-mcp.ts`, `packages/core/opensession-server/src/server/automations.ts`
+- **Runs** interactive, automation
+- **Note** Automation runs get it only as a memory Dreaming run, to review past sessions.
 
 ### `search_history`
 
@@ -514,9 +516,9 @@ List the credentials teammates have registered in the keychain — service, owne
 
 ### `request_credential`
 
-`mcp__opensession-keychain__request_credential` · input: `credential` (string, required), `purpose` (string, required), `mode` ("once" | "standing"), `run` (object)
+`mcp__opensession-keychain__request_credential` · input: `credential` (string), `credentials` (string[]), `purpose` (string, required), `mode` ("once" | "standing"), `run` (object)
 
-Ask a credential's owner to lend it to THIS session for a stated purpose. They get a DM with Approve once / Approve standing / Decline, and this call blocks until they answer. On approval you receive instructions for call_credential, which injects the credential server-side; you never see the secret itself. For a login (a username and password for a sign-in page), the owner instead chooses Release password or Decline, and on approval you use use_login to get the password into this session's workspace. Ask only when you actually need the access now, state the real purpose (the owner is approving that sentence, and every call is audited against it), and prefer 'once' unless the task genuinely needs repeated calls. For bulk work by a script (hundreds or more calls), pass `run` instead: the owner approves that exact command and call cap, and you start it with run_with_credential. If they decline, don't re-ask. Calling again with the same purpose while your ask is pending reminds the owner and waits on that same ask; if they already approved it, you get the live grant back.
+Ask a credential's owner to lend it to THIS session for a stated purpose. They get a DM with Approve once / Approve standing / Decline, and this call blocks until they answer. On approval you receive instructions for call_credential, which injects the credential server-side; you never see the secret itself. For a login (a username and password for a sign-in page), the owner instead chooses Release password or Decline, and on approval you use use_login to get the password into this session's workspace. Ask only when you actually need the access now, state the real purpose (the owner is approving that sentence, and every call is audited against it), and prefer 'once' unless the task genuinely needs repeated calls. For bulk work by a script (hundreds or more calls), pass `run` instead: the owner approves that exact command and call cap, and you start it with run_with_credential. A script that needs several APIs in one process names them all in `credentials` with `run`: each credential's owner approves, and the run starts only once all of them did. If they decline, don't re-ask. Calling again with the same purpose while your ask is pending reminds the owner and waits on that same ask; if they already approved it, you get the live grant back.
 
 ### `call_credential`
 
@@ -532,21 +534,21 @@ Get the password of a login credential (a test account for a sign-in page) that 
 
 ### `run_with_credential`
 
-`mcp__opensession-keychain__run_with_credential` · input: `credential` (string, required), `command` (string, required), `cwd` (string), `timeoutMinutes` (number)
+`mcp__opensession-keychain__run_with_credential` · input: `credential` (string), `credentials` (string[]), `command` (string, required), `cwd` (string), `timeoutMinutes` (number), `title` (string)
 
-Start a scripted run the credential's owner approved (request_credential with `run`): one process running exactly the approved command, on this server, in the session's workspace. The process gets KEYCHAIN_PROXY_URL, a base URL standing in for https://<credential host>: a request to $KEYCHAIN_PROXY_URL/v1/items goes to https://<host>/v1/items with the credential injected. The URL works only for this run and stops working when the process exits, times out or is stopped. Calls are held to the credential's method/path limits and the approved cap, and every call is audited. The script gets a minimal environment (PATH, HOME, LANG, TMPDIR), so pass anything else on the command line, and never a secret. Returns at once with a run id; poll credential_run_status. A Sandbox or Runner session cannot start one.
+Start a scripted run the credential's owner approved (request_credential with `run`): one process running exactly the approved command, on this server, in the session's workspace. The process gets KEYCHAIN_PROXY_URL, a base URL standing in for https://<credential host>: a request to $KEYCHAIN_PROXY_URL/v1/items goes to https://<host>/v1/items with the credential injected. A run approved with several `credentials` starts once every owner approved, and gets one URL per credential instead, KEYCHAIN_PROXY_URL_<SLUG> (slug upper-cased, other characters as _), each reaching only its own credential's host. The URLs work only for this run and all stop working when the process exits, times out or is stopped. Calls are held to each credential's method/path limits and its approved cap, and every call is audited. The script gets a minimal environment (PATH, HOME, LANG, TMPDIR), so pass anything else on the command line, and never a secret. The run is a script run: it keeps going through Open Session restarts (the URLs hold requests while the server is back up), shows as a card in the session with its call counts, and this session is woken with how it ended, so start it and end your turn. Returns at once with a run id; credential_run_status shows progress. A Sandbox or Runner session cannot start one.
 
 ### `credential_run_status`
 
 `mcp__opensession-keychain__credential_run_status` · input: `runId` (string)
 
-Check a scripted run started with run_with_credential: running/exited/timed_out/stopped/revoked/failed, exit code, calls made, calls refused, the cap, and the last few KB of its output (the full log is at logPath). Without a run id, lists this session's runs.
+Check a scripted run started with run_with_credential: running/exited/timed_out/stopped/revoked/failed/lost, exit code, calls made, calls refused and the cap (in total, and per credential under `credentials`), and the last few KB of its output (the full log is at logPath). Without a run id, lists this session's runs.
 
 ### `stop_credential_run`
 
 `mcp__opensession-keychain__stop_credential_run` · input: `runId` (string, required)
 
-Stop a running scripted run: its proxy URL stops working at once and its process group is sent SIGTERM (SIGKILL after 10 seconds).
+Stop a running scripted run: its proxy URLs stop working at once and its process group is sent SIGTERM (SIGKILL after 10 seconds).
 
 ### `cancel_credential_ask`
 
@@ -601,7 +603,7 @@ Stop a published app. It stays registered with its versions intact and can be st
 
 ## opensession-repos
 
-Attach or switch repos, link a PR to this session, label PRs, and check whether a PR is ready to merge.
+Attach or switch repos, link a PR to this session, label PRs, check whether a PR is ready to merge, and ask the driver to force merge one.
 
 - **Source** `packages/core/opensession-server/src/agents/slack/repos-tools.ts`
 - **Wired in** `packages/core/opensession-server/src/server/interactive-mcp.ts`
@@ -644,69 +646,57 @@ Add or remove labels on a pull request in any registered GitHub repo, including 
 
 Is a pull request ready to merge? One deterministic verdict from live GitHub state: ready or not, and every blocker: open/merged/closed, draft, merge conflicts, each check's latest run by name (failing, pending, passing), the review decision and who gave it, and the base branch's rules. The first line is a sentence to say as-is; the JSON block at the end is the same verdict for branching on. Pass a PR URL, a repo id and number, or a session id to check that session's PR (defaults to this session's own PR). Read-only, runs as the bot, works for any registered repo. Use this instead of piecing readiness together from transcripts or gh output.
 
+### `force_merge_pull_request`
+
+`mcp__opensession-repos__force_merge_pull_request` · input: `url` (string), `repo` (string), `number` (number), `reason` (string, required), `method` ("squash" | "merge" | "rebase")
+
+Ask the person driving this session to merge a pull request despite failing, pending or missing checks or reviews. Only when they asked for it: never on your own judgment. A card shows them the PR, its title, the head commit, the merge method and exactly which checks and reviews would be bypassed; nothing happens until they press Confirm, and you cannot confirm it. The merge runs with their own GitHub account and is pinned to the head commit on the card, so a push after the card appears aborts it. GitHub still decides whether they may bypass branch protection; a refusal names what is missing. Merged PRs get a comment with the reason. Drafts and PRs with merge conflicts are refused. Waits up to 15 minutes. After a cancel, do not ask again unless they say so.
+
 ## opensession-memory
 
 Durable repo / user / team memory, shared with Slack channel memory.
 
 - **Source** `packages/core/opensession-server/src/agents/slack/memory-tools.ts`
-- **Wired in** `packages/core/opensession-server/src/server/interactive-mcp.ts`
-- **Runs** interactive
+- **Wired in** `packages/core/opensession-server/src/server/interactive-mcp.ts`, `packages/core/opensession-server/src/server/automations.ts`
+- **Runs** interactive, automation
 - **Condition** Needs a session id.
-- **Note** Write tools are interactive-only; automation runs get read-only memory injected into their prompt instead.
-
-### `store_memory`
-
-`mcp__opensession-memory__store_memory` · input: `summary` (string, required), `kind` ("preference" | "constraint" | "decision" | "gotcha" | "reference" | "status", required), `scope` ("repo" | "user" | "team", required), `repo` (string), `details` (string), `tags` (string[]), `expiresAt` (string), `supersedes` (string[])
-
-Store one durable, non-obvious fact. The summary is compact and retrieval-only by default; supporting evidence belongs in details. Do not store task progress, completion reports, PR history, incident narration, or facts already documented in the repo. Status requires expiry. Team writes require a separately verified privilege.
+- **Note** Memory lives in git repositories (docs/memory-repos.md). Sessions with a local checkout edit and push it and get only search_memory; automations, Sandbox and Runner sessions also get the file tools, which commit on the server.
 
 ### `search_memory`
 
-`mcp__opensession-memory__search_memory` · input: `query` (string, required), `kind` ("preference" | "constraint" | "decision" | "gotcha" | "reference" | "status"), `scope` ("repo" | "user" | "team"), `state` ("active" | "archived" | "expired" | "superseded"), `cursor` (string), `limit` (integer)
+`mcp__opensession-memory__search_memory` · input: `query` (string, required), `kind` ("preference" | "constraint" | "decision" | "gotcha" | "reference" | "status"), `limit` (integer)
 
-Search this session's memory scopes. Returns compact summaries only; use read_memory for details.
+Ranked search over this run's memory repositories (team, personal, channel). Returns one line per entry with its file path; open the file for context. Use grep in the checkout for exact strings.
 
-### `read_memory`
+### `list_memory_files`
 
-`mcp__opensession-memory__read_memory` · input: `ids` (string[], required)
+`mcp__opensession-memory__list_memory_files` · input: `repo` (string, required)
 
-Read full supporting details for selected memory ids returned by search_memory or list_memory.
+List every file in one memory repository.
 
-### `list_memory`
+### `read_memory_file`
 
-`mcp__opensession-memory__list_memory` · input: `query` (string), `kind` ("preference" | "constraint" | "decision" | "gotcha" | "reference" | "status"), `scope` ("repo" | "user" | "team"), `state` ("active" | "archived" | "expired" | "all"), `review` ("needs_review" | "confirmed" | "all"), `cursor` (string), `limit` (integer)
+`mcp__opensession-memory__read_memory_file` · input: `repo` (string, required), `path` (string, required)
 
-List a bounded page of compact memory summaries. Details are omitted.
+Read one file from a memory repository (latest version).
 
-### `update_memory`
+### `write_memory_file`
 
-`mcp__opensession-memory__update_memory` · input: `id` (string, required), `summary` (string), `kind` ("preference" | "constraint" | "decision" | "gotcha" | "reference" | "status"), `details` (string | null), `tags` (string[]), `expiresAt` (string | null)
+`mcp__opensession-memory__write_memory_file` · input: `repo` (string, required), `path` (string, required), `content` (string, required), `message` (string, required)
 
-Update one memory in place. Keep the summary atomic and put evidence in details.
+Create or replace one file in a memory repository and commit it. Read the file first and send the whole new content. Entries are one bullet per line with `[key: value]` metadata at the end.
 
-### `archive_memory`
+### `delete_memory_file`
 
-`mcp__opensession-memory__archive_memory` · input: `ids` (string[], required)
+`mcp__opensession-memory__delete_memory_file` · input: `repo` (string, required), `path` (string, required), `message` (string, required)
 
-Archive memories without deleting them. Archived records stop appearing in active retrieval.
+Delete one file from a memory repository and commit. History keeps it.
 
-### `restore_memory`
+### `sync_memory_repository`
 
-`mcp__opensession-memory__restore_memory` · input: `ids` (string[], required)
+`mcp__opensession-memory__sync_memory_repository` · input: `repo` (string, required)
 
-Restore archived memories to active or expired state.
-
-### `confirm_memory`
-
-`mcp__opensession-memory__confirm_memory` · input: `ids` (string[], required)
-
-Confirm that memories remain accurate, refreshing their verification timestamp.
-
-### `forget_memory`
-
-`mcp__opensession-memory__forget_memory` · input: `id` (string, required), `confirm` (boolean, required)
-
-Permanently delete one memory. Prefer archive_memory because deletion cannot be recovered.
+Sync one visible memory repository with its configured upstream and report the result. This commits no changes; file writes already commit separately.
 
 ## opensession-web
 
@@ -1074,6 +1064,27 @@ Validate a Vega-Lite spec and get the ```vega-lite fence that renders as an inte
 `mcp__opensession-charts__make_chart` · input: `spec` (object | string, required), `data` (any[]), `title` (string), `name` (string)
 
 Turn a Vega-Lite spec into the ```vega-lite fence that renders as an interactive chart (tooltips, zoom, brushing) in this session. Compiles the spec with the same library the client uses and returns errors with their paths instead of a silent code block; large inline data is moved to a session asset the chart loads from. Paste the returned fence verbatim into your reply, on its own lines. Keep specs small and readable: aggregate first, use `data.values` (or the data argument) rather than external URLs, and omit width so the chart fills the column.
+
+## opensession-comments
+
+Comment threads people left on this session's transcript.
+
+- **Source** `packages/core/opensession-server/src/server/comments-mcp.ts`
+- **Wired in** `packages/core/opensession-server/src/server/interactive-mcp.ts`
+- **Runs** interactive
+- **Condition** Needs a session id. Reads and replies only within the run's own session.
+
+### `list_comment_threads`
+
+`mcp__opensession-comments__list_comment_threads` · input: `includeResolved` (boolean)
+
+List the comment threads people left on this session's transcript, with the passage each one is attached to and its comments. Open threads only unless `includeResolved` is set.
+
+### `reply_to_comment_thread`
+
+`mcp__opensession-comments__reply_to_comment_thread` · input: `threadId` (string, required), `text` (string, required), `resolve` (boolean)
+
+Post a reply in one of this session's comment threads, as the agent. Use it to report back in a thread that was sent to you: what you found or what you changed. Keep it short; the people in the thread are notified.
 
 ## opensession-todos
 

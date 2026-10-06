@@ -30,6 +30,8 @@ export interface PrViewedFiles {
   prId: string;
   /** Paths whose viewerViewedState is VIEWED (DIRTY/UNVIEWED excluded). */
   viewed: string[];
+  /** Paths the viewer marked viewed that changed since (GitHub's DIRTY). */
+  changed: string[];
 }
 
 /** The requester's App user token, else the workspace installation token. */
@@ -114,6 +116,7 @@ export async function getPrViewedFiles(
   if (!credential) throw new Error("No GitHub credential available");
   const [owner, name] = ghRepo.split("/");
   const viewed: string[] = [];
+  const changed: string[] = [];
   let prId = "";
   let cursor: string | null = null;
   // 100 files/page; 30 pages ≈ GitHub's own 3000-file diff display cap.
@@ -129,26 +132,47 @@ export async function getPrViewedFiles(
     prId = pull.id;
     for (const node of pull.files?.nodes || []) {
       if (node?.viewerViewedState === "VIEWED") viewed.push(node.path);
+      else if (node?.viewerViewedState === "DIRTY") changed.push(node.path);
     }
     if (!pull.files?.pageInfo?.hasNextPage) break;
     cursor = pull.files.pageInfo.endCursor;
   }
-  return { prId, viewed };
+  return { prId, viewed, changed };
 }
 
-/** Mark or unmark one file as viewed for the requesting viewer. */
-export async function setPrFileViewed(
+/** Files per GraphQL request when marking many at once. */
+const VIEWED_BATCH = 50;
+
+/** One aliased mutation per path, so a folder or group costs one request. */
+export function viewedMutation(count: number, viewed: boolean): string {
+  const field = viewed ? "markFileAsViewed" : "unmarkFileAsViewed";
+  const params = Array.from(
+    { length: count },
+    (_, index) => `$p${index}: String!`,
+  ).join(", ");
+  const calls = Array.from(
+    { length: count },
+    (_, index) =>
+      `f${index}: ${field}(input: { pullRequestId: $id, path: $p${index} }) { clientMutationId }`,
+  ).join(" ");
+  return `mutation($id: ID!, ${params}) { ${calls} }`;
+}
+
+/** Mark or unmark files as viewed for the requesting viewer. */
+export async function setPrFilesViewed(
   ctx: RouteContext,
   claimedUser: string | null,
   ghRepo: string,
   prId: string,
-  filePath: string,
+  paths: readonly string[],
   viewed: boolean,
 ): Promise<void> {
   const credential = await viewerCredential(ctx, ghRepo, claimedUser);
   if (!credential) throw new Error("No GitHub credential available");
-  const mutation = viewed
-    ? `mutation($id: ID!, $path: String!) { markFileAsViewed(input: { pullRequestId: $id, path: $path }) { clientMutationId } }`
-    : `mutation($id: ID!, $path: String!) { unmarkFileAsViewed(input: { pullRequestId: $id, path: $path }) { clientMutationId } }`;
-  await graphql(credential, mutation, { id: prId, path: filePath });
+  for (let start = 0; start < paths.length; start += VIEWED_BATCH) {
+    const batch = paths.slice(start, start + VIEWED_BATCH);
+    const variables: Record<string, unknown> = { id: prId };
+    batch.forEach((path, index) => (variables[`p${index}`] = path));
+    await graphql(credential, viewedMutation(batch.length, viewed), variables);
+  }
 }

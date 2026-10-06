@@ -10,6 +10,7 @@
  */
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -35,7 +36,9 @@ import {
   piBashHomeEnv,
   piAssistantTranscriptEntries,
   PI_STATE_DIR,
+  PI_CODEMODE_TOOL,
   PI_STEER_TOOL_SKIP,
+  piCodemodeExtension,
   piDialOracleAgent,
   piGateReason,
   piStreamEventRequiresAccountContinuation,
@@ -128,6 +131,65 @@ describe("piSteeringBoundaryTools", () => {
     );
 
     expect(executed).toEqual(["first"]);
+    expect(skipped.content).toEqual([
+      { type: "text", text: PI_STEER_TOOL_SKIP },
+    ]);
+  });
+
+  test("rejects a codemode script's call once a steer is waiting", async () => {
+    let executed = 0;
+    const [tool] = piSteeringBoundaryTools(
+      [
+        {
+          name: "read",
+          label: "read",
+          description: "read",
+          parameters: {} as any,
+          async execute() {
+            executed++;
+            return { content: [{ type: "text", text: "ok" }], details: {} };
+          },
+        },
+      ],
+      () => true,
+    );
+    await expect(
+      tool!.execute("call-1/2", {}, undefined, undefined, {} as any),
+    ).rejects.toThrow(PI_STEER_TOOL_SKIP);
+    expect(executed).toBe(0);
+  });
+});
+
+describe("piCodemodeExtension", () => {
+  test("registers pi's codemode tool behind the steering boundary", async () => {
+    const sdk = await import("@earendil-works/pi-coding-agent");
+    let steeringPending = false;
+    const registered: any[] = [];
+    // Methods read `this`, as pi's extension API does.
+    class FakePi {
+      tools = registered;
+      registerTool(tool: any) {
+        this.tools.push(tool);
+      }
+      getSettings() {
+        return {};
+      }
+    }
+    await piCodemodeExtension(sdk, () => steeringPending)(new FakePi() as any);
+
+    expect(registered).toHaveLength(1);
+    const tool = registered[0];
+    expect(tool.name).toBe(PI_CODEMODE_TOOL);
+    expect(tool.executionMode).toBe("sequential");
+    expect(typeof tool.prepareLoadout).toBe("function");
+    steeringPending = true;
+    const skipped = await tool.execute(
+      "call-1",
+      { code: "return 1" },
+      undefined,
+      undefined,
+      {} as any,
+    );
     expect(skipped.content).toEqual([
       { type: "text", text: PI_STEER_TOOL_SKIP },
     ]);
@@ -500,7 +562,9 @@ describe("buildPiThirdPartyProviderPlan", () => {
       api: "openai-completions",
       baseUrl: "https://pass.wafer.ai/v1",
     });
-    const models = plan.config.models as Array<Record<string, unknown>>;
+    const models = plan.config.models as unknown as Array<
+      Record<string, unknown>
+    >;
     const ids = models.map((m) => m.id);
     expect(ids).toContain("deepseek-v4-flash-0731-fast");
     expect(ids).toContain("kimi-k3");
@@ -580,7 +644,9 @@ describe("buildPiThirdPartyProviderPlan", () => {
       builtinModelIds: ["gpt-oss-120b"],
     });
     if ("error" in plan) throw new Error(plan.error);
-    const models = plan.config.models as Array<Record<string, unknown>>;
+    const models = plan.config.models as unknown as Array<
+      Record<string, unknown>
+    >;
     expect(models).toHaveLength(1);
     expect(models[0]).toMatchObject({
       id: "brand-new-model",
@@ -897,7 +963,7 @@ describe("runPi pi/openai account wiring (fake engine, no network)", () => {
           sessionId: "fake-api-key",
           pendingMessageCount: 0,
           agent: { continue: async () => {} },
-          getActiveToolNames: () => [],
+          state: { tools: [] },
           setSteeringMode: () => {},
           subscribe: (fn: (event: any) => void) => {
             listener = fn;
@@ -1037,7 +1103,7 @@ describe("runPi pi/openai account wiring (fake engine, no network)", () => {
               listener({ type: "agent_settled" });
             },
           },
-          getActiveToolNames: () => [],
+          state: { tools: [] },
           getLastAssistantText: () => "done with the icon",
           setSteeringMode: () => {},
           subscribe: (fn: (event: any) => void) => {
@@ -1095,6 +1161,162 @@ describe("runPi pi/openai account wiring (fake engine, no network)", () => {
         recursive: true,
         force: true,
       });
+    }
+  });
+
+  // A run host that died mid-turn left a tool call without a result and a
+  // reply half streamed. The next turn on that Pi session must close the call
+  // with what it had produced, hand the reply back to the model, and clear
+  // the checkpoint once it ends normally.
+  test("a turn after a dead one repairs its tool calls and keeps its reply", async () => {
+    writeFileSync(
+      storePath,
+      JSON.stringify({
+        accounts: [
+          {
+            id: "k1",
+            name: "org-key",
+            kind: "api_key",
+            value: "test-remote-runtime-key",
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      }),
+    );
+    const sdk = await import("@earendil-works/pi-coding-agent");
+    const transcriptSessionId = `pi-resume-${crypto.randomUUID()}`;
+    const sessionDir = join(PI_STATE_DIR, "sessions", transcriptSessionId);
+    mkdirSync(sessionDir, { recursive: true });
+    const scratchDir = join(dir, `scratch-${transcriptSessionId}`);
+    mkdirSync(scratchDir, { recursive: true });
+
+    const previous = sdk.SessionManager.create(dir, sessionDir);
+    previous.appendMessage({
+      role: "user",
+      content: "push the branch",
+      timestamp: Date.now(),
+    } as any);
+    previous.appendMessage({
+      role: "assistant",
+      stopReason: "toolUse",
+      content: [
+        { type: "toolCall", id: "call-push", name: "bash", arguments: {} },
+      ],
+      timestamp: Date.now(),
+    } as any);
+    const piSessionId = previous.getSessionId();
+    const checkpointPath = join(sessionDir, "turn-checkpoint.json");
+    writeFileSync(
+      checkpointPath,
+      JSON.stringify({
+        version: 1,
+        piSessionId,
+        updatedAt: new Date().toISOString(),
+        reply: {
+          id: "reply-cut",
+          text: "The push is halfway",
+          startedAt: new Date().toISOString(),
+        },
+        tools: { "call-push": { toolName: "bash", output: "Enumerating" } },
+      }),
+    );
+
+    let seenResults: any[] = [];
+    let seenPrompt = "";
+    const fakeSdk = {
+      ModelRuntime: {
+        create: async () => ({
+          getModel: (_provider: string, id: string) => ({ id, name: id }),
+          registerProvider: () => {},
+          setRuntimeApiKey: async () => {},
+        }),
+      },
+      SettingsManager: { inMemory: () => ({}) },
+      DefaultResourceLoader: class {
+        async reload() {}
+        getSkills() {
+          return { skills: [] };
+        }
+      },
+      SessionManager: sdk.SessionManager,
+      createAgentSession: async ({ sessionManager }: any) => {
+        seenResults = sdk
+          .buildSessionContext(sessionManager.getEntries())
+          .messages.filter((m: any) => m.role === "toolResult");
+        let listener: (event: any) => void = () => {};
+        const session = {
+          sessionId: sessionManager.getSessionId(),
+          pendingMessageCount: 0,
+          agent: { continue: async () => {} },
+          state: { tools: [] },
+          getLastAssistantText: () => "pushed",
+          setSteeringMode: () => {},
+          subscribe: (fn: (event: any) => void) => {
+            listener = fn;
+            return () => {};
+          },
+          prompt: async (text: string) => {
+            seenPrompt = text;
+            listener({
+              type: "message_start",
+              message: { role: "assistant" },
+            });
+            listener({
+              type: "message_end",
+              message: {
+                role: "assistant",
+                stopReason: "stop",
+                usage: {
+                  input: 1,
+                  output: 1,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  cost: { total: 0 },
+                },
+                content: [{ type: "text", text: "pushed" }],
+                timestamp: Date.now(),
+              },
+            });
+            listener({ type: "agent_settled" });
+          },
+          abort: async () => {},
+          abortRetry: () => {},
+          dispose: () => {},
+        };
+        return { session };
+      },
+    };
+
+    const sdkState = globalThis as any;
+    const previousSdkPromise = sdkState.__piSdkPromise;
+    sdkState.__piSdkPromise = Promise.resolve(fakeSdk);
+    try {
+      const events = await collect("pi/openai/gpt-6.1-sol", {
+        accountId: "k1",
+        accountStrict: true,
+        sessionId: piSessionId,
+        transcriptSessionId,
+        scratchDir,
+        disableLocalWorkspaceTools: true,
+      });
+      expect(seenResults).toHaveLength(1);
+      expect(seenResults[0]).toMatchObject({
+        toolCallId: "call-push",
+        isError: true,
+      });
+      expect(seenResults[0].content[0].text).toContain("Enumerating");
+      expect(seenPrompt).toContain("The push is halfway");
+      expect(seenPrompt).toContain('source="restart-recovery"');
+      expect(
+        events.find((event) => event.type === "runner_notice"),
+      ).toMatchObject({
+        text: expect.stringContaining("1 tool call it was running is marked"),
+      });
+      expect(events.find((event) => event.type === "done")).toBeDefined();
+      expect(existsSync(checkpointPath)).toBe(false);
+    } finally {
+      sdkState.__piSdkPromise = previousSdkPromise;
+      rmSync(sessionDir, { recursive: true, force: true });
     }
   });
 
@@ -1320,6 +1542,23 @@ describe("runPi pi/openai account wiring (fake engine, no network)", () => {
                   toolName: "bash",
                   args: { command: "do-once" },
                 });
+                // A codemode script's own call: pi never persists it, so
+                // it must not become a live card either.
+                listener({
+                  type: "tool_execution_start",
+                  toolCallId: "completed-action/1",
+                  parentToolCallId: "completed-action",
+                  toolName: "read",
+                  args: { path: "a.txt" },
+                });
+                listener({
+                  type: "tool_execution_end",
+                  toolCallId: "completed-action/1",
+                  parentToolCallId: "completed-action",
+                  toolName: "read",
+                  result: { content: [{ type: "text", text: "nested" }] },
+                  isError: false,
+                });
                 listener({
                   type: "tool_execution_end",
                   toolCallId: "completed-action",
@@ -1410,7 +1649,10 @@ describe("runPi pi/openai account wiring (fake engine, no network)", () => {
         // Subscription traffic skips the experimental ChatGPT WebSocket, whose
         // mid-stream 1006 failures otherwise force a visible whole-step retry.
         // The API-key rotation still uses Pi's ordinary provider defaults.
-        expect(transportSettings).toEqual([{ transport: "sse" }, {}]);
+        expect(transportSettings).toEqual([
+          { cacheWarming: "off", transport: "sse" },
+          { cacheWarming: "off" },
+        ]);
         expect(events.filter((event) => event.type === "init")).toHaveLength(2);
         expect(events.filter((event) => event.type === "error")).toHaveLength(
           0,

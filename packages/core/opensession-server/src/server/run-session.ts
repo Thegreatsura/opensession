@@ -41,6 +41,8 @@ import { syncAgentSessionEngine } from "./agent-session-sync";
 import { cancelAgentWait } from "./agent-waits";
 import { runAgentHosted } from "./host-client";
 import { getRunState, transitionRunState } from "./run-state";
+import { settlePromptThrowRunState } from "./prompt-throw-settlement";
+import { retryOnKernelSaturation } from "./session-projection-executor";
 import { resolveSessionRunInputs, runAccountSpec } from "./session-run-inputs";
 import { defaultRepo } from "./config";
 import { agentAwsCredsForUntrustedRuns } from "./aws-creds";
@@ -183,6 +185,7 @@ import {
   SESSIONS_DIR,
 } from "./session-cache";
 import { markRecapPendingIfUnwatched } from "./recap";
+import { noteYouShouldKnowStep } from "./you-should-know";
 import { scheduleSessionHistoryIndex } from "./session-index";
 import { broadcastToSession, sessionWatchers } from "./ws-hub";
 import { peekWorkspace } from "./workspaces";
@@ -2659,15 +2662,19 @@ export async function runSessionPrompt(
     // A completed turn is nevertheless a safe acknowledgement of its dispatch.
     await acknowledgePromptDispatch(sessionId, durablePromptEntryId);
   } catch (e) {
-    // A throw before the run registered (workspace revive, session-note
-    // build, …) would strand the FSM in "starting" forever — the wedge the
-    // run-state watchdog flags. Settle it; later throws have their own
-    // terminal transitions and are left alone.
-    if (getRunState(sessionId) === "starting")
-      await transitionRunState(sessionId, "start_failed", {
-        source: "prompt_throw",
-        error: String(e),
-      });
+    // A throw can land before registration (workspace revive, session-note
+    // build, …) or after a detached host registered but failed before its
+    // first terminal event. Settle either exact run; otherwise the owner is
+    // removed in finally while the FSM stays running until quarantine.
+    await retryOnKernelSaturation("prompt throw run-state settlement", () =>
+      settlePromptThrowRunState({
+        sessionId,
+        runKey: startToken,
+        state: getRunState(sessionId),
+        error: e,
+        transition: transitionRunState,
+      }),
+    );
     // A direct sandbox send owns the dispatch it created above, so a normal
     // start failure retires that recovery record. A queue drain passes its own
     // dispatch in and must retain it for the caller to restore atomically.
@@ -3042,6 +3049,7 @@ async function runSessionPromptInner(
       content,
       user,
       sessionRepoIds(session),
+      session.id,
     );
     if (memoryContext) prompt = `${memoryContext}\n\n${prompt}`;
   }
@@ -3411,6 +3419,9 @@ async function runSessionPromptInner(
   // Tool calls seen this run — used to replenish the continuation budget only
   // while human messages are queued behind ongoing work.
   let toolUseCount = 0;
+  // Identifies this turn to the "You should know" side agent, which offers at
+  // most one suggestion per turn (you-should-know.ts).
+  const youShouldKnowTurn = startToken ?? crypto.randomUUID();
   // An incident this turn declares is recorded against the session, so the
   // incident's responder can find it (incident-declarations.ts).
   const recordIncidentDeclarations = createIncidentDeclarationRecorder(
@@ -3613,6 +3624,17 @@ async function runSessionPromptInner(
       }
       case "tool_use":
         toolUseCount++;
+        // Every sixth step of a watched turn, a side agent looks for the one
+        // thing the person might miss, if they turned it on. Interactive
+        // sessions only: an automation has nobody to tell.
+        if (!isAutomationSession)
+          void noteYouShouldKnowStep({
+            sessionId,
+            user: user || session.startedBy || undefined,
+            step: toolUseCount,
+            turnId: youShouldKnowTurn,
+            model: session.model,
+          });
         plainDiscussionToolUse(session.plainDiscussionId, event);
         broadcastToSession(sessionId, {
           type: "stream_tool_use",

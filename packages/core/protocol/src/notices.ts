@@ -151,7 +151,11 @@ export type NoticeKind =
    *  offer, and what the human picked. The card itself is transient (it is
    *  removed the moment it resolves), so without this the transcript kept no
    *  trace that the run had ever stopped to ask. */
-  | "ask";
+  | "ask"
+  /** A side agent's note on something the person might miss in a running
+   *  turn ("Heads up · …"), with its plain-English explanation behind the
+   *  show toggle (you-should-know.ts). */
+  | "you-should-know";
 
 /**
  * How a client renders the entry's `content` underneath the title:
@@ -612,6 +616,33 @@ export function askRecordContent(title: string, body: string): string {
   return body ? `${title}\n${body}` : title;
 }
 
+/**
+ * The durable record of a "You should know" suggestion: the tag and the learn
+ * line as the title, the explanation as the markdown body. Same title-line
+ * layout as an answered ask, so the record needs no new wire field and every
+ * client renders it through the generic notice path.
+ */
+export function youShouldKnowRecordContent(
+  tag: string,
+  line: string,
+  explanation?: string,
+): string {
+  const title = `${tag} \u00b7 ${line}`.replace(/\s+/g, " ").trim();
+  const body = explanation?.trim() ?? "";
+  return body ? `${title}\n${body}` : title;
+}
+
+/** Split a "You should know" notice title back into its tag and learn line.
+ *  A title without the separator is all line, under the default tag. */
+export function parseYouShouldKnowTitle(title: string): {
+  tag: string;
+  line: string;
+} {
+  const at = title.indexOf(" \u00b7 ");
+  if (at === -1) return { tag: "You should know", line: title.trim() };
+  return { tag: title.slice(0, at).trim(), line: title.slice(at + 3).trim() };
+}
+
 function parseLegacyAnsweredAsk(body: string): AnsweredAskData | undefined {
   const questions: AnsweredAskData["questions"] = [];
   let current: AnsweredAskData["questions"][number] | undefined;
@@ -789,6 +820,23 @@ function classifyDelivery(entry: TranscriptEntry): TranscriptEntry {
           tone: "info",
           ...(body ? { body: "collapsed" as const } : {}),
           ...(ask ? { ask } : {}),
+        },
+      };
+    }
+    if (entry.noticeKind === "you-should-know") {
+      const nl = (entry.content || "").indexOf("\n");
+      const title = (
+        nl === -1 ? entry.content || "" : entry.content.slice(0, nl)
+      ).trim();
+      const body = nl === -1 ? "" : entry.content.slice(nl + 1).trim();
+      return {
+        ...entry,
+        content: body,
+        notice: {
+          kind: "you-should-know",
+          title,
+          tone: "info",
+          ...(body ? { body: "collapsed" as const } : {}),
         },
       };
     }

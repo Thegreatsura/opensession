@@ -43,6 +43,10 @@ final class Outbox {
         let imageFiles: [String]
         let effort: String?
         let fastMode: Bool?
+        /// "standard" | "fast" | "ultrafast". Nil on items queued by builds
+        /// that predate it; those replay `fastMode` alone, which the server
+        /// reads without downgrading a stored Ultrafast.
+        var speed: String? = nil
         /// "queue" | "steer" — what to do if a run is in flight on arrival.
         let busyMode: String
         /// Optional origin for a non-composer action. Failure continuations
@@ -104,6 +108,7 @@ final class Outbox {
             busyMode: item.busyMode,
             effort: item.effort,
             fastMode: item.fastMode,
+            speed: item.speed,
             clientId: item.id
         )
     }
@@ -137,6 +142,7 @@ final class Outbox {
         images: [String] = [],
         effort: String? = nil,
         fastMode: Bool? = nil,
+        speed: String? = nil,
         busyMode: String,
         purpose: String? = nil,
         user: String
@@ -154,6 +160,7 @@ final class Outbox {
             imageFiles: files,
             effort: effort,
             fastMode: fastMode,
+            speed: speed,
             busyMode: busyMode,
             purpose: purpose,
             user: user,
@@ -370,7 +377,7 @@ final class Outbox {
 
     // MARK: - Persistence
 
-    private static func serverKey() -> String {
+    static func serverKey() -> String {
         ServerConfig.shared.baseURL?.absoluteString ?? ""
     }
 

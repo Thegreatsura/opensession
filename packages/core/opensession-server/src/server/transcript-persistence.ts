@@ -248,6 +248,22 @@ export function transcriptLineRecap(
   return transcriptLineUser(`<recap>${text}</recap>`, id, ts);
 }
 
+/** A "You should know" suggestion (you-should-know.ts): the tag and learn
+ *  line on the first line, the explanation below. Same user-role +
+ *  harness-marker pattern as the recap; the jsonl parser maps it to a system
+ *  entry tagged `noticeKind: "you-should-know"`. */
+export function transcriptLineYouShouldKnow(
+  content: string,
+  id?: string,
+  ts?: string,
+): JsonlLine {
+  return transcriptLineUser(
+    `<you-should-know>${content}</you-should-know>`,
+    id,
+    ts,
+  );
+}
+
 /** A model-visible payload the harness injected into a prompt — the
  *  "model-visible means logged" record written by context-log.ts. Same
  *  user-role + harness-marker pattern as runner notices; the jsonl parser maps

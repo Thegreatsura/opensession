@@ -46,6 +46,8 @@ import type { Subprocess } from "bun";
 import { writeJsonAtomic } from "./shared/atomic-write";
 import { audit } from "./audit";
 import { stateDir } from "./paths";
+import { workloadArgv, workloadScopingActive } from "./workload-scope";
+import { stopUserScopeAndWait } from "./systemd-scopes";
 
 const DEPLOYS_DIR = stateDir("deploys");
 const REGISTRY = join(DEPLOYS_DIR, "registry.json");
@@ -200,9 +202,21 @@ function noteCrash(id: string): void {
  * SIGKILL after a grace period is what makes "stopped" mean stopped for an app
  * that ignores SIGTERM.
  */
+/** Each app runs in a stable, per-app workload scope. A scope outlives the
+ *  gateway that started it, so after a handoff the new gateway holds no pid
+ *  for the app; stopping the scope by name still reaches it. Without this the
+ *  boot relaunch died on EADDRINUSE while the old process kept serving. */
+function appScopeUnit(id: string): string {
+  return `opensession-app-${id.replace(/[^A-Za-z0-9-]/g, "-")}`;
+}
+
+async function stopAppScope(id: string): Promise<void> {
+  if (workloadScopingActive()) await stopUserScopeAndWait(appScopeUnit(id));
+}
+
 async function killProcess(id: string, graceMs = 3_000): Promise<void> {
   const proc = procs.get(id);
-  if (!proc) return;
+  if (!proc) return stopAppScope(id);
   procs.delete(id);
   intentionalKills.add(proc);
   try {
@@ -214,13 +228,14 @@ async function killProcess(id: string, graceMs = 3_000): Promise<void> {
     proc.exited.then(() => true),
     new Promise<false>((r) => setTimeout(() => r(false), graceMs).unref?.()),
   ]);
-  if (exited) return;
+  if (exited) return stopAppScope(id);
   try {
     proc.kill("SIGKILL");
     await proc.exited;
   } catch {
     // nothing left to signal
   }
+  await stopAppScope(id);
 }
 
 /**
@@ -260,55 +275,60 @@ export async function launchDeploy(
     // the wrapper leaves the real server running and holding the port, which
     // is exactly how "stopped" apps stayed up. publishDeploy rejects compound
     // entrypoints so exec always applies.
-    proc = Bun.spawn(["/bin/sh", "-c", `exec ${version.entrypoint}`], {
-      cwd,
-      env: {
-        // A deliberately minimal environment, like agent subprocesses get:
-        // a published app must never inherit the server's tokens.
-        PATH: process.env.PATH || "/usr/bin:/bin",
-        HOME: homeDir(),
-        LANG: process.env.LANG || "C.UTF-8",
-        PORT: String(d.port),
-        DATA_DIR: dataDir(id),
-        NODE_ENV: "production",
-        ...(version.env || {}),
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-      onExit(_proc, exitCode, signalCode) {
-        if (procs.get(id) === proc) procs.delete(id);
-        const current = deploys.get(id);
-        // A deliberate teardown (redeploy, rollback, stop) is not a crash and
-        // must not schedule a restart — the caller is already launching the
-        // replacement, and a second launcher would fight it for the port.
-        if (
-          !current ||
-          current.state === "stopped" ||
-          intentionalKills.has(proc)
-        )
-          return;
-        noteCrash(id);
-        current.lastError = `exited (code ${exitCode ?? "null"}${signalCode ? `, signal ${signalCode}` : ""})`;
-        if (crashLooping(id)) {
-          current.state = "crashed";
+    proc = Bun.spawn(
+      workloadArgv(["/bin/sh", "-c", `exec ${version.entrypoint}`], "app", {
+        unit: appScopeUnit(id),
+      }),
+      {
+        cwd,
+        env: {
+          // A deliberately minimal environment, like agent subprocesses get:
+          // a published app must never inherit the server's tokens.
+          PATH: process.env.PATH || "/usr/bin:/bin",
+          HOME: homeDir(),
+          LANG: process.env.LANG || "C.UTF-8",
+          PORT: String(d.port),
+          DATA_DIR: dataDir(id),
+          NODE_ENV: "production",
+          ...(version.env || {}),
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+        onExit(_proc, exitCode, signalCode) {
+          if (procs.get(id) === proc) procs.delete(id);
+          const current = deploys.get(id);
+          // A deliberate teardown (redeploy, rollback, stop) is not a crash and
+          // must not schedule a restart — the caller is already launching the
+          // replacement, and a second launcher would fight it for the port.
+          if (
+            !current ||
+            current.state === "stopped" ||
+            intentionalKills.has(proc)
+          )
+            return;
+          noteCrash(id);
+          current.lastError = `exited (code ${exitCode ?? "null"}${signalCode ? `, signal ${signalCode}` : ""})`;
+          if (crashLooping(id)) {
+            current.state = "crashed";
+            persist();
+            audit({
+              kind: "deploy_crash_looping",
+              deploy: current.name,
+              error: current.lastError,
+            });
+            console.error(
+              `[deploys] ${current.name} is crash-looping — not restarting`,
+            );
+            return;
+          }
           persist();
-          audit({
-            kind: "deploy_crash_looping",
-            deploy: current.name,
-            error: current.lastError,
-          });
-          console.error(
-            `[deploys] ${current.name} is crash-looping — not restarting`,
-          );
-          return;
-        }
-        persist();
-        setTimeout(() => {
-          if (deploys.get(id)?.state !== "stopped")
-            void launchDeploy(id, { force: true });
-        }, RESTART_DELAY_MS).unref?.();
+          setTimeout(() => {
+            if (deploys.get(id)?.state !== "stopped")
+              void launchDeploy(id, { force: true });
+          }, RESTART_DELAY_MS).unref?.();
+        },
       },
-    });
+    );
   } catch (e: any) {
     d.state = "crashed";
     d.lastError = `spawn failed: ${e?.message || String(e)}`;

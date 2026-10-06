@@ -31,6 +31,7 @@ import { Collapsible, collapsiblePanelClasses } from "../ui/collapsible";
 import { pastedTextLineLabel } from "@tellahq/opensession-protocol/pasted-text";
 import { personKey } from "../lib/review-queue";
 import { AnsweredAskCard } from "./AnsweredAskCard";
+import { YouShouldKnowNotice } from "./YouShouldKnowNotice";
 import { AgentIdentity } from "./AgentIdentity";
 import { AgentDeliveryMark } from "./AgentDeliveryMark";
 import { outgoingAgentMessage } from "../lib/agent-message";
@@ -957,6 +958,10 @@ export const MessageBubble = function MessageBubble({
       </div>
     );
   }
+
+  // A side agent's note gets the plugin's answers, not a bare show toggle.
+  if (e.notice?.kind === "you-should-know")
+    return <YouShouldKnowNotice entry={e} sessionId={sessionId} />;
 
   // Operational events remain notices; agent correspondence is conversation.
   // A scheduled check-back is one of them: collapsed system line, not a turn.

@@ -13,6 +13,7 @@
  * papercutsServerFor and the automation guard in the run-rpc builder below.
  */
 
+import { lazyServerRecord } from "./inprocess-mcp";
 import { deskNavigationMcp } from "./desk-navigation-mcp";
 import { createSessionsMcpServer } from "../agents/slack/sessions-tools";
 import { interactivePrompter, sessionCreationOwner } from "./session-actors";
@@ -42,6 +43,7 @@ import { createTodosMcpServer } from "../agents/slack/todos-tools";
 import { createSearchMcpServer } from "../agents/slack/search-tools";
 import { createAssetsMcpServer } from "../agents/slack/assets-tools";
 import { createChartsMcpServer } from "./charts-mcp";
+import { createCommentsMcpServer } from "./comments-mcp";
 import { createDatabasesMcpServer } from "../agents/slack/databases-tools";
 import { createWorkflowsMcpServer } from "../agents/slack/workflow-tools";
 import { createSelfDeployMcpServer } from "./self-deploy";
@@ -72,10 +74,14 @@ import {
   checkPrMergeReadiness,
   linkPr,
   resolveSessionRepoContext,
+  presentMemoryRepos,
   sessionRepoIds,
+  sessionWorkspaceIsRemote,
   switchPrimaryRepo,
 } from "./session-repos";
+import { sessionLink } from "./run-instructions";
 import { makeAskHandler } from "./asks";
+import { forceMergeForSession } from "./force-merge-session";
 import { createScheduleMcpServer } from "./schedule-mcp";
 import { activeSandboxFor } from "./session-sandbox";
 import {
@@ -168,38 +174,41 @@ export function interactiveMcpServers(
   promptEntryId?: string,
 ): Record<string, unknown> {
   const createdBy = user || productName();
-  return {
-    "opensession-sessions": createSessionsMcpServer({
-      createdBy,
-      createdByLogin: sessionId
-        ? findSession(sessionId)?.createdByLogin
-        : undefined,
-      isAdmin: true,
-      currentSessionId: sessionId,
-      // Read when a session is created, not when the turn starts, so a person
-      // who steers a webhook- or schedule-started turn owns what it creates.
-      creationOwner: sessionId
-        ? async () =>
-            sessionCreationOwner(createdBy, await findSessionAsync(sessionId))
-        : undefined,
-    }),
-    "opensession-admin": createAdminMcpServer({
-      channel: "opensession",
-      userId: user || "opensession",
-      isDM: false,
-      isPrivate: false,
-      createdBy,
-      isAdmin: true,
-    }),
+  return lazyServerRecord({
+    "opensession-sessions": () =>
+      createSessionsMcpServer({
+        createdBy,
+        createdByLogin: sessionId
+          ? findSession(sessionId)?.createdByLogin
+          : undefined,
+        isAdmin: true,
+        currentSessionId: sessionId,
+        // Read when a session is created, not when the turn starts, so a person
+        // who steers a webhook- or schedule-started turn owns what it creates.
+        creationOwner: sessionId
+          ? async () =>
+              sessionCreationOwner(createdBy, await findSessionAsync(sessionId))
+          : undefined,
+      }),
+    "opensession-admin": () =>
+      createAdminMcpServer({
+        channel: "opensession",
+        userId: user || "opensession",
+        isDM: false,
+        isPrivate: false,
+        createdBy,
+        isAdmin: true,
+      }),
     // Runners are deliberately trusted persistent machines for platform-locked
     // work. Interactive-only: untrusted automation text must never reach one.
-    "opensession-runners": createRunnersMcpServer({ user, sessionId }),
+    "opensession-runners": () => createRunnersMcpServer({ user, sessionId }),
     // Long-running goals: create/list/steer persistent, self-pacing missions.
-    "opensession-goals": createGoalsMcpServer({ createdBy, isAdmin: true }),
+    "opensession-goals": () =>
+      createGoalsMcpServer({ createdBy, isAdmin: true }),
     // Search past sessions' distilled records (session-index.ts). Read-only,
     // but transcripts can hold sensitive material — interactive-only like the
     // siblings (the automation gate in the run-rpc builder below fails closed).
-    "opensession-search": createSearchMcpServer(),
+    "opensession-search": () => createSearchMcpServer(),
     // Self-deploy: ff-only deploy of THIS instance to a sha + restart, with a
     // last-known-good pin, health gate, and watchdog-covered rollback
     // (deploy/self-deploy.sh). Interactive-only like every sibling — a deploy
@@ -211,9 +220,10 @@ export function interactiveMcpServers(
     ...(isDevInstance()
       ? {}
       : {
-          "opensession-self-deploy": createSelfDeployMcpServer({
-            user: createdBy,
-          }),
+          "opensession-self-deploy": () =>
+            createSelfDeployMcpServer({
+              user: createdBy,
+            }),
         }),
     // Human-in-the-loop: ask a teammate and fold the answer back into this
     // session. Needs the session id so the answer routes home. Withheld (like
@@ -221,208 +231,230 @@ export function interactiveMcpServers(
     ...(sessionId
       ? {
           ...deskNavigationMcp(sessionId, promptEntryId),
-          "opensession-humans": createHumansMcpServer({
-            sessionId,
-            createdBy,
-            isAdmin: true,
-          }),
+          "opensession-humans": () =>
+            createHumansMcpServer({
+              sessionId,
+              createdBy,
+              isAdmin: true,
+            }),
           // Borrow a teammate's credential for a stated purpose, with
           // their approval, through the broker (src/server/keychain.ts).
           // Interactive-only for the same reason as its sibling above:
           // an ask is a DM carrying a model-authored purpose string, and
           // untrusted ticket text must never be able to compose one.
-          "opensession-keychain": createKeychainMcpServer({
-            sessionId,
-            user: createdBy,
-          }),
+          "opensession-keychain": () =>
+            createKeychainMcpServer({
+              sessionId,
+              user: createdBy,
+            }),
           // Publish a directory as a durable internal web app that
           // outlives this session (src/server/deploys.ts). Interactive
           // only: a deploy is arbitrary code that keeps running, so
           // untrusted automation text must never reach it.
-          "opensession-publish": createPublishMcpServer({
-            sessionId,
-            user: createdBy,
-            worktreeDir: () => findSession(sessionId)?.worktreeDir || undefined,
-          }),
+          "opensession-publish": () =>
+            createPublishMcpServer({
+              sessionId,
+              user: createdBy,
+              worktreeDir: () =>
+                findSession(sessionId)?.worktreeDir || undefined,
+            }),
           // Cross-repo: attach secondary repos as isolated worktrees.
-          "opensession-repos": createReposMcpServer({
-            sessionId,
-            attach: (repo, branch) =>
-              attachRepo(
-                sessionId,
-                repo,
-                branch,
-                githubCredentialForRun(createdBy)?.env,
-              ),
-            switchPrimary: (repo) =>
-              switchPrimaryRepo(
-                sessionId,
-                repo,
-                false,
-                githubCredentialForRun(createdBy)?.env,
-              ),
-            snapshot: () => {
-              const s = findSession(sessionId);
-              if (!s) return null;
-              return {
-                primaryRepo: sessionRepoId(s) ?? defaultRepo().id,
-                branch: s.branch,
-                worktreeDir: s.worktreeDir,
-                attached: s.attachedRepos || [],
-              };
-            },
-            repos: () =>
-              Object.values(REPOS).map((p) => ({
-                id: p.id,
-                defaultBranch: p.defaultBranch,
-                sharedCheckout: !!p.sharedCheckout,
-              })),
-            linkPr: (input) => linkPr(sessionId, input),
-            labelPr: (input) => labelPr(sessionId, input),
-            checkPrReady: (input) => checkPrMergeReadiness(sessionId, input),
-          }),
+          "opensession-repos": () =>
+            createReposMcpServer({
+              sessionId,
+              attach: (repo, branch) =>
+                attachRepo(
+                  sessionId,
+                  repo,
+                  branch,
+                  githubCredentialForRun(createdBy)?.env,
+                ),
+              switchPrimary: (repo) =>
+                switchPrimaryRepo(
+                  sessionId,
+                  repo,
+                  false,
+                  githubCredentialForRun(createdBy)?.env,
+                ),
+              snapshot: () => {
+                const s = findSession(sessionId);
+                if (!s) return null;
+                return {
+                  primaryRepo: sessionRepoId(s) ?? defaultRepo().id,
+                  branch: s.branch,
+                  worktreeDir: s.worktreeDir,
+                  attached: s.attachedRepos || [],
+                };
+              },
+              repos: () =>
+                Object.values(REPOS).map((p) => ({
+                  id: p.id,
+                  defaultBranch: p.defaultBranch,
+                  sharedCheckout: !!p.sharedCheckout,
+                })),
+              linkPr: (input) => linkPr(sessionId, input),
+              labelPr: (input) => labelPr(sessionId, input),
+              checkPrReady: (input) => checkPrMergeReadiness(sessionId, input),
+              // Opens a card only the driver can confirm (force-merge.ts);
+              // the merge runs with their token, never the run's.
+              forceMerge: (input, signal) =>
+                forceMergeForSession(sessionId, createdBy, input, signal),
+            }),
           // Durable repo/user/team memory, shared both ways with Slack's
           // channel memory. Write tools are
           // interactive-only — automation runs get read-only injection; see
           // memory-tools.ts for the trust model.
-          "opensession-memory": createMemoryMcpServer({
-            user,
-            // Lets a write refresh THIS session's memory snapshot without
-            // disturbing anyone else's cached prompt prefix.
-            sessionId,
-            repos: () => {
-              const s = findSession(sessionId);
-              return s ? sessionRepoIds(s) : [];
-            },
-          }),
+          "opensession-memory": () =>
+            createMemoryMcpServer({
+              user,
+              // Lets a write refresh THIS session's memory snapshot without
+              // disturbing anyone else's cached prompt prefix.
+              sessionId,
+              repos: () => {
+                const s = findSession(sessionId);
+                return s ? sessionRepoIds(s) : [];
+              },
+              fileTools: () => {
+                const s = findSession(sessionId);
+                return !s || sessionWorkspaceIsRemote(s);
+              },
+              presentRepos: () => presentMemoryRepos(sessionId),
+              sessionLink: sessionLink(sessionId),
+            }),
           // Read the web: fetch a URL as text, search what was fetched,
           // clone a GitHub repo instead of scraping it. Deliberately no
           // search provider. The session id only picks which scratch dir a
           // clone lands in; the tool list is the same for every session,
           // which is what lets it ride the shared server pool.
-          "opensession-web": createWebMcpServer({ sessionId }),
+          "opensession-web": () => createWebMcpServer({ sessionId }),
           // Portals are session-scoped supervised HTTP/WebSocket services.
           // The old Preview tool was intentionally replaced rather than
           // aliased: agents should choose Portals for live software.
-          "opensession-portals": createPortalsMcpServer({
-            sessionId,
-            worktreeDir: () => findSession(sessionId)?.worktreeDir || undefined,
-            // Portals run in the session's workspace Sandbox, or, for a
-            // session on this machine whose project asks for it, in a
-            // Portal Sandbox provisioned on the first start (portal-sandbox.ts).
-            sandbox: async (options) => {
-              const session = findSession(sessionId);
-              return session
-                ? sandboxForPortals(session, {
-                    wake: options?.wake,
-                    provision: options?.wake,
-                    // The agent's own call, mid-turn: its worktree is at
-                    // rest while the tool runs.
-                    ownTurn: true,
-                  })
-                : null;
-            },
-            hasSandbox: () => {
-              const session = findSession(sessionId);
-              return Boolean(session && portalsInSandbox(session));
-            },
-            shellOnHost: () => {
-              const session = findSession(sessionId);
-              return Boolean(
-                session &&
-                !session.runner &&
-                !session.sandbox?.provider &&
-                !session.sandbox?.sandboxId,
-              );
-            },
-            sandboxState: () => {
-              const session = findSession(sessionId);
-              return session ? describePortalSandbox(session) : null;
-            },
-            runner: () => findSession(sessionId),
-            verifyEditorFixture: (leaseId) => {
-              const session = findSession(sessionId);
-              const grantUser = editorFixtureGrantUser(session);
-              if (!grantUser)
-                throw new Error(
-                  "This session has no creator identity for Tella verification.",
+          "opensession-portals": () =>
+            createPortalsMcpServer({
+              sessionId,
+              worktreeDir: () =>
+                findSession(sessionId)?.worktreeDir || undefined,
+              // Portals run in the session's workspace Sandbox, or, for a
+              // session on this machine whose project asks for it, in a
+              // Portal Sandbox provisioned on the first start (portal-sandbox.ts).
+              sandbox: async (options) => {
+                const session = findSession(sessionId);
+                return session
+                  ? sandboxForPortals(session, {
+                      wake: options?.wake,
+                      provision: options?.wake,
+                      // The agent's own call, mid-turn: its worktree is at
+                      // rest while the tool runs.
+                      ownTurn: true,
+                    })
+                  : null;
+              },
+              hasSandbox: () => {
+                const session = findSession(sessionId);
+                return Boolean(session && portalsInSandbox(session));
+              },
+              shellOnHost: () => {
+                const session = findSession(sessionId);
+                return Boolean(
+                  session &&
+                  !session.runner &&
+                  !session.sandbox?.provider &&
+                  !session.sandbox?.sandboxId,
                 );
-              return callMcpTool(
-                "tella-stage",
-                "verify_editor_fixture",
-                { leaseKey: sessionId, leaseId },
-                grantUser,
-                { requireUserGrant: true },
-              );
-            },
-            setDefaultPath: async (path, options) => {
-              const session = findSession(sessionId);
-              if (!session) throw new Error("Session not found.");
-              if (!options?.exclusiveKey) {
-                await touchNativeSessionStrict(sessionId, {
-                  previewPath: path || undefined,
-                });
-                try {
-                  releasePreviewPathLease(sessionId);
-                } catch (error) {
-                  console.error(
-                    `Failed to release preview reservation for ${sessionId}:`,
-                    error,
+              },
+              sandboxState: () => {
+                const session = findSession(sessionId);
+                return session ? describePortalSandbox(session) : null;
+              },
+              runner: () => findSession(sessionId),
+              verifyEditorFixture: (leaseId) => {
+                const session = findSession(sessionId);
+                const grantUser = editorFixtureGrantUser(session);
+                if (!grantUser)
+                  throw new Error(
+                    "This session has no creator identity for Tella verification.",
                   );
-                }
-                return {};
-              }
-              const claim = claimPreviewPathLease({
-                key: options.exclusiveKey,
-                sessionId,
-                path: path || "/",
-                sourceLeaseId: options.sourceLeaseId,
-                ttlMinutes: options.leaseMinutes,
-              });
-              if (!claim.ok)
-                throw new Error(
-                  "That staging record is already reserved by another active session. Choose or create another record.",
+                return callMcpTool(
+                  "tella-stage",
+                  "verify_editor_fixture",
+                  { leaseKey: sessionId, leaseId },
+                  grantUser,
+                  { requireUserGrant: true },
                 );
-              try {
-                await touchNativeSessionStrict(sessionId, {
-                  previewPath: path || undefined,
+              },
+              setDefaultPath: async (path, options) => {
+                const session = findSession(sessionId);
+                if (!session) throw new Error("Session not found.");
+                if (!options?.exclusiveKey) {
+                  await touchNativeSessionStrict(sessionId, {
+                    previewPath: path || undefined,
+                  });
+                  try {
+                    releasePreviewPathLease(sessionId);
+                  } catch (error) {
+                    console.error(
+                      `Failed to release preview reservation for ${sessionId}:`,
+                      error,
+                    );
+                  }
+                  return {};
+                }
+                const claim = claimPreviewPathLease({
+                  key: options.exclusiveKey,
+                  sessionId,
+                  path: path || "/",
+                  sourceLeaseId: options.sourceLeaseId,
+                  ttlMinutes: options.leaseMinutes,
                 });
-                return { leaseId: claim.lease.id };
-              } catch (error) {
-                releasePreviewPathLease(sessionId, {
-                  leaseId: claim.lease.id,
-                });
-                throw error;
-              }
-            },
-          }),
+                if (!claim.ok)
+                  throw new Error(
+                    "That staging record is already reserved by another active session. Choose or create another record.",
+                  );
+                try {
+                  await touchNativeSessionStrict(sessionId, {
+                    previewPath: path || undefined,
+                  });
+                  return { leaseId: claim.lease.id };
+                } catch (error) {
+                  releasePreviewPathLease(sessionId, {
+                    leaseId: claim.lease.id,
+                  });
+                  throw error;
+                }
+              },
+            }),
           // Publish a demo walkthrough (video + before/after + writeup) onto
           // the session's Review tab and the PR description.
-          "opensession-walkthrough": createWalkthroughMcpServer({
-            sessionId,
-            by: createdBy,
-          }),
+          "opensession-walkthrough": () =>
+            createWalkthroughMcpServer({
+              sessionId,
+              by: createdBy,
+            }),
           // Human-gated Slack composition: the tool only opens an editable
           // composer. Posting still requires the signed-in person to press Send.
-          "opensession-slack": createSlackComposeMcpServer({ sessionId }),
+          "opensession-slack": () => createSlackComposeMcpServer({ sessionId }),
           // Supervised script runs that outlive the turn and the server
           // (script-runs.ts). Interactive only, like Portals: a run outlives
           // the call, and automation text must not leave one behind.
-          "opensession-scripts": createScriptsMcpServer({
-            sessionId,
-            user: createdBy,
-          }),
+          "opensession-scripts": () =>
+            createScriptsMcpServer({
+              sessionId,
+              user: createdBy,
+            }),
           // Ask the person watching for files from their own computer. They
           // pick the files; the agent never names a path there. Interactive
           // only: the purpose string is shown to a person as a request.
-          "opensession-local-files": createLocalFilesMcpServer({ sessionId }),
+          "opensession-local-files": () =>
+            createLocalFilesMcpServer({ sessionId }),
           // AskUserQuestion for engines without a canUseTool hook (Codex):
           // blocks on the same UI question card + Slack escalation as the
           // native Claude tool. claude-runner strips this server so Claude
           // keeps using the native AskUserQuestion instead of a duplicate.
-          "opensession-ask": createAskUserMcpServer({
-            ask: makeAskHandler(sessionId),
-          }),
+          "opensession-ask": () =>
+            createAskUserMcpServer({
+              ask: makeAskHandler(sessionId),
+            }),
           // Dynamic workflows: deterministic agent fan-out from a
           // model-authored script (Agents panel). Interactive-only like the
           // siblings — the automation fail-closed gate in the run-rpc builder
@@ -434,62 +466,69 @@ export function interactiveMcpServers(
           // exactly what this user's own interactive runs get (the
           // `allowedUsers` gate still applies via createdBy, and
           // confirm-gated servers are dropped wholesale in workflow-mcp.ts).
-          "opensession-workflows": createWorkflowsMcpServer({
-            sessionId,
-            user: createdBy,
-            workspace: (repo, hint) => {
-              const session = findSession(sessionId);
-              if (!session) return undefined;
-              const context = resolveSessionRepoContext(session, repo, hint);
-              if (!context) return undefined;
-              return {
-                cwd: context.dir,
-                repo: context.repo,
-                baseBranch: context.branch,
-              };
-            },
-            // The in-process servers a SCRIPT may call (mcp.opensession-assets
-            // .write_asset and friends). Passing the whole set is safe and is
-            // the point: workflow-mcp.ts intersects it with its own allowlist,
-            // so this can only ever narrow, and a server this run does not
-            // carry stays absent. Rebuilt per host because an McpServer holds
-            // exactly ONE transport — mounting the session's own instance on
-            // the workflow's in-memory pair would steal it from run-rpc. The
-            // recursion is lazy and terminates: this closure runs on a
-            // script's first mcp.* call, and the workflows server the rebuild
-            // produces is excluded from the allowlist anyway.
-            inProcessMcp: () => interactiveMcpServers(user, sessionId),
-          }),
+          "opensession-workflows": () =>
+            createWorkflowsMcpServer({
+              sessionId,
+              user: createdBy,
+              workspace: (repo, hint) => {
+                const session = findSession(sessionId);
+                if (!session) return undefined;
+                const context = resolveSessionRepoContext(session, repo, hint);
+                if (!context) return undefined;
+                return {
+                  cwd: context.dir,
+                  repo: context.repo,
+                  baseBranch: context.branch,
+                };
+              },
+              // The in-process servers a SCRIPT may call (mcp.opensession-assets
+              // .write_asset and friends). Passing the whole set is safe and is
+              // the point: workflow-mcp.ts intersects it with its own allowlist,
+              // so this can only ever narrow, and a server this run does not
+              // carry stays absent. Rebuilt per host because an McpServer holds
+              // exactly ONE transport — mounting the session's own instance on
+              // the workflow's in-memory pair would steal it from run-rpc. The
+              // recursion is lazy and terminates: this closure runs on a
+              // script's first mcp.* call, and the workflows server the rebuild
+              // produces is excluded from the allowlist anyway.
+              inProcessMcp: () => interactiveMcpServers(user, sessionId),
+            }),
           // Per-session scratch assets (previewed in the Assets tab).
           // Works in Ask mode — writes land outside the checkout.
-          "opensession-assets": createAssetsMcpServer({ sessionId }),
+          "opensession-assets": () => createAssetsMcpServer({ sessionId }),
           // ```vega-lite fences render on their own; this compiles a spec
           // for the agent and offloads big data into the session's assets.
-          "opensession-charts": createChartsMcpServer({ sessionId }),
+          "opensession-charts": () => createChartsMcpServer({ sessionId }),
+          // The comment threads people left on this session's transcript:
+          // read them, and reply in the one a person sent to this session.
+          "opensession-comments": () => createCommentsMcpServer({ sessionId }),
           // Named SQLite databases kept outside every repo (databases.ts),
           // browsed in the Databases view. Unscoped here: an interactive
           // session reaches every database, the way it reaches every
           // report. Automation runs get the same server scoped to their
           // own databases (automations.ts).
-          "opensession-databases": createDatabasesMcpServer({
-            sessionId,
-            user: createdBy,
-          }),
+          "opensession-databases": () =>
+            createDatabasesMcpServer({
+              sessionId,
+              user: createdBy,
+            }),
           // The user's Desk todo list — add/list/complete/drop/update.
           // Interactive-only like the siblings (the automation branch below
           // fails closed): untrusted ticket text must not write to a
           // human's list.
-          "opensession-todos": createTodosMcpServer({
-            sessionId,
-            user: createdBy,
-          }),
+          "opensession-todos": () =>
+            createTodosMcpServer({
+              sessionId,
+              user: createdBy,
+            }),
           // "Check back on this later": a durable kernel-timer prompt delivered
           // to THIS session (scheduled-prompts.ts). Interactive-only: it
           // authors a future turn in a human's session.
-          "opensession-schedule": createScheduleMcpServer({
-            sessionId,
-            user: createdBy,
-          }),
+          "opensession-schedule": () =>
+            createScheduleMcpServer({
+              sessionId,
+              user: createdBy,
+            }),
           // Friction log — log_papercut/list_papercuts, per-repo toggle in
           // Settings → Papercuts (dropped here when the repo opted out).
           ...papercutsServerFor(sessionId, "prompt", createdBy),
@@ -499,7 +538,7 @@ export function interactiveMcpServers(
           ...desktopServerFor(sessionId),
         }
       : {}),
-  };
+  });
 }
 
 // Codex cannot consume Claude SDK in-process MCP servers directly. Expose the

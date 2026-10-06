@@ -5,41 +5,59 @@ import SwiftUI
 // where a preference follows a person between devices. Device alerts stay local.
 
 struct NotificationsSettingsView: View {
-    @AppStorage("os1.notifications.pushAlerts") private var pushAlerts = false
-    @AppStorage("os1.notifications.completionSound") private var completionSound = "default"
-    @AppStorage("os1.notifications.whenToNotify") private var whenToNotify = "background"
-    @AppStorage("os1.notifications.needsInput") private var needsInputAlerts = true
-    @AppStorage("os1.notifications.runComplete") private var runCompleteAlerts = true
+    // This device: whether banners show here, their sound, when they may
+    // interrupt, and the icon badge.
+    @AppStorage(NativeNotifications.bannersKey) private var banners = false
+    @AppStorage(NativeNotifications.soundKey) private var sound = "default"
+    @AppStorage(NativeNotifications.whenKey) private var whenToNotify = "background"
+    @AppStorage(NativeNotifications.badgeEnabledKey) private var unreadBadge = false
     #if os(iOS)
-    @AppStorage("os1.notifications.unreadBadge") private var unreadBadge = false
     @AppStorage(LiveActivityCoordinator.preferenceKey) private var liveActivities = false
     #endif
+    @State private var alertError: String?
+
+    private var inbox: NotificationInboxStore { .shared }
 
     var body: some View {
         Form {
             Section {
-                Toggle("Push alerts on this device", isOn: $pushAlerts)
-                #if os(iOS)
-                Toggle("Badge unread sessions", isOn: $unreadBadge)
-                #endif
-                Picker("Completion sound", selection: $completionSound) {
+                Toggle("Banners on this device", isOn: $banners)
+                Toggle("Badge unread notifications", isOn: $unreadBadge)
+                Picker("Sound", selection: $sound) {
                     Text("Default").tag("default")
                     Text("None").tag("none")
                 }
                 Picker("When to notify", selection: $whenToNotify) {
                     Text("Always").tag("always")
-                    Text("When \(AppBrand.productName) is in the background").tag("background")
+                    Text("In the background").tag("background")
                     Text("Never").tag("never")
                 }
             } header: {
-                Text("Alerts")
+                Text("This device")
             } footer: {
-                Text("These notification preferences apply only to this native \(AppBrand.productName) app and device.")
+                Text("Banners show while \(AppBrand.productName) is connected. These choices stay on this device.")
             }
 
-            Section("Events") {
-                Toggle("Session needs input", isOn: $needsInputAlerts)
-                Toggle("Session run completes", isOn: $runCompleteAlerts)
+            Section {
+                ForEach(Self.alertRows, id: \.group) { row in
+                    Toggle(isOn: alertBinding(row.group)) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(row.title)
+                            Text(row.detail)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .disabled(!inbox.hasLoaded)
+                }
+            } header: {
+                Text("Notify me when")
+            } footer: {
+                if let alertError {
+                    Text(alertError).foregroundStyle(.red)
+                } else {
+                    Text("Everything still lands in your inbox. These choose what also sends a banner and a sound, on every device.")
+                }
             }
 
             #if os(iOS)
@@ -53,16 +71,16 @@ struct NotificationsSettingsView: View {
             #endif
         }
         .navigationTitle("Notifications")
-        .onChange(of: pushAlerts) { _, enabled in
+        .task { await inbox.hydrate() }
+        .onChange(of: banners) { _, enabled in
             Task {
                 if enabled, !(await NativeNotifications.requestAuthorization()) {
-                    pushAlerts = false
+                    banners = false
                 } else {
                     NativeNotifications.refreshBadge()
                 }
             }
         }
-        #if os(iOS)
         .onChange(of: unreadBadge) { _, enabled in
             Task {
                 if enabled, !(await NativeNotifications.requestBadgeAuthorization()) {
@@ -72,6 +90,7 @@ struct NotificationsSettingsView: View {
                 }
             }
         }
+        #if os(iOS)
         .onChange(of: liveActivities) { _, enabled in
             Task {
                 if enabled {
@@ -82,6 +101,32 @@ struct NotificationsSettingsView: View {
             }
         }
         #endif
+    }
+
+    /// Saved to the account, so the same switches show on the web and every
+    /// other device. Same rows as the web's Settings → Notifications.
+    static let alertRows: [(group: InboxAlerts.Group, title: String, detail: String)] = [
+        (.reviews, "Reviews", "Someone asks you for a review, or finishes one you asked for"),
+        (.teamReviews, "Team review requests", "A team you're on is asked to review, like code owners"),
+        (.mentions, "Mentions", "Someone tags you"),
+        (.collaborators, "Added to a workspace", "Someone adds you as a collaborator"),
+        (.reminders, "Reminders", "Desk task reminders"),
+    ]
+
+    private func alertBinding(_ group: InboxAlerts.Group) -> Binding<Bool> {
+        Binding(
+            get: { inbox.alerts[group] },
+            set: { on in
+                alertError = nil
+                Task {
+                    do {
+                        try await inbox.setAlert(group, on)
+                    } catch {
+                        alertError = "Couldn't save that setting."
+                    }
+                }
+            }
+        )
     }
 
     #if os(iOS)
@@ -370,6 +415,7 @@ struct PreferencesSettingsView: View {
                 Text("Talk to your Desk with a live voice call. Uses the server's OpenAI key.")
             }
             PersonalOutputStyleSection()
+            YouShouldKnowSection()
             PersonalPromptSection()
         }
         .navigationTitle("Preferences")
@@ -1310,6 +1356,58 @@ struct PersonalOutputStyleSection: View {
             self.error = error.localizedDescription
         }
         loading = false
+    }
+}
+
+/// The You should know side agent, per person and server-backed: it runs on
+/// the server during a turn, so the choice has to be readable there. On by
+/// default; a note's Turn off lands here too.
+struct YouShouldKnowSection: View {
+    @State private var enabled: Bool?
+    @State private var saving = false
+    @State private var error: String?
+
+    private let user = ServerConfig.shared.userName
+
+    var body: some View {
+        Section {
+            Toggle("You should know", isOn: Binding(
+                get: { enabled ?? false },
+                set: { save($0) }
+            ))
+            .disabled(enabled == nil || saving)
+            if let error {
+                Text(error).foregroundStyle(.red)
+            }
+        } footer: {
+            Text("A side agent flags important things you might miss during long turns. On by default.")
+        }
+        .task { await load() }
+    }
+
+    private func load() async {
+        do {
+            enabled = try await SessionActionsAPI.youShouldKnow(user: user)
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func save(_ next: Bool) {
+        let previous = enabled ?? false
+        enabled = next
+        saving = true
+        error = nil
+        Task {
+            do {
+                enabled = try await SessionActionsAPI.setYouShouldKnow(user: user, enabled: next)
+            } catch {
+                enabled = previous
+                self.error = error.localizedDescription
+            }
+            saving = false
+        }
     }
 }
 

@@ -32,6 +32,7 @@ import { basename, dirname, join, resolve, sep } from "path";
 import type {
   AgentSession,
   AgentSessionEvent,
+  ExtensionFactory,
   ModelRuntime,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -110,6 +111,15 @@ import {
   sessionStartContext,
 } from "./context-log";
 import { wrapContext } from "./prompt-context";
+import {
+  PI_TURN_CHECKPOINT_FILE,
+  createPiTurnCheckpointWriter,
+  interruptedReplyNote,
+  repairInterruptedPiTurn,
+  takePiTurnCheckpoint,
+  type PiTurnCheckpointWriter,
+  type PiTurnRepair,
+} from "./pi-turn-checkpoint";
 import { stagePromptImages, withImagesNote } from "./prompt-attachments";
 import {
   EMPTY_REPLY_RETRY_PROMPT,
@@ -157,6 +167,7 @@ import { buildPiAnthropicProvider } from "./pi-anthropic-provider";
 import {
   createPiRuntimeBinding,
   prewarmPiSdk as prewarmPiSdkBinding,
+  type PiSdk,
 } from "./pi-runtime-binding";
 import { createPiMcpBridge, type PiMcpBridge } from "./pi-mcp-bridge";
 import { controlPlaneWorkloadCommand, stopUserScope } from "./systemd-scopes";
@@ -846,6 +857,9 @@ export function piSteeringBoundaryTools(
     executionMode: "sequential",
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       if (steeringPending()) {
+        // A codemode script's call (pi ids those `<parent>/<n>`) rejects
+        // instead, so the script stops rather than reading the notice as data.
+        if (isPiNestedToolCall(toolCallId)) throw new Error(PI_STEER_TOOL_SKIP);
         return {
           content: [{ type: "text", text: PI_STEER_TOOL_SKIP }],
           details: {},
@@ -854,6 +868,46 @@ export function piSteeringBoundaryTools(
       return tool.execute(toolCallId, params, signal, onUpdate, ctx);
     },
   }));
+}
+
+/** Pi assigns `<parent id>/<n>` to calls a tool makes through
+ *  `ctx.executeTool()`, which is how codemode scripts call tools. */
+export function isPiNestedToolCall(toolCallId: string): boolean {
+  return toolCallId.includes("/");
+}
+
+export const PI_CODEMODE_TOOL = "codemode";
+
+/**
+ * Pi's codemode tool: the model writes one JavaScript script that calls the
+ * run's other tools, in parallel if it likes, and only the script's output
+ * reaches the context. Scripts run in a QuickJS sandbox with no file system
+ * or network, and can call only the run's active tools, so every call still
+ * goes through our guarded definitions and their audit. Pi registers it
+ * through an extension; intercept that registration to give it the same
+ * steering boundary as every other tool. `models: false` keeps pi's model
+ * catalog and classifier calls out of scripts.
+ */
+export function piCodemodeExtension(
+  sdk: Pick<PiSdk, "createCodemodeExtension">,
+  steeringPending: () => boolean,
+): ExtensionFactory {
+  const register = sdk.createCodemodeExtension({ mode: "on", models: false });
+  return (pi) =>
+    register(
+      new Proxy(pi, {
+        get(target, key) {
+          if (key === "registerTool") {
+            return (tool: ToolDefinition<any, any, any>) =>
+              target.registerTool(
+                piSteeringBoundaryTools([tool], steeringPending)[0]!,
+              );
+          }
+          const value = Reflect.get(target, key);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      }),
+    );
 }
 
 export function cancelPiRun(id: string): boolean {
@@ -2220,6 +2274,7 @@ async function* runPiAttempt(
   let session: AgentSession | undefined;
   let mcpRuntime: McpRuntime | undefined;
   let mcpBridge: PiMcpBridge | undefined;
+  let checkpointWriter: PiTurnCheckpointWriter | undefined;
   let sawSettled = false;
   // Pool-backed providers only (pi/openai: Codex pool, pi/xai-oauth: SuperGrok
   // pool): the picked account — visible to the catch/terminal paths so the
@@ -2756,6 +2811,9 @@ async function* runPiAttempt(
       baseCustomTools,
       () => steeringBoundaryPending,
     );
+    // Codemode only orchestrates the tools above, so a run without any has
+    // nothing for a script to call.
+    const codemode = customTools.length > 0;
 
     // What the loop reads from the checkout itself (AGENTS.md, local
     // instructions, the checkout's skills). A Sandbox checkout is mirrored
@@ -2877,15 +2935,26 @@ async function* runPiAttempt(
     // it keeps the same session prompt-cache key without the fragile persistent
     // socket. Raw OpenAI API keys use Pi's ordinary provider and retain its
     // default transport selection.
-    const settingsManager = sdk.SettingsManager.inMemory(
-      binding.usesOpenaiOAuth ? { transport: "sse" } : {},
-    );
+    //
+    // Pi's prompt-cache warming (on by default since 0.86) replays the last
+    // request with a one-token cap during long tool runs. Keep it off: the
+    // in-process Anthropic provider would run each replay as a full Claude
+    // Agent SDK turn, and subscription accounts would spend quota on it.
+    const settingsManager = sdk.SettingsManager.inMemory({
+      cacheWarming: "off",
+      ...(binding.usesOpenaiOAuth ? { transport: "sse" as const } : {}),
+    });
     const workspaceRoot = resolve(context.dir);
     const loader = new sdk.DefaultResourceLoader({
       cwd: context.dir,
       agentDir,
       settingsManager,
+      // No discovered or built-in extensions. The one inline factory is pi's
+      // codemode tool (piCodemodeExtension).
       noExtensions: true,
+      extensionFactories: codemode
+        ? [piCodemodeExtension(sdk, () => steeringBoundaryPending)]
+        : [],
       // Pi's own skill resolution stays off, like extensions and themes. A
       // turn loads the allowlist in skill-paths.ts: what this server ships,
       // plus the session checkout's own skills, never whatever the host
@@ -3001,6 +3070,22 @@ async function* runPiAttempt(
       (resumePath
         ? sdk.SessionManager.open(resumePath, sessionDir)
         : sdk.SessionManager.create(cwd, sessionDir));
+    // A previous turn on this Pi session that died with its process left
+    // tool calls without results and lost the reply it was streaming
+    // (pi-turn-checkpoint.ts). Close those calls before the model sees the
+    // session, and keep the reply for the prompt below.
+    const checkpointPath = join(sessionDir, PI_TURN_CHECKPOINT_FILE);
+    let turnRepair: PiTurnRepair | null = null;
+    if (!walk.continuation && opts.sessionId && unifiedSessionId) {
+      try {
+        turnRepair = repairInterruptedPiTurn(
+          resumePath ? sessionManager : null,
+          await takePiTurnCheckpoint(checkpointPath, opts.sessionId),
+        );
+      } catch (e) {
+        console.warn("[pi-runner] interrupted-turn repair failed:", e);
+      }
+    }
 
     // Preset effort override (workspace preset's pin first, then the built-in
     // preset's) falls back to the session's own effort.
@@ -3020,7 +3105,10 @@ async function* runPiAttempt(
       modelRuntime: runtime,
       model: piModel,
       ...(thinkingLevel ? { thinkingLevel } : {}),
-      tools: piToolNames(customTools),
+      tools: [
+        ...piToolNames(customTools),
+        ...(codemode ? [PI_CODEMODE_TOOL] : []),
+      ],
       customTools,
       resourceLoader: loader,
       sessionManager,
@@ -3070,21 +3158,20 @@ async function* runPiAttempt(
     // tool guidance. Record it once for the collapsed transcript-start audit
     // row. Later turns can change ambient memory, but this row deliberately
     // answers what preceded the session's initial message.
+    // The agent's tools are the declarations as sent, after codemode adds
+    // itself and appends each tool's script signature to its description.
     if (!opts.sessionId && !walk.continuation) {
-      const activeToolNames = new Set(session.getActiveToolNames());
       await logStandingContext({
         sessionId: unifiedSessionId,
         turnId: opts.promptEntryId || opts.startToken,
         source: "session-start",
         content: sessionStartContext(
           session.systemPrompt,
-          customTools
-            .filter((tool) => activeToolNames.has(tool.name))
-            .map((tool) => ({
-              name: tool.name,
-              description: tool.description,
-              parameters: tool.parameters,
-            })),
+          session.state.tools.map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters,
+          })),
         ),
       });
     }
@@ -3092,6 +3179,12 @@ async function* runPiAttempt(
     // Match that behavior instead of Pi's one-message-per-step default.
     session.setSteeringMode("all");
     piSessionId = session.sessionId;
+    if (unifiedSessionId) {
+      checkpointWriter = createPiTurnCheckpointWriter(
+        checkpointPath,
+        piSessionId,
+      );
+    }
 
     // Map pi→unified BEFORE any engine-keyed append (the W1 import-first gate
     // resolves through this map; unmapped appends are dropped + degraded).
@@ -3250,6 +3343,54 @@ async function* runPiAttempt(
     // store write, so the row upserts instead of duplicating the bubble.
     appendRunLines([userLine]);
 
+    if (turnRepair && (turnRepair.reply || turnRepair.toolResults.length)) {
+      const recovered: TranscriptEntry[] = [];
+      if (turnRepair.reply) {
+        recovered.push(
+          ...piAssistantTranscriptEntries(
+            [{ type: "text", text: turnRepair.reply.text }],
+            turnRepair.reply.startedAt,
+            parsed.modelID,
+            turnRepair.reply.id,
+          ),
+        );
+      }
+      for (const result of turnRepair.toolResults) {
+        recovered.push({
+          id: `${result.toolCallId}-result`,
+          type: "tool_result",
+          content: result.text,
+          timestamp: nowIso(),
+          toolUseId: result.toolCallId,
+          isError: true,
+        });
+      }
+      const calls = turnRepair.toolResults.length;
+      const notice = [
+        "The previous turn stopped unexpectedly.",
+        turnRepair.reply ? "Its unfinished reply is kept above." : "",
+        calls
+          ? `${calls === 1 ? "1 tool call" : `${calls} tool calls`} it was running ${calls === 1 ? "is" : "are"} marked as interrupted.`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      recovered.push({
+        id: crypto.randomUUID(),
+        type: "system",
+        content: notice,
+        timestamp: nowIso(),
+      });
+      persistRunEntries(recovered);
+      push({ type: "runner_notice", text: notice });
+      audit({
+        ...auditBase,
+        direction: "in",
+        kind: "interrupted_turn_repaired",
+        reply_chars: turnRepair.reply?.text.length ?? 0,
+        tool_calls: calls,
+      });
+    }
     if (resumeMissNote) {
       const notice =
         "Pi couldn't resume the previous engine session. " +
@@ -3280,6 +3421,14 @@ async function* runPiAttempt(
     const promptForEngine = [
       wrapContext(sessionContext, "session"),
       ...(resumeMissNote ? [wrapContext(resumeMissNote, "handoff")] : []),
+      ...(turnRepair?.reply
+        ? [
+            wrapContext(
+              interruptedReplyNote(turnRepair.reply.text),
+              "restart-recovery",
+            ),
+          ]
+        : []),
       walk.continuation
         ? wrapContext(
             "The previous account reached its usage limit. Continue the unfinished task from the existing conversation and completed tool results. Do not restart the task or repeat completed actions. Finish with a reply to the user.",
@@ -3313,13 +3462,14 @@ async function* runPiAttempt(
     let lastAssistantRenderableBlocks = -1;
 
     // Content persistence rides message_end/compaction_end. entry_appended is
-    // deliberately unhandled: in 0.83.0 it fires ONLY for extension custom
-    // entries (dist agent-session.js emits it solely from the extension
-    // runtime's appendEntry helper) — never for messages or compactions — and
-    // this runner disables extensions, so a handler would be dead code that
-    // could double-persist against these paths if a future SDK widened it.
+    // deliberately unhandled: it fires ONLY for extension custom entries
+    // (dist agent-session.js emits it solely from the extension runtime's
+    // appendEntry helper), never for messages or compactions. The one
+    // extension here is codemode, whose `codemode-store` entries are script
+    // state for pi's own session file, not transcript content.
     const unsubscribe = session.subscribe((ev: AgentSessionEvent) => {
       try {
+        checkpointWriter?.observe(ev);
         switch (ev.type) {
           case "message_update": {
             const ame = (ev as any).assistantMessageEvent;
@@ -3336,6 +3486,10 @@ async function* runPiAttempt(
           }
           case "tool_execution_start": {
             const t = ev as any;
+            // A codemode script's own calls never reach pi's transcript, so
+            // a live card for one would vanish on reload. The codemode
+            // call's card stands for them.
+            if (t.parentToolCallId) break;
             push({
               type: "tool_use",
               toolName: String(t.toolName || "tool"),
@@ -3346,6 +3500,7 @@ async function* runPiAttempt(
           }
           case "tool_execution_end": {
             const t = ev as any;
+            if (t.parentToolCallId) break;
             const { text, images } = contentToTextAndImages(t.result?.content);
             // `content`, not `result`: stream consumers read event.content
             // (run-session's stream_tool_result). 500-char preview like
@@ -3803,6 +3958,13 @@ async function* runPiAttempt(
       try {
         void session.abort();
       } catch {}
+    }
+    // Mirrors the run journal below: only a turn torn down mid-run (or a
+    // process that never reaches here) leaves a checkpoint to recover from.
+    if (checkpointWriter) {
+      await (reachedTerminal || abort.signal.aborted
+        ? checkpointWriter.discard()
+        : checkpointWriter.flush());
     }
     if (mcpRuntime) {
       try {

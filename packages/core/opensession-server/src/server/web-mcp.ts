@@ -20,12 +20,14 @@
  * no subprocess and no network mount, and its address safety (see
  * web-fetch.ts) is enforced in our own code rather than trusted to a vendor.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync } from "fs";
+import { existsSync, mkdirSync, readFileSync } from "fs";
 import { z } from "zod";
 import { createSdkMcpServer, tool } from "./inprocess-mcp";
 import { stateDir } from "./paths";
 import { ensureSessionScratch } from "./session-scratch";
 import { fetchWeb, readFetched } from "./web-fetch";
+import { workloadArgv } from "./workload-scope";
+import { removeTree } from "./workload-scope";
 
 const CLONE_TIMEOUT_MS = 120_000;
 const TREE_LIMIT = 200;
@@ -54,7 +56,7 @@ async function run(
   cmd: string[],
   cwd?: string,
 ): Promise<{ ok: boolean; stdout: string; stderr: string }> {
-  const proc = Bun.spawn(cmd, {
+  const proc = Bun.spawn(workloadArgv(cmd, "clone"), {
     cwd,
     stdout: "pipe",
     stderr: "pipe",
@@ -83,7 +85,7 @@ async function cloneRepo(
     const summary = await describeClone(dir);
     return `Already cloned at ${dir} (reused).\n\n${summary}`;
   }
-  rmSync(dir, { recursive: true, force: true });
+  await removeTree(dir);
   const url = `https://github.com/${owner}/${repo}.git`;
   const cloned = await run([
     "git",
@@ -95,7 +97,7 @@ async function cloneRepo(
     dir,
   ]);
   if (!cloned.ok) {
-    rmSync(dir, { recursive: true, force: true });
+    await removeTree(dir);
     throw new Error(
       `Could not clone ${owner}/${repo}: ${cloned.stderr.trim().split("\n").slice(-3).join(" ") || "git failed"}`,
     );

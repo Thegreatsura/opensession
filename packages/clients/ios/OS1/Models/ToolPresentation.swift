@@ -117,6 +117,7 @@ extension ToolPresentation {
         "edit": "Edit", "multiedit": "Edit", "patch": "Edit", "apply_patch": "Edit",
         "str_replace_editor": "Edit",
         "bash": "Bash", "shell": "Bash", "exec_command": "Bash",
+        "codemode": "Codemode",
         "notebook_edit": "NotebookEdit",
         "grep": "Grep",
         "find": "Find",
@@ -135,7 +136,7 @@ extension ToolPresentation {
     ]
 
     private static let families: [String: ToolFamily] = [
-        "Bash": .run, "BashOutput": .run,
+        "Bash": .run, "BashOutput": .run, "Codemode": .run,
         "Read": .file, "NotebookEdit": .file,
         "Edit": .edit, "Write": .edit, "FileChange": .edit,
         "Grep": .find, "Find": .find, "Glob": .find, "LSP": .find, "ToolSearch": .find,
@@ -430,6 +431,13 @@ extension ToolPresentation {
                 .filter { !$0.isEmpty }
                 .joined(separator: " ⏎ ")
             return (String(flat.prefix(160)), false)
+        case "Codemode":
+            let flat = codemodeScript(input)
+                .components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ⏎ ")
+            return (String(flat.prefix(160)), false)
         case "Grep":
             let pattern = string(input, "pattern") ?? ""
             let path = string(input, "path").map { tidyPath($0, worktreeDir: worktreeDir) }
@@ -667,6 +675,19 @@ extension ToolPresentation {
     }
 
     // MARK: - JSON helpers
+
+    /// A codemode call's script without its optional `// @options:` first
+    /// line. Mirrors the protocol's `codemodeScript`.
+    static func codemodeScript(_ input: JSONValue?) -> String {
+        var code = string(input, "code") ?? ""
+        if let range = code.range(
+            of: #"^\s*//\s*@options:.*(\n|$)"#,
+            options: .regularExpression
+        ) {
+            code.removeSubrange(range)
+        }
+        return code.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     private static func string(_ input: JSONValue?, _ key: String) -> String? {
         guard let value = input?[key], let text = scalarString(value), !text.isEmpty else {

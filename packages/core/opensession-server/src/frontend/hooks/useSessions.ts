@@ -20,6 +20,7 @@ import {
   ARCHIVED_QUERY,
   LIVE_POLL_FALLBACK_MS,
   LIVE_QUERY,
+  restoreSharedPrs,
   liveSnapshotMatchesQuery,
   reconcilePendingSessionPatch,
   reconcilePendingSessionPatches,
@@ -189,7 +190,7 @@ export function useSessions({
           if (snapshot.text !== lastTextRef.current) {
             lastTextRef.current = snapshot.text;
             applyServer(
-              JSON.parse(snapshot.text),
+              restoreSharedPrs(JSON.parse(snapshot.text)),
               snapshotRuntimeRevision,
               requestQuery,
             );

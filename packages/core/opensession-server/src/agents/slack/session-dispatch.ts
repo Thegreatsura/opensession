@@ -18,7 +18,8 @@ import {
   githubLoginForTrustedSlackId,
   slackIdToFirstName,
 } from "../../server/shared/user-mappings";
-import { downloadSlackImages, getChannelKind } from "./slack-api";
+import { STAGED_UPLOADS_DIR } from "../../server/uploads";
+import { downloadSlackAttachments, getChannelKind } from "./slack-api";
 import { renderMemoryForPrompt } from "./memory";
 import { loadSession } from "./state";
 import { saveQueueToDisk, type QueuedMessage } from "./queue";
@@ -47,7 +48,7 @@ export async function dispatchSlackSessionMessage(
     )
       return target;
     const attachments = message.files?.length
-      ? await downloadSlackImages(message.files)
+      ? await downloadSlackAttachments(message.files, STAGED_UPLOADS_DIR)
       : undefined;
     checkCancelled();
     const result = await control.deliverToSession(
@@ -66,6 +67,7 @@ export async function dispatchSlackSessionMessage(
         imageUrls: attachments?.images.map(
           (image) => `data:${image.mediaType};base64,${image.data}`,
         ),
+        ...(attachments?.files.length ? { files: attachments.files } : {}),
       },
     );
     if (result.status === "error") throw new Error(result.message);
@@ -99,7 +101,7 @@ export async function dispatchSlackSessionMessage(
         message.repoId,
     );
     const attachments = message.files?.length
-      ? await downloadSlackImages(message.files)
+      ? await downloadSlackAttachments(message.files, STAGED_UPLOADS_DIR)
       : undefined;
     let memory = "";
     try {
@@ -138,6 +140,7 @@ export async function dispatchSlackSessionMessage(
       images: attachments?.images.map(
         (image) => `data:${image.mediaType};base64,${image.data}`,
       ),
+      ...(attachments?.files.length ? { files: attachments.files } : {}),
       slackOrigin: {
         sessionKey,
         channel: message.channel,

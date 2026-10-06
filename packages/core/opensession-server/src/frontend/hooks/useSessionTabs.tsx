@@ -132,6 +132,7 @@ interface UseSessionTabsOptions {
     | "splitDropSide"
     | "setSplitDropSide"
     | "suppressWsSeedRef"
+    | "setFocusComposerOnOpen"
   >;
   panes: {
     state: Pick<
@@ -219,6 +220,7 @@ export function useSessionTabs({
     splitDropSide,
     setSplitDropSide,
     suppressWsSeedRef,
+    setFocusComposerOnOpen,
   } = view;
   const {
     state: {
@@ -1153,6 +1155,9 @@ export function useSessionTabs({
         ? currentSession
         : null;
     setActiveViewTab(null);
+    // Clicking a session tab means you want to type in it: land the caret in
+    // its composer once it opens (a one-shot pulse, skipped on phones).
+    setFocusComposerOnOpen(true);
     if (!empty) {
       navigate({ view: "session", id: next.id });
       return;

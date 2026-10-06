@@ -164,6 +164,27 @@ enum SettingsAPI {
         return response.hides ?? [:]
     }
 
+    /// Per-user tab and row colours, shared with the web (key to swatch key).
+    /// Row colours ride the same map under `row:<row key>`. Writes are deltas
+    /// so a colour another client set is never erased by this one.
+    static func tabColors(user: String) async throws -> [String: String] {
+        struct Response: Decodable, Sendable { var colors: [String: String]? }
+        let response: Response = try await request("/api/tab-colors", query: ["user": user])
+        return response.colors ?? [:]
+    }
+
+    @discardableResult
+    static func saveTabColors(
+        user: String,
+        set: [String: String],
+        remove: [String]
+    ) async throws -> [String: String] {
+        struct Response: Decodable, Sendable { var colors: [String: String]? }
+        let body: [String: Any] = ["user": user, "set": set, "remove": remove]
+        let response: Response = try await request("/api/tab-colors", method: "PUT", body: body)
+        return response.colors ?? [:]
+    }
+
     /// Per-user sidebar lanes, shared with the web sidebar (session id → the
     /// lane it is claimed into). Writes are per-key deltas so this client
     /// cannot erase claims another client made from an older snapshot.
@@ -205,6 +226,46 @@ enum SettingsAPI {
             body: ["user": user, "sessionId": sessionId],
             connection: connection
         )
+    }
+
+    // MARK: - Notification inbox
+
+    /// The person's inbox and their alert settings, shared with the web.
+    static func notifications(user: String, connection: Connection? = nil) async throws -> InboxPayload {
+        try await request("/api/notifications", query: ["user": user], connection: connection)
+    }
+
+    @discardableResult
+    static func markNotifications(
+        user: String,
+        mark: InboxMark,
+        connection: Connection? = nil
+    ) async throws -> SettingsOK {
+        var body = mark.body
+        body["user"] = user
+        return try await request(
+            "/api/notifications/mark",
+            method: "POST",
+            body: body,
+            connection: connection
+        )
+    }
+
+    static func saveNotificationAlerts(
+        user: String,
+        patch: [InboxAlerts.Group: Bool],
+        connection: Connection? = nil
+    ) async throws -> InboxAlerts {
+        struct Response: Decodable, Sendable { var alerts: InboxAlerts? }
+        var alerts: [String: Any] = [:]
+        for (group, on) in patch { alerts[group.rawValue] = on }
+        let response: Response = try await request(
+            "/api/notifications/alerts",
+            method: "PUT",
+            body: ["user": user, "alerts": alerts],
+            connection: connection
+        )
+        return response.alerts ?? .defaults
     }
 
     /// Per-user pinned rows, shared with the web sidebar's Pinned band (row
@@ -632,8 +693,11 @@ enum SettingsAPI {
         try await request("/api/keychain")
     }
 
+    /// The body carries the typed secret, so it goes over an ephemeral session:
+    /// the shared one's URLCache writes a POST's request, body included, to
+    /// the on-disk cache database.
     static func addKeychainCredential(_ body: [String: Any]) async throws -> KeychainCredentialResponse {
-        try await request("/api/keychain/credentials", method: "POST", body: body)
+        try await request("/api/keychain/credentials", method: "POST", body: body, session: secretSession)
     }
 
     static func deleteKeychainCredential(id: String) async throws -> SettingsOK {
@@ -642,6 +706,16 @@ enum SettingsAPI {
 
     static func revokeKeychainGrant(id: String) async throws -> SettingsOK {
         try await request("/api/keychain/grants/\(segment(id))", method: "DELETE")
+    }
+
+    /// Owner-only: the server refuses anyone but the credential's owner, so
+    /// the screen offers it only on asks marked `canAnswer`.
+    static func answerKeychainAsk(id: String, decision: KeychainDecision) async throws -> SettingsOK {
+        try await request(
+            "/api/keychain/asks/\(segment(id))/answer",
+            method: "POST",
+            body: ["decision": decision.rawValue]
+        )
     }
 
     // MARK: - Deploys
@@ -782,12 +856,22 @@ enum SettingsAPI {
 
     // MARK: - Transport
 
+    /// No disk cache, cookie store or credential storage: for requests whose
+    /// body holds a secret that must never be written on this device.
+    static let secretSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
+    }()
+
     private static func request<T: Decodable & Sendable>(
         _ path: String,
         method: String = "GET",
         query: [String: String] = [:],
         body: [String: Any]? = nil,
-        connection: Connection? = nil
+        connection: Connection? = nil,
+        session: URLSession = .shared
     ) async throws -> T {
         guard let resolved = connection ?? Connection.current() else {
             throw OS1API.APIError.notConfigured
@@ -808,7 +892,7 @@ enum SettingsAPI {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
         }
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             if http.statusCode == 401 {
                 NotificationCenter.default.post(name: .settingsAuthenticationExpired, object: nil)

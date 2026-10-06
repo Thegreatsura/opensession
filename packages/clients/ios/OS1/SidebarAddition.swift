@@ -3,8 +3,9 @@ import Foundation
 /// Decides whether an open session needs an explicit personal lane claim.
 /// The unit is the whole sidebar row: one ordinary session the viewer started
 /// already represents every sibling, while teammate, automation, and spawned
-/// work needs a claim. A hidden row can always be restored without adding a
-/// redundant claim.
+/// work needs a claim. A collaborator needs none either: the server already
+/// files the workspace into their sidebar as their own work. A hidden row can
+/// always be restored without adding a redundant claim.
 enum SidebarAddition {
     enum Intent: Equatable {
         case claim
@@ -17,12 +18,20 @@ enum SidebarAddition {
         claims: Set<String>,
         hidden: Bool,
         viewerName: String,
-        viewerLogin: String
+        viewerLogin: String,
+        collaborators: [String] = []
     ) -> Intent? {
         guard session.archived != true else { return nil }
         let row = siblings.isEmpty ? [session] : siblings
         if hidden { return .restore }
-        guard !row.contains(where: { claims.contains($0.id) }),
+        guard !collaborators.contains(where: {
+                  MessageAttribution.isViewer(
+                      $0,
+                      viewerName: viewerName,
+                      viewerLogin: viewerLogin
+                  )
+              }),
+              !row.contains(where: { claims.contains($0.id) }),
               !row.contains(where: {
                   $0.spawnedBy?.isEmpty != false
                       && !$0.isAutomation
@@ -47,7 +56,8 @@ enum SidebarAddition {
             claims: LaneStore.shared.claims,
             hidden: hidden,
             viewerName: config.userName,
-            viewerLogin: config.githubLogin
+            viewerLogin: config.githubLogin,
+            collaborators: WorkspaceCollaboratorsStore.shared.names(for: session.workspaceId)
         )
     }
 

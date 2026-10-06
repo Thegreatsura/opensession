@@ -759,13 +759,24 @@ export function configuredIngress(): ResolvedIngress {
   };
 }
 
+// PATH lookups walk ~10 directories with a syscall each, and configuredPaths
+// is called on hot paths that never use claudeBin. Resolve once per PATH.
+let claudeOnPath: { path: string | undefined; bin: string | null } | null =
+  null;
+function claudeFromPath(): string | null {
+  const path = process.env.PATH;
+  if (!claudeOnPath || claudeOnPath.path !== path)
+    claudeOnPath = { path, bin: Bun.which("claude") };
+  return claudeOnPath.bin;
+}
+
 export function configuredPaths(): ResolvedPaths {
   const p = getConfig().paths || {};
   return {
     claudeBin:
       process.env.OPENSESSION_CLAUDE_BIN ||
       p.claudeBin ||
-      Bun.which("claude") ||
+      claudeFromPath() ||
       "claude",
     worktreesDir:
       process.env.OPENSESSION_WORKTREES_DIR ||
@@ -841,8 +852,27 @@ export function configuredSelfDev(): SelfDevMode {
  * The repo registry. An explicit `repos` object is authoritative; without one,
  * a source checkout gets a portable self-repo so a first run is useful.
  */
+// Resolving the registry spreads and filters every repo section. Row loops on
+// the gateway (PR refs, workspace filters, defaultRepo) call this thousands of
+// times per request, and the snapshot only changes when the file does:
+// refreshes and local writes both install a newly parsed config object.
+const resolvedRepos = new WeakMap<
+  OpenSessionConfig,
+  { section: OpenSessionConfig["repos"]; repos: Record<string, Repo> }
+>();
+
 export function configuredRepos(
   config: OpenSessionConfig = getConfig(),
+): Record<string, Repo> {
+  const cached = resolvedRepos.get(config);
+  if (cached && cached.section === config.repos) return { ...cached.repos };
+  const repos = resolveConfiguredRepos(config);
+  resolvedRepos.set(config, { section: config.repos, repos });
+  return { ...repos };
+}
+
+function resolveConfiguredRepos(
+  config: OpenSessionConfig,
 ): Record<string, Repo> {
   const configured = config.repos;
   const merged = configured ? {} : builtinRepos();

@@ -174,6 +174,18 @@ describe("rowIsOwnWork", () => {
     expect(rowIsOwnWork(row, "kent")).toBe(false);
   });
 
+  test("a collaborator's workspace is their own work", () => {
+    // A team review ask on the workspace's PR must not move it out of a
+    // collaborator's lanes when a teammate started every session in it.
+    const row = {
+      owner: "john",
+      sessions: [session({ id: "a", branch: "a", startedBy: "John" })],
+      workspace: { collaborators: [{ name: "Michiel" }] },
+    };
+    expect(rowIsOwnWork(row, "michiel")).toBe(true);
+    expect(rowIsOwnWork(row, "kent")).toBe(false);
+  });
+
   test("an automation run in your workspace is not a conversation of yours", () => {
     expect(
       rowIsOwnWork(

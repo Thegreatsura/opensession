@@ -318,6 +318,18 @@ export async function loadSnapshotHarness(): Promise<SnapshotHarness> {
       process.env.OPENSESSION_MEMORY_DB = join(dir, "memory-v2.sqlite");
       memoryV2.closeMemoryRuntime();
       normalizer.path(dir, "<memory>");
+      if (memoryV2.memoryRolloutMode() === "repo") {
+        // Repo mode: import the seeded scopes the way boot does (legacy JSON
+        // into memory-v2, then memory-v2 into the repositories).
+        await memoryV2.ensureMemoryV2Ready();
+        memoryV2.closeMemoryRuntime();
+        const { memoryRepo } = await import("../memory-repo/client");
+        await memoryRepo.service(
+          "migrateFromV2",
+          memoryV2.memoryDatabasePath(),
+          "import",
+        );
+      }
       try {
         await fn();
       } finally {

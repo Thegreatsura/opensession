@@ -84,6 +84,7 @@ const MCP_BLURBS = new Map<string, string>([
   ["apple-release", "Restricted ad-hoc and TestFlight release tools"],
   ["vercel", "Projects, deployments & logs"],
   ["vero", "Broadcasts and customer journeys"],
+  ["oneleet", "Compliance controls, evidence & risks"],
 ]);
 
 function LockIcon({ size = 12 }: { size?: number }) {

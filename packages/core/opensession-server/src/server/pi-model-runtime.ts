@@ -37,6 +37,7 @@ import {
   type Query,
   type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
+import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { stateDir } from "./paths";
 import { buildPiAnthropicModels } from "./pi-anthropic-models";
@@ -90,6 +91,7 @@ import {
   isClaudeUsageLimitError,
   usageLimitResetAt,
 } from "./runner-shared";
+import { spawnClaudeCodeInWorkload } from "./workload-scope";
 
 const g = globalThis as any;
 
@@ -123,10 +125,10 @@ export type PiNativeProvider = Parameters<
 export type PiCatalogModel = NonNullable<ReturnType<ModelRuntime["getModel"]>>;
 
 /** Minimal structural view of pi's Message union — only the fields the
- *  converter reads (pi-ai is type-only reachable; these are its stable wire
- *  shapes). */
+ *  converter reads. `system` entries carry the prompt and tool declarations
+ *  (pi-ai's TranscriptContext); the converter skips them. */
 export interface PiWireMessage {
-  role: "user" | "assistant" | "toolResult";
+  role: "system" | "user" | "assistant" | "toolResult";
   content: string | Array<Record<string, any>>;
   toolCallId?: string;
   [key: string]: unknown;
@@ -138,10 +140,10 @@ interface PiToolShape {
   parameters?: unknown;
 }
 
+/** pi-ai's TranscriptContext: since pi 0.86 the system prompt and tools
+ *  live in `system` messages, not in separate fields. */
 interface PiStreamContext {
-  systemPrompt?: string;
   messages: PiWireMessage[];
-  tools?: PiToolShape[];
 }
 
 interface PiStreamCallOptions {
@@ -1239,6 +1241,7 @@ function createLiveSdkConversation(input: {
       ),
       pathToClaudeCodeExecutable: CLAUDE_CODE_BIN,
       executable: "bun" as const,
+      spawnClaudeCodeProcess: spawnClaudeCodeInWorkload("model"),
       env: {
         PATH: process.env.PATH,
         HOME: process.env.HOME,
@@ -1412,8 +1415,10 @@ async function* runSdkAttempt(
   // one-shot requests never evict an interactive conversation that happens to
   // carry the same routing session id.
   const wireMessages = piMessagesToAnthropic(context.messages || []);
-  const requestTools = context.tools || [];
-  const system = context.systemPrompt || "";
+  // Replays every system message, so a mid-conversation prompt or tool change
+  // reaches the SDK as the current state.
+  const requestTools: PiToolShape[] = getCurrentTools(context.messages || []);
+  const system = getCurrentSystemPrompt(context.messages || []);
   const storeKey = `pi:${sessionKey}:${liveConfigHash(model.id, system, requestTools)}`;
   // Set once the turn plan exists; the catch evicts the stored mapping on a
   // failed continuation so the NEXT turn replays fresh instead of resuming a

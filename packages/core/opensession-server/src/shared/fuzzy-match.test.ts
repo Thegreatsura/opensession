@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { fuzzyMatch, fuzzyScore } from "./fuzzy-match";
+import {
+  fuzzyMatch,
+  fuzzyScore,
+  fuzzyScorePrepared,
+  prepareFuzzyQuery,
+  prepareFuzzyText,
+} from "./fuzzy-match";
 
 describe("fuzzyScore", () => {
   test("ranks exact, prefix, word prefix, then substring", () => {
@@ -27,6 +33,25 @@ describe("fuzzyScore", () => {
   test("needs every term to land somewhere", () => {
     expect(fuzzyScore("release billing", "Release work")).toBe(0);
     expect(fuzzyScore("work release", "Release work")).toBeGreaterThan(0);
+  });
+
+  test("reads punctuation inside a term as a phrase of adjacent words", () => {
+    expect(fuzzyScore("pi-durable", "Explore Pi Durable objects")).toBe(60);
+    expect(fuzzyScore("pi-durable", "pi_durable")).toBeGreaterThan(0);
+    expect(fuzzyScore("pi-durable", "Durable Pi")).toBe(0);
+    expect(fuzzyScore("s-desk", "Voice captions for the Desk")).toBe(0);
+    expect(fuzzyScore("pi-", "Pi release")).toBe(60);
+    expect(fuzzyScore("#42", "PR 42 review")).toBeGreaterThan(0);
+    expect(fuzzyScore("---", "anything")).toBe(0);
+  });
+
+  test("a prepared query scores the same across many texts", () => {
+    const query = prepareFuzzyQuery("relase wksp");
+    for (const text of ["Release workspace", "release wksp", "Billing"]) {
+      expect(fuzzyScorePrepared(query, prepareFuzzyText(text))).toBe(
+        fuzzyScore("relase wksp", text),
+      );
+    }
   });
 
   test("ignores case and accents; empty query matches all", () => {

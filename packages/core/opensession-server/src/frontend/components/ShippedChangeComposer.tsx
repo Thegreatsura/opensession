@@ -494,8 +494,8 @@ export function ShippedChangeComposer({
             {uploading ? <Spinner size="md" /> : <IconPlus size={20} />}
           </button>
           <div className="flex-1" />
-          {/* Searchable: the list is every channel the person is in, with
-					    the configured ones first, so it runs to hundreds of rows. */}
+          {/* Searchable: the list is every public channel plus the person's
+					    private ones, configured ones first, so it runs to hundreds of rows. */}
           <SearchSelect
             label="Slack channel"
             className="w-32 phone:w-36"

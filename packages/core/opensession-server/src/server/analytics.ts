@@ -31,6 +31,10 @@ import { $ } from "bun";
 import { stateDir } from "./paths";
 import { configuredRepos, defaultRepo, githubBotLogins } from "./config";
 import { noteGithubGraphqlCall } from "./github-budget";
+import {
+  resolveGithubCredential,
+  serviceGithubCredential,
+} from "./github-auth";
 import { readFeedback } from "../agents/github/feedback";
 import type { FeedbackRecord } from "../agents/github/feedback-gates";
 import { gitIdentityFor } from "./shared/user-mappings";
@@ -593,6 +597,31 @@ export interface AnalyticsPr {
   byOpensession: boolean;
 }
 
+/** gh env for one repository's analytics reads: the installation token for
+ * that repository's owner, never the host's own gh login. Null when no
+ * installation covers the repository; that is logged once per repository
+ * (until it recovers) instead of once per search on every refresh. */
+const credentialWarned = new Set<string>();
+async function analyticsGhEnv(
+  ghRepo: string,
+): Promise<Record<string, string> | null> {
+  try {
+    const credential = await resolveGithubCredential(serviceGithubCredential, {
+      repo: ghRepo,
+    });
+    credentialWarned.delete(ghRepo);
+    return { ...process.env, ...credential.env } as Record<string, string>;
+  } catch (error) {
+    if (!credentialWarned.has(ghRepo)) {
+      credentialWarned.add(ghRepo);
+      console.warn(
+        `[analytics] skipping GitHub PRs for ${ghRepo}: no GitHub App installation token (${String(error).slice(0, 160)})`,
+      );
+    }
+    return null;
+  }
+}
+
 const PR_CACHE_TTL_MS = 10 * 60 * 1000;
 const prCache = new Map<string, { at: number; prs: AnalyticsPr[] }>();
 
@@ -610,6 +639,8 @@ async function fetchRepoPrs(
   }
   if (cached && Date.now() - cached.at < PR_CACHE_TTL_MS) return cached.prs;
 
+  const env = await analyticsGhEnv(ghRepo);
+  if (!env) return cached?.prs ?? [];
   const fields = "number,title,url,state,createdAt,mergedAt,headRefName";
   const seen = new Map<number, AnalyticsPr>();
   let failed = false;
@@ -623,20 +654,19 @@ async function fetchRepoPrs(
       try {
         raw =
           await $`gh pr list --repo ${ghRepo} --state all --limit 1000 --search ${search} --json ${fields}`
+            .env(env)
             .quiet()
             .text();
         noteGithubGraphqlCall(
           "analytics:pr-list",
           Date.now() - queryStarted,
           true,
-          { ambient: true },
         );
       } catch (error) {
         noteGithubGraphqlCall(
           "analytics:pr-list",
           Date.now() - queryStarted,
           false,
-          { ambient: true },
         );
         throw error;
       }
@@ -749,6 +779,8 @@ async function fetchRepoFactoryPrs(
   if (cached && Date.now() - cached.at < FACTORY_CACHE_TTL_MS)
     return cached.prs;
 
+  const env = await analyticsGhEnv(ghRepo);
+  if (!env) return cached?.prs ?? [];
   const prs: FactoryPr[] = [];
   const q = `repo:${ghRepo} is:pr is:merged merged:>=${fromDate}`;
   let cursor = "";
@@ -766,19 +798,17 @@ async function fetchRepoFactoryPrs(
       const queryStarted = Date.now();
       let raw: string;
       try {
-        raw = await $`gh ${args}`.quiet().text();
+        raw = await $`gh ${args}`.env(env).quiet().text();
         noteGithubGraphqlCall(
           "analytics:factory",
           Date.now() - queryStarted,
           true,
-          { ambient: true },
         );
       } catch (error) {
         noteGithubGraphqlCall(
           "analytics:factory",
           Date.now() - queryStarted,
           false,
-          { ambient: true },
         );
         throw error;
       }

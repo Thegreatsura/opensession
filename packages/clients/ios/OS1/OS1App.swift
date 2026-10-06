@@ -28,6 +28,8 @@ struct OS1App: App {
         // existing store and its entries; only lowering it evicts.
         URLCache.shared.memoryCapacity = 8 * 1024 * 1024
         URLCache.shared.diskCapacity = 64 * 1024 * 1024
+        NativeNotifications.retireLegacyPreferences()
+        NotificationTapRouter.install()
     }
 
     var body: some Scene {
@@ -140,10 +142,12 @@ private struct RootSceneLifecycle: View {
     private func hydrate() async {
         await NativePreferences.hydrate()
         await HideStore.shared.hydrate()
+        await RowColorStore.shared.hydrate()
         await PinStore.shared.hydrate()
         await WorkspaceSnoozeStore.shared.hydrate()
         await LaneStore.shared.hydrate()
         await MentionStore.shared.hydrate()
+        await NotificationInboxStore.shared.hydrate()
         await ReadsStore.shared.hydrate()
         await DraftsStore.shared.hydrate()
     }

@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<?xml-stylesheet href="http://127.0.0.1:9/pi.css" type="text/css"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="100" height="100" onload="document.getElementById('bg').setAttribute('fill','#ff0000')">
+  <script type="text/javascript"><![CDATA[
+    document.getElementById('bg').setAttribute('fill', '#ff0000');
+    fetch('http://127.0.0.1:9/script-fetch');
+  ]]></script>
+  <style>@import url("http://127.0.0.1:9/import.css");</style>
+  <rect id="bg" width="100" height="100" fill="#16a34a" onclick="location='http://127.0.0.1:9/click'"/>
+  <image x="0" y="0" width="10" height="10" href="http://127.0.0.1:9/href.png"/>
+  <image x="10" y="0" width="10" height="10" xlink:href="http://127.0.0.1:9/xlink.png">
+    <set attributeName="xlink:href" to="http://127.0.0.1:9/set.png" begin="0s"/>
+  </image>
+  <image x="20" y="0" width="10" height="10" href="file:///etc/passwd"/>
+  <use href="http://127.0.0.1:9/sprite.svg#icon"/>
+  <rect x="30" y="0" width="10" height="10" fill="url(http://127.0.0.1:9/paint.svg#g)" style="background:url('http://127.0.0.1:9/style.png')"/>
+  <filter id="f"><feImage href="http://127.0.0.1:9/feimage.png"/></filter>
+  <foreignObject width="100" height="100">
+    <iframe xmlns="http://www.w3.org/1999/xhtml" src="http://127.0.0.1:9/frame"></iframe>
+  </foreignObject>
+  <a href="javascript:alert(1)"><circle cx="50" cy="90" r="4" fill="#16a34a"/></a>
+  <a xlink:href="http://127.0.0.1:9/link"><text x="0" y="99">link</text></a>
+</svg>

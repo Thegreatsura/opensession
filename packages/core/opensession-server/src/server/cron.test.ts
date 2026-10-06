@@ -245,3 +245,47 @@ describe("nextRun", () => {
     expect(from.getTime()).toBe(copy.getTime());
   });
 });
+
+describe("nextRun skipping", () => {
+  // Minute-by-minute reference: the first matching minute after `from`.
+  function bruteForce(expr: string, from: Date): Date | null {
+    const cursor = new Date(from.getTime());
+    cursor.setUTCSeconds(0, 0);
+    for (let i = 0; i < 527040; i++) {
+      cursor.setUTCMinutes(cursor.getUTCMinutes() + 1);
+      if (cronMatches(expr, cursor)) return new Date(cursor.getTime());
+    }
+    return null;
+  }
+
+  it("agrees with a minute-by-minute scan", () => {
+    const exprs = [
+      "0 9 * * 1-5",
+      "*/15 * * * *",
+      "0 0 1 1 *",
+      "0 0 31 * *",
+      "5 4 1,15 * 3",
+      "59 23 * 12 6",
+      "30 2 29 2 *",
+    ];
+    const starts = [
+      utc(2026, 10, 2, 11, 59, 30),
+      utc(2026, 12, 31, 23, 59),
+      utc(2027, 2, 28, 0, 0),
+    ];
+    for (const expr of exprs)
+      for (const from of starts)
+        expect(nextRun(expr, from)?.toISOString()).toBe(
+          bruteForce(expr, from)?.toISOString(),
+        );
+  });
+
+  it("hands out a fresh Date for a memoized answer", () => {
+    const from = utc(2026, 10, 2, 11, 0, 10);
+    const first = nextRun("0 12 * * *", from)!;
+    first.setUTCFullYear(2000);
+    expect(nextRun("0 12 * * *", from)?.toISOString()).toBe(
+      "2026-10-02T12:00:00.000Z",
+    );
+  });
+});

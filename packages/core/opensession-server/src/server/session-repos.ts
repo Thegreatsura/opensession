@@ -28,6 +28,7 @@ import {
 } from "./workspaces";
 import { sessionPrBranch } from "./session-pr-target";
 import {
+  invalidateMemorySnapshot,
   renderSessionMemoryNote,
   snapshotMemoryNote,
   sessionMemoryScopes,
@@ -36,7 +37,15 @@ import {
   memoryRolloutMode,
   renderAmbientMemoryForPrompt,
   retrieveMemoryForPrompt,
+  v2IsRecord,
 } from "./memory-v2";
+import {
+  prepareSessionMemory,
+  renderRepoMemoryNote,
+  retrievalScopeKeys,
+  retrieveRepoMemoryForPrompt,
+} from "./memory-repo/session";
+import { sessionLink } from "./run-instructions";
 import { DESK_NOTE } from "./desk";
 import { deskBriefingFor } from "./desk-state";
 import { personalOutputStyleNoteFor } from "./personal-output-style";
@@ -364,7 +373,12 @@ export async function buildSessionNote(
       session.desk ? DESK_NOTE : "",
       session.desk ? await deskBriefingFor(user) : "",
       buildReposNote(session),
-      await memoryNoteFor(user, sessionRepoIds(session), session.id),
+      await memoryNoteFor(
+        user,
+        sessionRepoIds(session),
+        session.id,
+        sessionWorkspaceIsRemote(session),
+      ),
     ]
       .filter(Boolean)
       .join("\n\n") || undefined
@@ -385,6 +399,8 @@ export async function memoryNoteFor(
    *  session's cached prompt prefix mid-conversation. The session's own
    *  memory writes refresh it (invalidateMemorySnapshot). */
   sessionId?: string,
+  /** The agent's shell runs in a Sandbox or on a Runner, not on this host. */
+  remote = false,
 ): Promise<string> {
   const parts: string[] = [
     personalOutputStyleNoteFor(user),
@@ -393,7 +409,16 @@ export async function memoryNoteFor(
   try {
     const scopes = sessionMemoryScopes({ user, repos });
     const mode = memoryRolloutMode();
-    if (mode === "v2") {
+    if (mode === "repo") {
+      parts.push(
+        await repoMemoryNoteFor(
+          scopes.map((s) => s.key),
+          user,
+          sessionId,
+          remote,
+        ),
+      );
+    } else if (v2IsRecord(mode)) {
       parts.push(
         await snapshotMemoryNote(
           sessionId,
@@ -434,20 +459,93 @@ export async function retrievedMemoryNoteFor(
   query: string,
   user: string | undefined,
   repos: string[],
+  sessionId?: string,
 ): Promise<string> {
   const mode = memoryRolloutMode();
   if (mode === "legacy") return "";
   try {
     const scopes = sessionMemoryScopes({ user, repos });
+    if (mode === "repo") {
+      return (
+        await retrieveRepoMemoryForPrompt(
+          query,
+          retrievalScopeKeys(
+            scopes.map((scope) => scope.key),
+            sessionId ? (presentRepos.get(sessionId) ?? []) : [],
+          ),
+          scopes.find((scope) => scope.kind === "repo")?.key,
+        )
+      ).text;
+    }
     const result = await retrieveMemoryForPrompt(query, {
       scopeKeys: scopes.map((scope) => scope.key),
       primaryRepoKey: scopes.find((scope) => scope.kind === "repo")?.key,
     });
-    return mode === "v2" ? result.text : "";
+    return v2IsRecord(mode) ? result.text : "";
   } catch (e) {
     console.warn("[memory] failed to retrieve turn memory:", e);
     return "";
   }
+}
+
+/** Memory repositories checked out per session (other participants'
+ *  personal memory included), for retrieval scopes. */
+const presentRepos = new Map<string, string[]>();
+
+export function presentMemoryRepos(sessionId: string): string[] {
+  return presentRepos.get(sessionId) ?? [];
+}
+
+export function sessionWorkspaceIsRemote(session: {
+  sandbox?: { provider?: string } | null;
+  runner?: unknown;
+}): boolean {
+  return !!session.sandbox?.provider || !!session.runner;
+}
+
+/**
+ * Repo-mode memory section: checkouts are refreshed every turn (clone or
+ * pull), while the rendered text is snapshotted per session so other
+ * sessions' pushes do not change this session's cached prompt prefix. A new
+ * checkout (another person joined) refreshes it.
+ */
+async function repoMemoryNoteFor(
+  scopeKeys: string[],
+  user: string | undefined,
+  sessionId: string | undefined,
+  remote: boolean,
+): Promise<string> {
+  if (!sessionId) {
+    return renderRepoMemoryNote({
+      scopeKeys,
+      prepared: { repos: [], present: [], added: false },
+      user,
+      tools: true,
+    });
+  }
+  const prepared = await prepareSessionMemory({
+    sessionId,
+    scopeKeys,
+    user,
+    remote,
+  });
+  const previous = presentRepos.get(sessionId);
+  presentRepos.set(sessionId, prepared.present);
+  if (previous && prepared.present.some((name) => !previous.includes(name)))
+    invalidateMemorySnapshot(sessionId);
+  if (presentRepos.size > 2000) {
+    const oldest = presentRepos.keys().next().value;
+    if (oldest) presentRepos.delete(oldest);
+  }
+  return snapshotMemoryNote(sessionId, () =>
+    renderRepoMemoryNote({
+      scopeKeys: retrievalScopeKeys(scopeKeys, prepared.present),
+      prepared,
+      user,
+      sessionLink: sessionLink(sessionId),
+      tools: remote,
+    }),
+  );
 }
 
 export interface WorktreeTarget {

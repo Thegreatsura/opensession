@@ -188,6 +188,29 @@ leaked one, can merge or push `main`, whatever permissions it holds. A
 ruleset that requires pull requests and status checks should already exist;
 leave it as it is.
 
+### Force merge
+
+When a person wants to merge a pull request that is blocked only by checks or
+reviews they know are irrelevant, the agent calls
+`force_merge_pull_request` (opensession-repos). The tool only opens a card in
+the session; the gateway fills it from GitHub with the repository, PR number
+and title, head SHA, merge method, and every failing, pending or missing
+check and review the merge would bypass, plus the agent's reason.
+
+- Only the person driving the session can confirm, through a verified GitHub
+  sign-in. Machine auth and the no-auth name picker cannot, so the feature
+  needs `userPrAuth` sign-in. Automation runs never get the tool.
+- The merge runs on the server with the confirmer's own token, so GitHub
+  decides whether they may bypass: a repository admin, or a bypass actor in
+  the ruleset. A refusal names what is missing. Nothing in Open Session
+  grants a bypass.
+- The merge is pinned to the head SHA on the card. Confirming re-reads the
+  head and aborts if it moved, and the merge request carries the SHA.
+- Cancel, a 15 minute expiry, or a cancelled tool call close the card
+  without touching GitHub. Drafts and PRs with conflicts are refused.
+- Each step is audited as `pr_force_merge` with the confirmer, the bypassed
+  checks and the reason, and a merged PR gets a comment saying the same.
+
 Interactive code runs follow the repository's publication instructions,
 including direct pushes where a shared-main workflow permits them. GitHub
 permissions and rulesets remain the credential boundary. Ask-mode read-only

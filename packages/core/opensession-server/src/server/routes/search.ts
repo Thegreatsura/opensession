@@ -4,7 +4,7 @@
  */
 
 import type { RouteContext } from "./context";
-import { searchSessionHistory, searchIndex } from "../session-index";
+import { searchIndexCount, searchSessionHistory } from "../session-index";
 
 export async function handleSearchRoutes(
   ctx: RouteContext,
@@ -18,10 +18,11 @@ export async function handleSearchRoutes(
     const days = parseInt(url.searchParams.get("days") || "", 10) || undefined;
     const limit =
       parseInt(url.searchParams.get("limit") || "", 10) || undefined;
-    return Response.json({
-      hits: searchSessionHistory(q, { repo, days, limit }),
-      total: searchIndex().count(),
-    });
+    const [hits, total] = await Promise.all([
+      searchSessionHistory(q, { repo, days, limit }),
+      searchIndexCount(),
+    ]);
+    return Response.json({ hits, total });
   }
 
   return undefined;

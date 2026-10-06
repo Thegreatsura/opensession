@@ -223,24 +223,6 @@ export async function fetchDiffGroups(
   });
 }
 
-export async function fetchPrDiffGroups(
-  sessionId: string,
-  files: import("../types").PrFile[],
-  patch: string,
-  repo?: string,
-  branch?: string,
-): Promise<{ groups: import("../types").DiffFileGroup[] | null }> {
-  const qs = prTargetQs(repo, branch);
-  return request(
-    `/sessions/${encodeURIComponent(sessionId)}/pr-diff-groups${qs}`,
-    {
-      method: "POST",
-      body: { files, patch },
-      label: "Failed to organize changed files",
-    },
-  );
-}
-
 /**
  * Discard one file's changes in a session worktree (hover action on a diff
  * row). Resets the file to its base-branch state so it drops out of the diff.
@@ -299,7 +281,7 @@ export async function fetchPrViewedFiles(
   repo: string | undefined,
   number: number,
   user?: string,
-): Promise<{ prId: string; viewed: string[] }> {
+): Promise<{ prId: string; viewed: string[]; changed?: string[] }> {
   const qs = new URLSearchParams({ number: String(number) });
   if (repo) qs.set("repo", repo);
   if (user) qs.set("user", user);
@@ -308,17 +290,17 @@ export async function fetchPrViewedFiles(
   });
 }
 
-/** Mark/unmark one PR file as viewed on GitHub for the current viewer. */
-export async function setPrFileViewed(
+/** Mark/unmark PR files as viewed on GitHub for the current viewer. */
+export async function setPrFilesViewed(
   repo: string | undefined,
   prId: string,
-  path: string,
+  paths: readonly string[],
   viewed: boolean,
   user?: string,
 ): Promise<void> {
   await request(`/pr-viewed-files`, {
     method: "POST",
-    body: { repo, prId, path, viewed, user },
+    body: { repo, prId, paths, viewed, user },
     label: "Failed to update viewed state",
   });
 }

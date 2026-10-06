@@ -19,6 +19,12 @@
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
 import { dirname } from "path";
+import {
+  TranscriptTextIndex,
+  type TranscriptIndexBatch,
+  type TranscriptIndexCursor,
+  type TranscriptIndexMatch,
+} from "./transcript-text-index";
 
 export interface SearchRecord {
   /** Globally unique: `<source>:<key>` (e.g. "session:bks-..."). */
@@ -51,6 +57,7 @@ const HALF_LIFE_DAYS = 90;
 
 export class SessionSearchStore {
   private db: Database;
+  private transcripts: TranscriptTextIndex;
 
   constructor(path: string) {
     if (path !== ":memory:") {
@@ -59,6 +66,9 @@ export class SessionSearchStore {
     }
     this.db = new Database(path);
     this.db.exec("PRAGMA journal_mode = WAL;");
+    // The offline transcript backfill writes from another process while the
+    // worker keeps indexing finished turns; wait out its short transactions.
+    this.db.exec("PRAGMA busy_timeout = 10000;");
     this.db.exec(`
 			CREATE VIRTUAL TABLE IF NOT EXISTS records USING fts5(
 				question, summary, resolution, files,
@@ -67,6 +77,37 @@ export class SessionSearchStore {
 				tokenize = 'porter unicode61'
 			);
 		`);
+    this.transcripts = new TranscriptTextIndex(this.db);
+  }
+
+  /** Where the conversation index stands for one session. */
+  transcriptCursor(sessionId: string): TranscriptIndexCursor | null {
+    return this.transcripts.cursor(sessionId);
+  }
+
+  /** Every session's cursor. For the offline backfill, not the worker. */
+  transcriptCursors(): Map<string, TranscriptIndexCursor> {
+    return this.transcripts.cursors();
+  }
+
+  /** Apply one session's transcript changes; false on a cursor conflict. */
+  applyTranscript(batch: TranscriptIndexBatch): boolean {
+    return this.transcripts.apply(batch);
+  }
+
+  removeTranscript(sessionId: string): void {
+    this.transcripts.remove(sessionId);
+  }
+
+  searchTranscripts(
+    query: string,
+    opts: { limit?: number; now?: number } = {},
+  ): TranscriptIndexMatch[] {
+    return this.transcripts.search(query, opts);
+  }
+
+  transcriptStats(): { sessions: number; rows: number } {
+    return this.transcripts.stats();
   }
 
   upsert(rec: SearchRecord): void {

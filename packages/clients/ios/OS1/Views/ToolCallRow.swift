@@ -525,6 +525,11 @@ struct ToolDetail: Equatable {
             detail.inputLabel = "Command"
             detail.inputText = bashBody(input)
             detail.inputLanguage = "bash"
+        case "Codemode":
+            detail.inputKind = .code
+            detail.inputLabel = "Script"
+            detail.inputText = clamp(ToolPresentation.codemodeScript(input))
+            detail.inputLanguage = "javascript"
         case "Edit":
             if let patch = diffBody(input) {
                 detail.inputKind = .diff

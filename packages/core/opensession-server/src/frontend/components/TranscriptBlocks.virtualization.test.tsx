@@ -500,9 +500,19 @@ describe("TranscriptBlocks indexed ranges", () => {
         notes={[
           {
             id: "middle-note",
-            user: "Kent",
-            text: "Note in between",
+            sessionId: "os-test",
+            status: "open",
+            createdBy: "Kent",
             ts: Date.parse("2026-08-12T12:00:01.500Z"),
+            updatedAt: Date.parse("2026-08-12T12:00:01.500Z"),
+            comments: [
+              {
+                id: "middle-note",
+                user: "Kent",
+                text: "Note in between",
+                ts: Date.parse("2026-08-12T12:00:01.500Z"),
+              },
+            ],
           },
         ]}
       />,

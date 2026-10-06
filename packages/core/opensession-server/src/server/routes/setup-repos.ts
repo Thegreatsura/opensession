@@ -69,6 +69,7 @@ import {
   repoIdFromName,
   repoOriginIdentity,
 } from "./repo-inspection";
+import { removeTree } from "../workload-scope";
 
 /** Strict: this value reaches a spawn argv (always array-spawned, never a
  *  shell string — the regex is belt AND suspenders). */
@@ -818,7 +819,7 @@ async function registerGithubRepo(input: {
     });
   } catch (error) {
     // Only clean up a checkout this call created. An adopted one predates us.
-    if (!adopted) rmSync(dest, { recursive: true, force: true });
+    if (!adopted) await removeTree(dest);
     throw error;
   }
 }
@@ -997,7 +998,7 @@ async function registerCodestorageRepo(input: {
       },
     });
   } catch (error) {
-    if (!adopted) rmSync(dest, { recursive: true, force: true });
+    if (!adopted) await removeTree(dest);
     throw error;
   }
 }

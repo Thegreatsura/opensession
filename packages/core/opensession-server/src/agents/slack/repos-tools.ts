@@ -21,6 +21,10 @@ import {
   formatPrMergeVerdict,
   type PrMergeVerdict,
 } from "../../server/pr-merge-readiness";
+import {
+  formatForceMergeOutcome,
+  type ForceMergeOutcome,
+} from "../../server/force-merge";
 
 export interface ReposToolContext {
   /** The session these tools act on. */
@@ -82,6 +86,21 @@ export interface ReposToolContext {
     number?: number;
     session?: string;
   }) => Promise<PrMergeVerdict>;
+  /**
+   * Open a force-merge confirmation card for the session's driver and wait
+   * for their answer. Throws with a human message when the PR cannot be
+   * force merged or nobody could confirm.
+   */
+  forceMerge: (
+    input: {
+      url?: string;
+      repo?: string;
+      number?: number;
+      reason: string;
+      method?: "squash" | "merge" | "rebase";
+    },
+    signal?: AbortSignal,
+  ) => Promise<ForceMergeOutcome>;
 }
 
 function text(s: string) {
@@ -286,6 +305,54 @@ export function createReposMcpServer(ctx: ReposToolContext) {
           return text(formatPrMergeVerdict(await ctx.checkPrReady(args)));
         } catch (e: any) {
           return text(`Couldn't check that PR: ${e?.message || String(e)}`);
+        }
+      },
+    ),
+    tool(
+      "force_merge_pull_request",
+      "Ask the person driving this session to merge a pull request despite failing, pending or missing checks or reviews. Only when they asked for it: never on your own judgment. A card shows them the PR, its title, the head commit, the merge method and exactly which checks and reviews would be bypassed; nothing happens until they press Confirm, and you cannot confirm it. The merge runs with their own GitHub account and is pinned to the head commit on the card, so a push after the card appears aborts it. GitHub still decides whether they may bypass branch protection; a refusal names what is missing. Merged PRs get a comment with the reason. Drafts and PRs with merge conflicts are refused. Waits up to 15 minutes. After a cancel, do not ask again unless they say so.",
+      {
+        url: z
+          .string()
+          .optional()
+          .describe("GitHub PR URL (https://github.com/owner/repo/pull/123)."),
+        repo: z
+          .string()
+          .optional()
+          .describe(
+            "Registered repo id. With number: names the PR. Omit url, repo and number for this session's own PR.",
+          ),
+        number: z.number().optional().describe("PR number in that repo."),
+        reason: z
+          .string()
+          .min(1)
+          .max(500)
+          .describe(
+            "Why the blockers can be skipped, in one or two sentences the person and the PR comment will show, e.g. 'The e2e check fails on main too; the person asked to merge anyway.'",
+          ),
+        method: z
+          .enum(["squash", "merge", "rebase"])
+          .optional()
+          .describe(
+            "Merge method. Defaults to squash where the repository allows it, otherwise the method it allows.",
+          ),
+      },
+      async (
+        args: {
+          url?: string;
+          repo?: string;
+          number?: number;
+          reason: string;
+          method?: "squash" | "merge" | "rebase";
+        },
+        extra: any,
+      ) => {
+        try {
+          return text(
+            formatForceMergeOutcome(await ctx.forceMerge(args, extra?.signal)),
+          );
+        } catch (e: any) {
+          return text(`Couldn't force merge: ${e?.message || String(e)}`);
         }
       },
     ),

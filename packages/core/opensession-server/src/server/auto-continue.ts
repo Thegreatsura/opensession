@@ -31,7 +31,10 @@ export const AUTO_CONTINUE_PROMPT =
   "[auto-continue] Your previous turn ended by announcing a next step without " +
   "executing it. Continue now: perform the step you announced, and keep working " +
   "until the task is done or you are genuinely blocked on input only the human " +
-  "can give.";
+  "can give. If your previous turn actually ended by asking the human a " +
+  "question or offering them a choice, this nudge is a mistake: do not answer " +
+  "it yourself or act on it. Reply with one short line repeating the question " +
+  "and stop.";
 
 /**
  * Variant for turns that ended on a FABRICATED tool transcript (see
@@ -121,27 +124,62 @@ export const INTERRUPT_STEER_NOTE =
   "turn on a bare acknowledgment or an announcement of what you will do.";
 
 /**
- * Does the reply's final sentence read as a next action the model was about
- * to take ("Now let me read the exact code…", "I'll rebase and then open the
- * PR") rather than a completion, question, or handoff to the human?
- * Deliberately narrow — a false positive costs a wasted turn, so anything
- * question-shaped or waiting-on-the-human returns false.
+ * Handoff phrasing: the reply asks the human for something or offers them a
+ * choice, so ending the turn there is correct.
+ */
+const HANDOFF =
+  /\b(let me know|tell me|blocked on|waiting (?:for|on)|awaiting|your call|up to you|your decision|if you(?:['’]d)? (?:want|prefer|like|rather|disagree|agree|approve)|if you would|say the word|shall i|should i|want me to|do you want|would you like|which (?:one|option|do you)|or i can|happy to|i can (?:also |then )?\S+.{0,80}\bif\b|i['’]ll (?:wait|hold|leave|stop|pause)|before i (?:push|merge|deploy|continue|proceed|go ahead))\b/i;
+
+/**
+ * The prose that closes a reply, with code, inline code and URLs removed so a
+ * `?` in a query string or snippet doesn't read as a question. That is the last
+ * paragraph, plus the one before it when the last is a short tag line
+ * ("Pushing it would start one more review round.").
+ */
+function closingProse(text: string): string {
+  const prose = text
+    .replace(/```[\s\S]*?(?:```|$)/g, " ")
+    .replace(/`[^`\n]*`/g, " ")
+    .replace(/https?:\/\/\S+/g, " ")
+    .trim();
+  const paragraphs = prose
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const last = paragraphs[paragraphs.length - 1] || "";
+  const prev = paragraphs[paragraphs.length - 2];
+  return prev && last.length < 160 ? `${prev}\n\n${last}` : last;
+}
+
+/**
+ * Does the reply's ending read as a next action the model was about to take
+ * ("Now let me read the exact code…", "I'll rebase and then open the PR")
+ * rather than a completion, question, or handoff to the human?
+ * Deliberately narrow — a false positive costs a wasted turn at best, and at
+ * worst the nudge makes the model answer its own question and act without
+ * the human (2026-10-05 os-01a10b94: "Should I trim PR #8098 down to those two
+ * fixes? Pushing it would start one more automated review round." was nudged
+ * on the trailing "Pushing it…" and the model pushed the trim unapproved).
+ * So the whole closing paragraph is checked for a question or handoff, not
+ * only the final sentence, and any doubt resolves to "waiting on the human".
  */
 export function announcesNextAction(text: string): boolean {
-  const trimmed = text.trim();
-  if (!trimmed) return false;
-  const tail = trimmed.slice(-400);
-  const sentences = tail.split(/(?<=[.!?])\s+/);
+  const closing = closingProse(text);
+  if (!closing) return false;
+  // Any question or handoff in the closing prose means the turn is waiting
+  // on the human, whatever sentence happens to come last.
+  if (closing.includes("?") || HANDOFF.test(closing)) return false;
+  const sentences = closing.slice(-400).split(/(?<=[.!?])\s+|\n+/);
   const last = (sentences[sentences.length - 1] || "").trim();
   if (!last || last.length < 12) return false;
-  if (last.includes("?")) return false;
-  // Waiting on the human is a legitimate stop, not an announce-then-stop.
-  if (
-    /\b(let me know|blocked on|waiting for|awaiting|your call|if you (?:want|prefer|disagree)|say the word|shall i|should i|want me to|i['’]ll (?:wait|hold|leave|stop))\b/i.test(
-      last,
-    )
-  )
-    return false;
+  return announcesStep(last);
+}
+
+/** Is this single sentence an announcement of the model's own next step? */
+function announcesStep(last: string): boolean {
+  // Conditional or hypothetical framing describes an option, not a step
+  // already decided on ("If we merge this, I'll rebase the others.").
+  if (/^(?:if|once|when|unless|whether)\b/i.test(last)) return false;
   if (
     /\b(let me|i['’]ll|i will|i need to|i['’]m going to|i['’]m about to|next,? i|now i['’]m|now i will)\b/i.test(
       last,
@@ -176,12 +214,26 @@ export function announcesNextAction(text: string): boolean {
     );
   if (!gerund) return false;
   if (NON_VERB_ING.has(gerund[1].toLowerCase())) return false;
+  // A gerund that is the SUBJECT of a finite verb describes a consequence,
+  // not a step being taken: "Pushing it would start another review round.",
+  // "Merging this means the old flag goes away."
+  // Only the main clause counts: "Checking whether the build is green." is
+  // still a step.
+  const mainClause = gerund[2].split(SUBORDINATOR)[0] || "";
+  if (GERUND_SUBJECT_VERB.test(mainClause)) return false;
   return (
     /^(?:the|a|an|this|that|these|those|it|its|my|our|your|all|both|each|some|more|on)\b/i.test(
       gerund[2],
     ) || /^[A-Z0-9`"'@[#]/.test(gerund[2])
   );
 }
+
+/** Finite verbs that turn a sentence-initial gerund into a subject. */
+const GERUND_SUBJECT_VERB =
+  /\b(?:would|will|could|can|might|may|should|must|is|was|are|were|isn['’]t|wasn['’]t|won['’]t|means|meant|requires|needs|takes|took|starts|triggers|kicks|costs|risks|breaks|causes|makes|leaves|keeps|lets|gives|adds|changes|undoes|reopens|resets)\b/i;
+
+const SUBORDINATOR =
+  /\b(?:whether|that|if|why|how|what|which|where|to|so|because|before|after|until|while|since|once|when)\b/i;
 
 /** -ing words that open sentences without being an action the model is taking. */
 const NON_VERB_ING = new Set([

@@ -304,10 +304,15 @@ final class SessionsListViewModel {
         guard hasWorkspaceGroup(current) else {
             return [current]
         }
+        // A PR review run's findings live on the pull request and in the
+        // review surface, so it never takes a tab of its own, except while it
+        // is the session on screen (`isPrReviewSession` in the web's
+        // lib/landing-session.ts).
         var tabs = sessions.filter {
             inWorkspaceGroup($0, containing: current)
                 && $0.parentSessionId?.isEmpty != false
-                && ($0.archived != true || $0.id == current.id)
+                && ($0.id == current.id
+                    || ($0.archived != true && !isPrReviewSession($0)))
         }
         if !tabs.contains(where: { $0.id == current.id }) {
             tabs.append(current)
@@ -320,6 +325,17 @@ final class SessionsListViewModel {
         let main = mainSession(in: tabs)
         guard let main else { return [] }
         return [main] + tabs.filter { $0.id != main.id }
+    }
+
+    /// A PR review run: `bks-ghpr-<pr>-review` or `bks-ghpr-<pr>-adversarial`.
+    nonisolated static func isPrReviewSession(_ session: Session) -> Bool {
+        let id = session.id
+        guard id.hasPrefix("bks-ghpr-") else { return false }
+        let rest = id.dropFirst("bks-ghpr-".count)
+        for suffix in ["-review", "-adversarial"] where rest.hasSuffix(suffix) {
+            if rest.count > suffix.count { return true }
+        }
+        return false
     }
 
     /// Direct, live workers delegated by one session, in the order they were
@@ -675,7 +691,7 @@ final class SessionsListViewModel {
             mode: old.mode ?? "code",
             model: old.model,
             effort: old.effort,
-            fastMode: old.fastMode ?? false,
+            speed: old.speedSetting.speed,
             startedBy: old.startedBy ?? "",
             // Keep the workspace: a session created into one stays in its row
             // (and its tab strip) across the create resolving, instead of
@@ -829,6 +845,30 @@ final class SessionsListViewModel {
     /// Permanently delete an established workspace and every session in it.
     /// Confirmation belongs to the view; this method owns in-flight/error
     /// state, calls the API, removes stale local rows, and refreshes metadata.
+    /// Add or remove one collaborator on a row's workspace. The answer is the
+    /// workspace as the server now holds it; it replaces the cached one so
+    /// the person lens and the menu's checkmarks move on the tap rather than
+    /// on the next workspaces refresh.
+    func toggleCollaborator(_ name: String, on workspace: SidebarWorkspace) async {
+        guard let workspaceId = workspace.workspaceId, !workspaceId.isEmpty else { return }
+        let updated = await WorkspaceCollaboratorsStore.shared.toggle(
+            name,
+            workspaceId: workspaceId,
+            sessionId: workspace.mainSession.id
+        )
+        guard let updated else {
+            if let message = WorkspaceCollaboratorsStore.shared.error {
+                error = "Couldn't update collaborators: \(message)"
+            }
+            return
+        }
+        if let index = workspaces.firstIndex(where: { $0.id == workspaceId }) {
+            workspaces[index] = updated
+        } else {
+            workspaces.append(updated)
+        }
+    }
+
     func deleteWorkspace(_ workspace: SidebarWorkspace) async -> Bool {
         guard !workspace.isDraftWorkspace,
               let workspaceId = workspace.workspaceId,
@@ -1005,7 +1045,10 @@ final class SessionsListViewModel {
                 SessionLinks.register(titles: grouped.titles)
                 PrLinks.register(index: grouped.prs)
                 if let renamed { workspaceNames = renamed }
-                if let refreshedWorkspaces { workspaces = refreshedWorkspaces }
+                if let refreshedWorkspaces {
+                    workspaces = refreshedWorkspaces
+                    WorkspaceCollaboratorsStore.shared.replace(with: refreshedWorkspaces)
+                }
                 liveActivityConnection = requestConnection
                 setSessions(next, rows: grouped.rows)
             }

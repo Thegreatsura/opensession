@@ -812,6 +812,54 @@ export type ProtocolServerMessage =
       status: "registered" | "declined" | "expired";
     }
   | {
+      /** A keychain ask from this session was made or settled. Names no
+       *  credential or owner: viewers re-read /api/keychain/asks, which shows
+       *  an ask only to the credential's owner. */
+      type: "keychain_asks_changed";
+      sessionId: string;
+    }
+  | {
+      /** The agent asked the session's driver to force merge a PR
+       *  (force_merge_pull_request). The gateway fills in everything but the
+       *  reason from GitHub. Confirmed or cancelled over HTTP
+       *  (/api/force-merge); `null` retires the card. */
+      type: "force_merge_request";
+      sessionId: string;
+      forceMergeRequest: {
+        id: string;
+        repo: string;
+        ghRepo: string;
+        number: number;
+        title: string;
+        url: string;
+        author: string;
+        base: string;
+        head: string;
+        headSha: string;
+        method: "squash" | "merge" | "rebase";
+        reason: string;
+        bypass: Array<
+          | {
+              kind: "check";
+              name: string;
+              state: "failing" | "pending" | "missing";
+              required: boolean;
+            }
+          | { kind: "review" | "branch"; detail: string }
+        >;
+        driver: string;
+        requestedAt: number;
+        expiresAt: number;
+      } | null;
+    }
+  | {
+      type: "force_merge_request_resolved";
+      sessionId: string;
+      requestId: string;
+      status: "merged" | "cancelled" | "expired" | "head_changed" | "refused";
+      error?: string;
+    }
+  | {
       /** Every script run of the session (start_script,
        *  run_with_credential), newest first, sent whenever one starts, ends
        *  or its credential call counts move. Output is fetched over HTTP

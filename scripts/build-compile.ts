@@ -418,6 +418,20 @@ const WORKER_SIDECARS: Array<{ entry: string; name: string }> = [
     entry: "packages/core/opensession-server/src/server/databases-worker.ts",
     name: "databases-worker.js",
   },
+  {
+    entry: "packages/core/opensession-server/src/server/memory-repo-worker.ts",
+    name: "memory-repo-worker.js",
+  },
+  {
+    entry:
+      "packages/core/opensession-server/src/server/memory-repo/hook-main.ts",
+    name: "memory-repo-hook.js",
+  },
+  {
+    entry:
+      "packages/core/opensession-server/src/server/session-search-worker.ts",
+    name: "session-search-worker.js",
+  },
 ];
 
 async function buildWorkerSidecars(destDir: string): Promise<void> {

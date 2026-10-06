@@ -247,6 +247,7 @@ export function CommentableDiff({ patch, options }: Props) {
     imageSrcs,
     groups,
     groupsLoading,
+    groupsSource = "ai",
     showGroupsStatus = true,
     diffStyle = "unified",
     wrapLines = false,
@@ -257,6 +258,7 @@ export function CommentableDiff({ patch, options }: Props) {
     fileActions,
     stickyFileHeaders = false,
     viewedFiles,
+    changedFiles,
     onToggleViewed,
     editFile,
   } = options;
@@ -650,6 +652,7 @@ export function CommentableDiff({ patch, options }: Props) {
     // already drawn open, and the diff drops in a frame or two later.
     const mounted = (mountRank.get(i) ?? 0) < mountBudget;
     const isViewed = viewed.has(file.name);
+    const isChanged = !isViewed && !!changedFiles?.has(file.name);
     const resolved = resolvedByFile.get(file.name) || [];
     const editable =
       !!editFile && file.type !== "deleted" && !IMAGE_EXT.test(file.name);
@@ -695,7 +698,23 @@ export function CommentableDiff({ patch, options }: Props) {
               stickyFileHeaders
                 ? STICKY_FILE_HEADER_SURFACE
                 : "w-auto rounded-none bg-[var(--review-file-header-bg)] hover:bg-[var(--review-file-header-hover)]",
+              !isEditing && "cursor-pointer",
             )}
+            // The whole row toggles the file, not just the chevron and name.
+            // The toggle button stays the keyboard and accessibility target;
+            // clicks on the row's own controls keep their own meaning.
+            onClick={(event) => {
+              if (isEditing) return;
+              if (
+                event.target instanceof Element &&
+                event.target.closest(
+                  "button, a, input, label, textarea, [role=menuitem], [role=checkbox]",
+                )
+              )
+                return;
+              disarm();
+              toggle(file.name);
+            }}
           >
             <button
               type="button"
@@ -756,6 +775,11 @@ export function CommentableDiff({ patch, options }: Props) {
             {pend.length > 0 && (
               <span className="inline-flex shrink-0 items-center gap-[3px] font-sans text-meta text-faint before:text-meta before:content-['💬']">
                 {pend.length}
+              </span>
+            )}
+            {resolved.length > 0 && (
+              <span className="shrink-0 font-sans text-meta text-faint phone:hidden">
+                {resolved.length} resolved
               </span>
             )}
             {isEditing && (
@@ -847,6 +871,13 @@ export function CommentableDiff({ patch, options }: Props) {
                 />
                 <span className="phone:sr-only">Reviewed</span>
               </label>
+            )}
+            {viewedEnabled && isChanged && (
+              <Tooltip label="You reviewed this file before later commits changed it">
+                <span className="shrink-0 font-sans text-meta text-yellow phone:sr-only">
+                  Changed since review
+                </span>
+              </Tooltip>
             )}
             {fileActions && (
               <Menu.Root>
@@ -982,7 +1013,7 @@ export function CommentableDiff({ patch, options }: Props) {
         <span
           className={`${GROUPS_NOTE} before:size-[5px] before:rounded-full before:bg-accent before:content-['']`}
         >
-          AI organized
+          {groupsSource === "ai" ? "AI organized" : "Grouped by file type"}
         </span>
       )}
       {viewedEnabled && showViewedProgress && (

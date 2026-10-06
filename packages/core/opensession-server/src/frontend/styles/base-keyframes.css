@@ -200,6 +200,17 @@
   initial-value: 0px;
 }
 
+/* The focused phone composer's measured height, set inline on the transcript
+   scroller (useTranscriptReaderController) and read only by its own bottom
+   padding (VIEWER_MESSAGES). Registered non-inherited so an update restyles
+   that one element instead of every transcript node beneath it. The initial
+   value is the resting one-row composer. */
+@property --viewer-input-height {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 64px;
+}
+
 @keyframes session-tabs-fade-start {
   from {
     --tabs-fade-start: 0px;

@@ -93,7 +93,8 @@ import {
 import { withSessionMutationLock } from "../session-mutation-lock";
 import { sessionIdForRequest } from "../session-request-id";
 import { suggestBranchName } from "../suggest-branch";
-import { searchIndex } from "../session-index";
+import { removeFromSearchIndex } from "../session-index";
+import { callSearchIndex } from "../session-search-client";
 import { destroySessionSandbox } from "../session-sandbox";
 import { deleteSessionCheckpoint } from "../sandbox/checkpoint";
 import { withSessionLifecycleLane } from "../sandbox/lifecycle-lane";
@@ -438,12 +439,35 @@ type SessionEnrichmentContext = {
   workspaceNames: ReadonlyMap<string, string>;
 };
 
+// The footer index walks every cached PR. Row publishes, detail reads and
+// list builds each ask for it, often many times a second. The PR cache is
+// updated in place as well as replaced, so key on its identity and bound
+// staleness with a short TTL rather than trusting identity alone.
+const PRS_BY_SESSION_TTL_MS = 1_000;
+let prsBySessionMemo:
+  | {
+      source: ReturnType<typeof getPrsByRepo>;
+      value: ReturnType<typeof prsBySessionRef>;
+      expiresAt: number;
+    }
+  | undefined;
+
 function sessionEnrichmentContext(): SessionEnrichmentContext {
   const prsByRepo = getPrsByRepo();
+  const now = Date.now();
+  if (
+    prsBySessionMemo?.source !== prsByRepo ||
+    prsBySessionMemo.expiresAt <= now
+  )
+    prsBySessionMemo = {
+      source: prsByRepo,
+      value: prsBySessionRef(prsByRepo),
+      expiresAt: now + PRS_BY_SESSION_TTL_MS,
+    };
   return {
     defaultRepoId: defaultRepo().id,
     prsByRepo,
-    prsBySession: prsBySessionRef(prsByRepo),
+    prsBySession: prsBySessionMemo.value,
     workspaceNames: workspaceNameSnapshot(),
   };
 }
@@ -571,15 +595,16 @@ export async function sessionDetail(
 }
 
 /**
- * One changed session as a row frame, plus the enriched rows its sidebar
+ * Changed sessions as row frames, plus the enriched rows their sidebar
  * visibility depends on. session-row-events evaluates each subscribed scope
- * against `group` and sends `row` to the sockets whose lens shows it.
+ * against `group` once and sends each row to the sockets whose lens shows
+ * it. Every id in `sessionIds` must be a member of `group`.
  */
-export async function sidebarRowProjection(
-  session: UnifiedSession,
+export async function sidebarRowsProjection(
+  sessionIds: readonly string[],
   group: UnifiedSession[],
 ): Promise<{
-  row: SessionListRow;
+  rows: SessionListRow[];
   group: Array<UnifiedSession & SessionListSignals>;
 }> {
   const signals = await sessionListRuntimeSignals();
@@ -588,10 +613,12 @@ export async function sidebarRowProjection(
     enrichSession(member, signals, context, "row"),
   );
   shareWorkspacePrRefs(enrichedGroup);
-  const enriched =
-    enrichedGroup.find((member) => member.id === session.id) ??
-    enrichSession(session, signals, context, "row");
-  return { row: sessionListRow(enriched), group: enrichedGroup };
+  const byId = new Map(enrichedGroup.map((member) => [member.id, member]));
+  const rows = sessionIds.flatMap((id) => {
+    const enriched = byId.get(id);
+    return enriched ? [sessionListRow(enriched)] : [];
+  });
+  return { rows, group: enrichedGroup };
 }
 
 /**
@@ -844,9 +871,10 @@ async function searchStoredTranscripts(
       query,
       sessionIds,
       maxMatches: 50,
-      maxSessions: 250,
+      maxSessions: LIVE_TRANSCRIPT_SCAN_SESSIONS,
       maxRows: 6_000,
-      maxMs: 5_000,
+      // The index answers the rest; a slow scan must not hold up the page.
+      maxMs: 2_000,
     }),
   );
   proc.stdin.end();
@@ -892,6 +920,9 @@ async function searchStoredTranscripts(
   }
 }
 
+/** Newest sessions scanned directly, ahead of their index update. */
+const LIVE_TRANSCRIPT_SCAN_SESSIONS = 25;
+
 async function ripgrepFiles(query: string, files: string[]): Promise<string[]> {
   const hits = new Set<string>();
   const CHUNK = 1000;
@@ -911,10 +942,45 @@ async function ripgrepFiles(query: string, files: string[]): Promise<string[]> {
   return [...hits];
 }
 
+function sidebarResponseKey(
+  scope: SidebarSessionScope,
+  compactPrs: boolean,
+): string {
+  return `${sidebarSessionScopeKey(scope)}${compactPrs ? "\u0000prsFrom" : ""}`;
+}
+
+/**
+ * Sidebar rows of one workspace usually carry the same shared PR list
+ * (shareWorkspacePrRefs), which was over half of the response. A row whose
+ * list is identical to an earlier sibling's names that sibling in `prsFrom`
+ * instead; the web client restores `prs` before it reads the rows
+ * (restoreSharedPrs). Opt-in per request, so an older client still gets
+ * whole rows. Exported for tests.
+ */
+export function compactSharedPrs(
+  rows: SessionListRow[],
+): Array<SessionListRow & { prsFrom?: string }> {
+  const firstByWorkspace = new Map<string, Map<string, string>>();
+  return rows.map((row) => {
+    if (!row.workspaceId || !row.prs?.length) return row;
+    const encoded = JSON.stringify(row.prs);
+    let seen = firstByWorkspace.get(row.workspaceId);
+    if (!seen) firstByWorkspace.set(row.workspaceId, (seen = new Map()));
+    const source = seen.get(encoded);
+    if (!source) {
+      seen.set(encoded, row.id);
+      return row;
+    }
+    const { prs: _prs, ...rest } = row;
+    return { ...rest, prsFrom: source };
+  });
+}
+
 function refreshSidebarSessionsResponse(
   scope: SidebarSessionScope,
+  compactPrs: boolean,
 ): Promise<SessionsResponseSnapshot> {
-  const key = sidebarSessionScopeKey(scope);
+  const key = sidebarResponseKey(scope, compactPrs);
   const current = sessionsResponseRefreshes.get(key);
   if (current) return current;
   const refresh = buildAtCurrentSessionListRevision(async () => {
@@ -931,7 +997,8 @@ function refreshSidebarSessionsResponse(
       scope,
       await loadSidebarSessionScopeContext(scope, bounded),
     );
-    const text = JSON.stringify(scoped.map(sessionListRow));
+    const rows = scoped.map(sessionListRow);
+    const text = JSON.stringify(compactPrs ? compactSharedPrs(rows) : rows);
     return {
       text,
       hash: Bun.hash(text).toString(16),
@@ -1176,13 +1243,15 @@ export async function handleSessionsRoutes(
       requestUser(ctx, url.searchParams.get("user")),
     );
     if (variant === "exclude" && sidebarScope) {
-      const key = sidebarSessionScopeKey(sidebarScope);
-      const cached = sessionsResponseSnapshots.get(key);
+      const compactPrs = url.searchParams.get("prsFrom") === "1";
+      const cached = sessionsResponseSnapshots.get(
+        sidebarResponseKey(sidebarScope, compactPrs),
+      );
       return await sessionsListResponse(
         req,
         cached && cached.expiresAt > Date.now()
           ? cached
-          : await refreshSidebarSessionsResponse(sidebarScope),
+          : await refreshSidebarSessionsResponse(sidebarScope, compactPrs),
       );
     }
     // `?workspace=<id>` narrows an archived slice to one workspace's group,
@@ -1624,12 +1693,12 @@ export async function handleSessionsRoutes(
   }
 
   // Full-text search across session transcripts (the ⌘K palette's
-  // "search in conversations"). Owned sessions live in transcript v2 and no
-  // longer have mirror files, so their bounded rows are searched in a
-  // read-only child process. The most recent 1,000 sessions cover interactive
-  // recall without turning each keystroke into a scan of the 6+ GB database;
-  // `truncated` keeps that ceiling explicit for a future FTS cutover. Legacy
-  // transcripts retain the ripgrep pre-pass and clean-snippet validation.
+  // "search in conversations"). Every session's text lives in the derived
+  // FTS5 index on the search worker (transcript-text-index.ts), updated when
+  // each turn ends. The few most recent sessions are also scanned directly
+  // in a read-only child process, so a turn still running, or one that ended
+  // moments ago, is found before its index update lands. Legacy transcripts
+  // retain the ripgrep pre-pass and clean-snippet validation.
   if (path === "/api/sessions/search" && req.method === "GET") {
     const q = (url.searchParams.get("q") || "").trim();
     if (q.length < 2) return Response.json({ matches: [] });
@@ -1641,11 +1710,27 @@ export async function handleSessionsRoutes(
           (Date.parse(b.lastActivity || "") || 0) -
           (Date.parse(a.lastActivity || "") || 0),
       )
-      .slice(0, 1_000)
+      .slice(0, LIVE_TRANSCRIPT_SCAN_SESSIONS)
       .map((session) => session.id);
-    const stored = await searchStoredTranscripts(q, recentIds, req.signal);
+    const [stored, indexed] = await Promise.all([
+      searchStoredTranscripts(q, recentIds, req.signal),
+      callSearchIndex("searchTranscripts", q, { limit: 50 }).catch(
+        (error: unknown) => {
+          console.warn(
+            `[transcript-search] index unavailable: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return null;
+        },
+      ),
+    ]);
     const matches = stored.matches.slice(0, 50);
     const matchedIds = new Set(matches.map((match) => match.id));
+    for (const match of indexed ?? []) {
+      if (matches.length >= 50) break;
+      if (matchedIds.has(match.id)) continue;
+      matches.push(match);
+      matchedIds.add(match.id);
+    }
 
     const byPath = new Map<string, string>(); // transcriptPath → sessionId
     for (const session of sessions) {
@@ -1670,10 +1755,9 @@ export async function handleSessionsRoutes(
     }
     return Response.json({
       matches,
-      truncated:
-        stored.exhausted !== null ||
-        stored.searchedSessions < recentIds.length ||
-        (sessions.length > recentIds.length && matches.length < 50),
+      // An unavailable index searched only the newest sessions; a full page
+      // may have more behind it.
+      truncated: indexed === null || matches.length >= 50,
     });
   }
 
@@ -1910,7 +1994,10 @@ export async function handleSessionsRoutes(
         await deleteSessionTranscript(id);
       } catch {}
       try {
-        searchIndex().remove(`session:${id}`);
+        await removeFromSearchIndex(`session:${id}`);
+      } catch {}
+      try {
+        await callSearchIndex("removeTranscript", id);
       } catch {}
     };
     // Every deletion step works on the record as it stands once the lifecycle

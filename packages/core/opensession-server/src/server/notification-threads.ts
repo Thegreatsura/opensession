@@ -21,17 +21,20 @@
  */
 export const NOTIFICATION_KINDS = [
   "review_requested",
+  "team_review_requested",
   "review_done",
   "mention",
   "collaborator",
   "reminder",
+  "comment",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 /** What a person switches on or off in Settings. */
 export const ALERT_GROUPS = {
   reviews: ["review_requested", "review_done"],
-  mentions: ["mention"],
+  teamReviews: ["team_review_requested"],
+  mentions: ["mention", "comment"],
   collaborators: ["collaborator"],
   reminders: ["reminder"],
 } as const satisfies Record<string, readonly NotificationKind[]>;
@@ -40,6 +43,7 @@ export type AlertPrefs = Record<AlertGroup, boolean>;
 
 export const DEFAULT_ALERT_PREFS: AlertPrefs = {
   reviews: true,
+  teamReviews: true,
   mentions: true,
   collaborators: true,
   reminders: true,

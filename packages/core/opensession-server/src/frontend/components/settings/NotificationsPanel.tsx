@@ -93,9 +93,18 @@ const ALERT_ROWS: {
   {
     group: "reviews",
     title: "Reviews",
-    desc: "Someone asks for your review, or finishes one you asked for",
+    desc: "Someone asks you for a review, or finishes one you asked for",
   },
-  { group: "mentions", title: "Mentions", desc: "Someone tags you" },
+  {
+    group: "teamReviews",
+    title: "Team review requests",
+    desc: "A team you're on is asked to review, like code owners",
+  },
+  {
+    group: "mentions",
+    title: "Mentions and comments",
+    desc: "Someone tags you, assigns you a comment, or replies to one you're in",
+  },
   {
     group: "collaborators",
     title: "Added to a workspace",

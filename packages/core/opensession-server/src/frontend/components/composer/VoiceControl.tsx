@@ -8,6 +8,7 @@ import { motion } from "motion/react";
 import { composerMorph } from "../../ui/motion";
 import { cn } from "../../ui/cn";
 import { VoiceInput } from "../VoiceInput";
+import { useIsPhone } from "../../hooks/useIsPhone";
 
 interface VoiceControlProps {
   minimized: boolean;
@@ -38,6 +39,7 @@ export function VoiceControl({
   onActiveChange,
   disabled,
 }: VoiceControlProps) {
+  const isPhone = useIsPhone();
   const callActive = useSyncExternalStore(
     sessionVoice.subscribe,
     sessionVoice.isActive,
@@ -75,6 +77,9 @@ export function VoiceControl({
             : "rounded-[var(--composer-radius)]"
         }
         disabled={disabled || callActive}
+        // On a phone the recording state is three floating pills (stop,
+        // timer, send) rather than one bar over the composer.
+        pills={isPhone}
       />
     </motion.div>
   );

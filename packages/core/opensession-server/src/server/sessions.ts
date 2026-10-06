@@ -1762,6 +1762,15 @@ async function removeSessionArtifacts(session: UnifiedSession): Promise<void> {
   // async: a scratch hiccup must never block deletion.
   for (const id of [session.id, ...(session.aliasIds || [])])
     void removeSessionScratch(id);
+  // Its comment threads go with it. Best-effort for the same reason.
+  void import("./comment-threads")
+    .then(({ deleteSessionThreads }) => deleteSessionThreads(session.id))
+    .catch((error) =>
+      console.warn(
+        `[comment-threads] cleanup for ${session.id} failed:`,
+        error,
+      ),
+    );
 }
 
 export async function deleteSession(session: UnifiedSession): Promise<void> {

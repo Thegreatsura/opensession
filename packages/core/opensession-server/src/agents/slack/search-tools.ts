@@ -18,7 +18,10 @@
 
 import { createSdkMcpServer, tool } from "../../server/inprocess-mcp";
 import { z } from "zod";
-import { searchSessionHistory, searchIndex } from "../../server/session-index";
+import {
+  searchIndexCount,
+  searchSessionHistory,
+} from "../../server/session-index";
 import {
   transcriptExcerpt,
   formatExcerpt,
@@ -59,14 +62,14 @@ export function createSearchMcpServer() {
         limit?: number;
       }) => {
         try {
-          const hits = searchSessionHistory(args.query, {
+          const hits = await searchSessionHistory(args.query, {
             repo: args.repo,
             days: args.days,
             limit: args.limit,
           });
           if (!hits.length) {
             return text(
-              `No matches${args.repo ? ` in ${args.repo}` : ""} for "${args.query}" (index holds ${searchIndex().count()} sessions). Try fewer or different tokens.`,
+              `No matches${args.repo ? ` in ${args.repo}` : ""} for "${args.query}" (index holds ${await searchIndexCount()} sessions). Try fewer or different tokens.`,
             );
           }
           const lines = hits.map((h, i) => {

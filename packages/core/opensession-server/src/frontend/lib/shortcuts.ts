@@ -65,6 +65,7 @@ export type ShortcutId =
   | "composer-focus"
   | "transcript-up"
   | "transcript-down"
+  | "transcript-comment"
   | "ask-focus"
   | "effort-up"
   | "effort-down"
@@ -293,6 +294,13 @@ export const SHORTCUT_COMMANDS: ShortcutCommand[] = [
     description: "Page the transcript down, resuming follow at the live edge",
     group: "Transcript",
     defaults: ["ctrl+shift+arrowdown"],
+  },
+  {
+    id: "transcript-comment",
+    title: "Comment on selection",
+    description: "Start a comment thread on the selected transcript text",
+    group: "Transcript",
+    defaults: ["mod+alt+m"],
   },
   // The letters answer from anywhere but a text field. This is the way in
   // from the one place they cannot reach: the composer, which is where the

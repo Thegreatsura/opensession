@@ -6,10 +6,12 @@ import { request } from "./request";
 
 export const NOTIFICATION_KINDS = [
   "review_requested",
+  "team_review_requested",
   "review_done",
   "mention",
   "collaborator",
   "reminder",
+  "comment",
 ] as const;
 
 export const notificationThreadSchema = z.object({
@@ -32,6 +34,7 @@ export const notificationThreadSchema = z.object({
 
 const alertsSchema = z.object({
   reviews: z.boolean(),
+  teamReviews: z.boolean().default(true),
   mentions: z.boolean(),
   collaborators: z.boolean(),
   reminders: z.boolean(),
@@ -48,6 +51,7 @@ export type NotificationAlerts = z.infer<typeof alertsSchema>;
 
 export const DEFAULT_NOTIFICATION_ALERTS: NotificationAlerts = {
   reviews: true,
+  teamReviews: true,
   mentions: true,
   collaborators: true,
   reminders: true,

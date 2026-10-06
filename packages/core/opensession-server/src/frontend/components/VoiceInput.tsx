@@ -8,8 +8,16 @@ import React, {
 import { createPortal } from "react-dom";
 import { motion } from "motion/react";
 import { transcribeClip } from "../lib/api";
-import { IconArrowUp, IconCheck, IconMic, IconPlus, IconX } from "./icons";
+import {
+  IconArrowUp,
+  IconCheck,
+  IconMic,
+  IconPlus,
+  IconStopSquare,
+  IconX,
+} from "./icons";
 import { Tooltip } from "../ui/tooltip";
+import { Button } from "../ui/button";
 import { PRODUCT_NAME } from "../lib/brand";
 import { cn } from "../ui/cn";
 import { duration, ease } from "../ui/motion";
@@ -64,6 +72,25 @@ const OVERLAY =
 /** Default corner. A host whose container is rounded differently passes its
  *  own (the new-session card is `rounded-2xl`). */
 const OVERLAY_RADIUS = "rounded-[var(--composer-radius)]";
+
+/* Phone pill layout: three floating capsules (stop · timer and meter · send)
+   in place of the one bar. The overlay itself is clear; each pill carries the
+   composer's own surface, border and shadow so it reads as a piece of it. */
+const PILL_OVERLAY =
+  "pointer-events-auto absolute inset-0 z-[6] flex items-center gap-2.5";
+const PILL =
+  "inline-flex h-12 min-w-0 items-center justify-center rounded-full border border-[color:color-mix(in_srgb,var(--composer-border)_35%,transparent)] bg-[var(--composer-surface)] shadow-[var(--composer-shadow)]";
+/** Geometry over Button's own: `cn` merges, so these win over the variant's
+ *  size, radius and hover wash. */
+const PILL_BUTTON = "h-12 flex-1 rounded-full px-0 disabled:opacity-35";
+const PILL_STOP = "text-fg hover:bg-[var(--composer-surface)] hover:text-fg";
+const PILL_SEND = "border-transparent shadow-[var(--composer-shadow)]";
+const PILL_METER_BARS = 10;
+const PILL_BAR = "w-[3px] shrink-0 rounded-full bg-dim";
+
+function formatElapsed(seconds: number) {
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
 
 /* Waveform bars. Colour lives on the variant, never alongside a second colour
    utility on the same element. Two of those don't compose, the sheet's order
@@ -146,6 +173,7 @@ export function VoiceInput({
   shortcutActive = false,
   cancelClassName,
   cancelFromPlus = false,
+  pills = false,
 }: {
   onText: (text: string) => void;
   /** Take the text and send it straight away. Without one, the send button is
@@ -174,6 +202,8 @@ export function VoiceInput({
   cancelClassName?: string;
   /** Rotate the host's add glyph into cancel instead of swapping to an X. */
   cancelFromPlus?: boolean;
+  /** Draw the recording state as separate stop, timer and send pills. */
+  pills?: boolean;
 }) {
   const isPhone = useIsPhone();
   const dictateKeys = useShortcutKeys("composer-dictate");
@@ -192,6 +222,7 @@ export function VoiceInput({
   const [error, setError] = useState<string | null>(null);
   const [levels, setLevels] = useState<number[]>([]);
   const [liveTranscript, setLiveTranscript] = useState("");
+  const [elapsed, setElapsed] = useState(0);
   const [overlayTarget, setOverlayTarget] = useState<HTMLElement | null>(null);
   useLayoutEffect(() => {
     setOverlayTarget(overlayTargetRef?.current ?? null);
@@ -437,9 +468,12 @@ export function VoiceInput({
       if (request !== requestRef.current) return;
       const startedAt = Date.now();
       setLevels([]);
+      setElapsed(0);
       timersRef.current.push(
         window.setInterval(() => {
-          if (Date.now() - startedAt >= MAX_SECONDS * 1000) stop(true);
+          const ms = Date.now() - startedAt;
+          setElapsed(Math.min(MAX_SECONDS, Math.floor(ms / 1000)));
+          if (ms >= MAX_SECONDS * 1000) stop(true);
         }, 1000),
       );
       rec.start(250);
@@ -586,6 +620,91 @@ export function VoiceInput({
     return () => clearTimeout(t);
   }, [error]);
 
+  const pillOverlay = phase !== "idle" && (
+    <div className={PILL_OVERLAY}>
+      {phase === "transcribing" ? (
+        <motion.div
+          key="transcribing"
+          className={cn(PILL, "flex-1 px-5 text-label font-medium text-dim")}
+          style={overlayStyle}
+          role="status"
+          aria-live="polite"
+          {...ROW_MOTION}
+        >
+          Transcribing
+          <span className="inline-flex" aria-hidden="true">
+            {TRANSCRIBING_DOT_STARTS.map((start, index) => (
+              <motion.span
+                key={index}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: [0, 0, 1, 1, 0, 0] }}
+                transition={{
+                  ...TRANSCRIBING_DOT_MOTION,
+                  times: [0, start, start + 0.06, 0.72, 0.78, 1],
+                }}
+              >
+                .
+              </motion.span>
+            ))}
+          </span>
+        </motion.div>
+      ) : (
+        <motion.div
+          key="recording"
+          className="flex min-w-0 flex-1 items-center gap-2.5"
+          {...ROW_MOTION}
+        >
+          <span className="sr-only" role="status" aria-live="polite">
+            {phase === "requesting" ? "Starting dictation" : "Recording"}
+          </span>
+          <Button
+            variant="ghost"
+            className={cn(PILL, PILL_BUTTON, PILL_STOP)}
+            style={overlayStyle}
+            onClick={() => stop(true)}
+            disabled={phase !== "recording"}
+            aria-label="Stop and transcribe"
+          >
+            <IconStopSquare size={32} />
+          </Button>
+          <div
+            className={cn(PILL, "flex-[1.4] gap-3 pl-4 pr-6")}
+            style={overlayStyle}
+          >
+            <span className="text-section-title font-semibold tabular-nums text-fg">
+              {formatElapsed(elapsed)}
+            </span>
+            <span
+              className="flex h-5 items-center gap-[3px]"
+              aria-hidden="true"
+            >
+              {Array.from({ length: PILL_METER_BARS }, (_, i) => {
+                const l = levels[levels.length - PILL_METER_BARS + i] ?? 0;
+                return (
+                  <span
+                    key={i}
+                    className={PILL_BAR}
+                    style={{ height: `${40 + l * 60}%` }}
+                  />
+                );
+              })}
+            </span>
+          </div>
+          {onTextSend && (
+            <Button
+              variant="primary"
+              className={cn(PILL_BUTTON, PILL_SEND)}
+              onClick={() => stop(true, true)}
+              disabled={phase !== "recording"}
+              aria-label="Stop, transcribe and send"
+            >
+              <IconArrowUp size={26} className="[&_path]:[stroke-width:2.25]" />
+            </Button>
+          )}
+        </motion.div>
+      )}
+    </div>
+  );
   const overlay = phase !== "idle" && (
     <div
       className={cn(OVERLAY, overlayClassName || OVERLAY_RADIUS)}
@@ -744,6 +863,7 @@ export function VoiceInput({
       )}
     </div>
   );
+  const shownOverlay = pills ? pillOverlay : overlay;
   return (
     <>
       <VoiceAudioSplitButton
@@ -771,9 +891,9 @@ export function VoiceInput({
           {error}
         </div>
       )}
-      {overlayTarget && overlay
-        ? createPortal(overlay, overlayTarget)
-        : overlay}
+      {overlayTarget && shownOverlay
+        ? createPortal(shownOverlay, overlayTarget)
+        : shownOverlay}
     </>
   );
 }

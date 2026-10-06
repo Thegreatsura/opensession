@@ -26,7 +26,7 @@ import { useTeamPresence } from "../TeamPresence";
 import { UserAvatar } from "../UserAvatar";
 import {
   IconChevronDown,
-  IconFilter,
+  IconDotsHorizontal,
   IconPeople,
   IconPlus,
   IconX,
@@ -308,7 +308,7 @@ export function SidebarChrome({
             )}
             ref={actionsRef}
           >
-            <Tooltip label="Group, filter & sort">
+            <Tooltip label="Workspace options">
               <button
                 ref={setFilterButton}
                 className={cn(
@@ -331,7 +331,7 @@ export function SidebarChrome({
                 // A Base UI tooltip is a DESCRIPTION, not a name, so an
                 // icon-only trigger still needs one of its own. The phone twin
                 // below always carried this; the desktop button did not.
-                aria-label="Group, filter & sort"
+                aria-label="Workspace options"
                 onClick={() => setFilterOpen((o) => !o)}
               >
                 {/* 22, the scale's standalone step: these are section-header
@@ -340,7 +340,7 @@ export function SidebarChrome({
               search glyph in the titlebar row right above, and the filter
               is filled bars, so the pair read a step larger than the row
               they sit under. */}
-                <IconFilter size={22} />
+                <IconDotsHorizontal size={22} />
               </button>
             </Tooltip>
             {/* ⌘S, not the ⌘⌥N this used to advertise: that chord opens a

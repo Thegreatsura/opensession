@@ -1,5 +1,9 @@
 import React from "react";
+import { Reorder } from "motion/react";
 import { IconChevronDown } from "../icons";
+import type { ActiveRowDrag } from "../../hooks/useActiveRowDrag";
+import { sortActiveRows } from "../../lib/active-order";
+import { ActiveReorderItem } from "./ActiveReorderItem";
 import { cn } from "../../ui/cn";
 import type { ReviewQueueItem } from "../../lib/review-queue";
 import { activityBandFor, type ActivityBand } from "../../lib/sidebar-activity";
@@ -21,7 +25,6 @@ import {
   SIDEBAR_STUCK_BACKING,
 } from "../../lib/sidebar-classes";
 import type { GroupBy } from "../../lib/sidebar-filter";
-import { sortInboxByCreation } from "../../lib/sidebar-inbox";
 import {
   MINE_STATUS_META,
   type MineStatus,
@@ -32,6 +35,7 @@ interface WorkspaceGroupingOptions {
   groupBy: GroupBy;
   pinDragMeta: { sessions: unknown[]; repo: string | null } | null;
   laneDropHover: { gkey: string; lane: MineStatus } | null;
+  activeDrag: ActiveRowDrag;
   isOpen: (key: string) => boolean;
   onToggleGroup: (key: string) => void;
   ownsSelection: (row: WsRow) => boolean;
@@ -47,6 +51,7 @@ export function createWorkspaceGroupingRenderers({
   groupBy,
   pinDragMeta,
   laneDropHover,
+  activeDrag,
   isOpen,
   onToggleGroup: toggleGroup,
   ownsSelection: rowOwnsSelection,
@@ -347,13 +352,22 @@ export function createWorkspaceGroupingRenderers({
   }
 
   // ── Inbox Active section ───────────────────────────────────────────────
-  // Snoozed uses the shared section below; Active keeps its stable creation
-  // order and the same compact row density.
+  // Snoozed uses the shared section below. Active keeps a stable order: new
+  // work arrives on top and nothing moves for ordinary activity. Rows can be
+  // dragged into a manual order (lib/active-order), which then sticks.
   function renderActiveSection(rows: WsRow[], ns = "", nested = false) {
     const label = "Active";
     if (rows.length === 0) return null;
     const gkey = `${ns}inbox:${label.toLowerCase()}`;
     const open = isOpen(gkey);
+    const draft = activeDrag.draft?.gkey === gkey ? activeDrag.draft : null;
+    if (draft) {
+      const index = new Map(draft.keys.map((key, i) => [key, i] as const));
+      rows = [...rows].sort(
+        (a, b) =>
+          (index.get(a.key) ?? Infinity) - (index.get(b.key) ?? Infinity),
+      );
+    }
     return (
       <div className={SIDEBAR_STATUS_GROUP} data-status-group key={gkey}>
         <button
@@ -382,9 +396,28 @@ export function createWorkspaceGroupingRenderers({
             style={{ transform: open ? "none" : "rotate(-90deg)" }}
           />
         </button>
-        {rows
-          .filter((row) => open || rowOwnsSelection(row))
-          .map((row) => renderWsRowImpl(row, !ns))}
+        {open ? (
+          <Reorder.Group
+            as="div"
+            axis="y"
+            values={rows.map((row) => row.key)}
+            onReorder={(keys: string[]) => activeDrag.onReorder(gkey, keys)}
+          >
+            {rows.map((row) => (
+              <ActiveReorderItem
+                key={row.key}
+                rowKey={row.key}
+                drag={activeDrag}
+              >
+                {renderWsRowImpl(row, !ns)}
+              </ActiveReorderItem>
+            ))}
+          </Reorder.Group>
+        ) : (
+          rows
+            .filter((row) => rowOwnsSelection(row))
+            .map((row) => renderWsRowImpl(row, !ns))
+        )}
       </div>
     );
   }
@@ -401,7 +434,7 @@ export function createWorkspaceGroupingRenderers({
       return renderInboxBands(rows, ns, snoozedRows, prItems, nested);
     if (groupBy === "status")
       return renderStatusLanes(rows, ns, snoozedRows, laneRepo, prItems);
-    const active = sortInboxByCreation(rows);
+    const active = sortActiveRows(rows, activeDrag.order);
     return [
       renderActiveSection(active, ns, nested),
       ...prItems.map(renderPrRow),

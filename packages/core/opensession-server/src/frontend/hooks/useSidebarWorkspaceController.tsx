@@ -49,6 +49,13 @@ import type { UnifiedSession, Workspace } from "../lib/types";
 import { useConfirm } from "../ui/confirm";
 import { Popover } from "../ui/popover";
 import { useShortcutKeys } from "./useShortcutBindings";
+import type { ActiveRowLift } from "./useActiveRowDrag";
+import {
+  rowColorKey,
+  rowTintHex,
+  setRowColor,
+  useRowColors,
+} from "../lib/row-colors";
 
 interface WorkspaceControllerIdentity {
   currentUser: string;
@@ -122,6 +129,8 @@ interface WorkspaceControllerRows {
   workspacePinState: (row: WsRow) => { pinned: boolean; toggle: () => void };
   togglePinnedKeys: (keys: string[]) => void;
   togglePinKey: (key: string) => void;
+  liftActiveRow: ActiveRowLift["liftActiveRow"];
+  endActiveLift: ActiveRowLift["endActiveLift"];
 }
 
 interface WorkspaceControllerActions {
@@ -192,6 +201,8 @@ export function useSidebarWorkspaceController({
     workspacePinState,
     togglePinnedKeys,
     togglePinKey,
+    liftActiveRow,
+    endActiveLift,
   },
   actions: {
     confirmDeleteDraft,
@@ -213,6 +224,7 @@ export function useSidebarWorkspaceController({
   }
 
   const wsSwipeOffset = useRef(0);
+  const rowColors = useRowColors();
 
   function deleteDraftWsRow(row: WsRow) {
     const ws = row.workspace;
@@ -526,6 +538,10 @@ export function useSidebarWorkspaceController({
     null,
   );
   const wsSwiping = useRef(false);
+  // The sheet a lifted row opens if the finger comes up without dragging it.
+  const wsLiftSheet = useRef<{ row: WsRow; source: HTMLButtonElement } | null>(
+    null,
+  );
   const [wsSwipe, setWsSwipe] = useState<SwipeState | null>(null);
   const [wsDraggingKey, setWsDraggingKey] = useState<string | null>(null);
   // Which action the in-flight drag is revealing. Split from wsSwipe so a
@@ -573,6 +589,13 @@ export function useSidebarWorkspaceController({
       wsLongPressed.current = true;
       closeWsHover();
       navigator.vibrate?.(10);
+      // A row in a reorderable Active section lifts first, like a home-screen
+      // icon: moving the same finger drags it, letting go without moving opens
+      // the sheet (see wsRowTouchEnd).
+      if (liftActiveRow(row.key)) {
+        wsLiftSheet.current = { row, source };
+        return;
+      }
       // The touch stand-in for both the hover card AND right-click: a
       // bottom sheet with the overview block plus every workspace action.
       setWsSheet({ row, source });
@@ -653,6 +676,9 @@ export function useSidebarWorkspaceController({
   ) {
     const hadOrigin = wsPressOrigin.current !== null;
     const wasSwiping = wsSwiping.current;
+    const lift = endActiveLift();
+    const liftSheet = wsLiftSheet.current;
+    wsLiftSheet.current = null;
     const rowWidth =
       wsSwipeOrigin.current?.width ?? e.currentTarget.clientWidth;
     // Read the committed distance straight off the ref (like SessionRow),
@@ -727,10 +753,12 @@ export function useSidebarWorkspaceController({
       }
       openWsRow(row, review);
     } else if (wsLongPressed.current) {
-      // Release after a long-press: the workspace sheet is already up —
-      // swallow any ghost click so it can't land on the sheet (or its
-      // backdrop's close handler) and immediately dismiss it.
+      // Release after a long-press: the workspace sheet is already up (or
+      // opens now, for a lifted row that never moved) — swallow any ghost
+      // click so it can't land on the sheet (or its backdrop's close
+      // handler) and immediately dismiss it.
       e.preventDefault();
+      if (liftSheet && lift && !lift.moved) setWsSheet(liftSheet);
     }
   }
 
@@ -791,6 +819,7 @@ export function useSidebarWorkspaceController({
             timePreference: wsTimePref,
             shipsDirectlyToMain: rowShipsDirectlyToMain(row),
             pinned: rowPin.pinned,
+            tint: rowTintHex(rowColorKey(rowColors, row.key)),
           }}
           context={{
             editing: editingState,
@@ -842,6 +871,8 @@ export function useSidebarWorkspaceController({
             onTouchEnd: (event) => wsRowTouchEnd(row, event, review),
             onTouchCancel: (event) => {
               clearWsPress();
+              endActiveLift();
+              wsLiftSheet.current = null;
               wsSwipeOrigin.current = null;
               wsSwiping.current = false;
               setWsDraggingKey(null);
@@ -998,6 +1029,8 @@ export function useSidebarWorkspaceController({
             <WsMobileSheet
               row={row}
               pinned={pinned}
+              color={rowColorKey(rowColors, row.key)}
+              onSetColor={(color) => setRowColor(row.key, color)}
               onTogglePin={() => {
                 if (pinned) togglePinnedKeys(pinnedKeys);
                 else togglePinKey(pinKey);
@@ -1086,6 +1119,7 @@ export function useSidebarWorkspaceController({
     renderWsRow,
     renderWsRowImpl,
     rowIsSnoozed,
+    rowColors,
     toggleWorkspaceSnooze,
     workspaceOverlays,
     wsHover,

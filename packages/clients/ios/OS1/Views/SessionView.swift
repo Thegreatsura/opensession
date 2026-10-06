@@ -286,6 +286,7 @@ struct SessionView: View {
     /// board), and it reads from the top.
     private var tailId: String? {
         if let receipt = viewModel.slackComposeReceipt { return "slack-receipt-\(receipt.id)" }
+        if viewModel.actionCards.hasCards { return "action-cards" }
         if let ask = viewModel.pendingQuestion { return "ask-\(ask.id)" }
         if let sent = viewModel.sentAskAnswer { return "ask-sent-\(sent.id)" }
         // While work is in flight the run clock IS the last row.
@@ -597,6 +598,10 @@ struct SessionView: View {
                         .onChange(of: viewModel.pendingQuestion) {
                             // A question needs eyes even if they've scrolled away.
                             scrollToBottom(proxy, animated: true)
+                        }
+                        .onChange(of: viewModel.actionCards.attentionKey) { _, key in
+                            // A card that waits on a person needs eyes too.
+                            if !key.isEmpty { scrollToBottom(proxy, animated: true) }
                         }
                         .onChange(of: viewModel.slackComposeReceipt) {
                             // The composer closes into this durable receipt.
@@ -962,6 +967,12 @@ struct SessionView: View {
                 // get exercised.
                 if ProcessInfo.processInfo.environment["OS1_SHOW_ASK_FIXTURE"] == "1" {
                     viewModel.showAskForScreenshot()
+                }
+                if let cards = ProcessInfo.processInfo.environment["OS1_SHOW_ACTION_CARDS"] {
+                    viewModel.showActionCardsForScreenshot(cards)
+                }
+                if ProcessInfo.processInfo.environment["OS1_SHOW_MERMAID_FIXTURE"] == "1" {
+                    Task { await viewModel.showMermaidFixturesForScreenshot() }
                 }
                 #endif
                 #if DEBUG && os(iOS)
@@ -1349,13 +1360,13 @@ struct SessionView: View {
     #endif
 
     #if os(iOS)
-    /// A principal item stays centred in the whole bar rather than in the gap
-    /// between Back and the trailing items. Size and shift the pill into that
-    /// gap so its glass never paints over either group.
+    /// UIKit centres a principal item in the whole bar only when it fits
+    /// there; a pill this wide never does, so UIKit centres it in the gap
+    /// between Back and the trailing items. Size it to that gap and let UIKit
+    /// place it. An extra offset would shift it a second time, onto Back.
     private var sessionHeaderLane: some View {
         sessionIdentityButton
             .frame(width: sessionIdentityWidth, alignment: .leading)
-            .offset(x: sessionIdentityOffset)
     }
 
     private var sessionHeaderLeadingInset: CGFloat {
@@ -1436,12 +1447,6 @@ struct SessionView: View {
             360,
             max(44, surfaceWidth - sessionHeaderLeadingInset - sessionHeaderTrailingInset)
         )
-    }
-
-    /// Move the principal item from the bar's centre to the centre of the
-    /// uneven space left by Back and the trailing controls.
-    private var sessionIdentityOffset: CGFloat {
-        (sessionHeaderLeadingInset - sessionHeaderTrailingInset) / 2
     }
     #endif
 
@@ -1600,6 +1605,11 @@ struct SessionView: View {
                 .id("ask-sent-\(sent.id)")
                 .transcriptTail(true)
         }
+        if viewModel.actionCards.hasCards {
+            SessionActionCardsStack(model: viewModel.actionCards)
+                .id("action-cards")
+                .transcriptTail(tailId == "action-cards")
+        }
         if let receipt = viewModel.slackComposeReceipt {
             SlackComposeReceiptRow(
                 receipt: receipt,
@@ -1716,7 +1726,8 @@ struct SessionView: View {
             onForkMessage: canForkSession ? { entry in
                 forkState.enter(messageId: entry.id)
             } : nil,
-            failureContinuation: continuation
+            failureContinuation: continuation,
+            youShouldKnow: YouShouldKnowAction(viewModel: viewModel)
         )
         .id(block.id)
         .transcriptTail(block.id == tailId)
@@ -2653,10 +2664,12 @@ struct SessionTabsView: View {
         .onChange(of: activeSession, initial: true) { _, session in
             ReadsStore.shared.open(session)
             MentionStore.shared.open(session.id)
+            NotificationInboxStore.shared.viewing(session.id)
         }
         .onDisappear {
             ReadsStore.shared.close(activeSession.id)
             MentionStore.shared.close(activeSession.id)
+            NotificationInboxStore.shared.stopViewing(activeSession.id)
         }
         .onChange(of: visibleTabs) { _, updatedTabs in
             // A conversation whose detail is open can be archived from
@@ -3340,9 +3353,26 @@ private struct SessionInputBar: View {
                         )
                         .zIndex(0)
                 }
+                #if os(iOS)
+                // Dictating swaps the box for stop, timer and send pills. The
+                // draft keeps filling underneath and returns on stop.
+                if dictation.active {
+                    ComposerDictationPills(
+                        dictation: dictation,
+                        onSend: { send() }
+                    )
+                    .zIndex(1)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                } else {
+                    composer
+                        .zIndex(1)
+                }
+                #else
                 composer
                     .zIndex(1)
+                #endif
             }
+            .animation(.snappy(duration: 0.2), value: dictation.active)
             // One animation for the whole flap: rows arriving, leaving, being
             // steered from one section to the next, and the bar's own reflow
             // all move together. Keyed on a signature rather than a count so
@@ -3419,7 +3449,21 @@ private struct SessionInputBar: View {
             if ProcessInfo.processInfo.environment["OS1_FOCUS_COMPOSER"] == "1" {
                 inputFocused = true
             }
+            // A simulator has no mic to open, so the recording pills are
+            // otherwise unreachable from a capture.
+            if ProcessInfo.processInfo.environment["OS1_SHOW_DICTATION"] == "1" {
+                dictation.showForScreenshot()
+            }
             #endif
+        }
+        // Ask about this on a You should know note quotes it into the draft;
+        // the cursor goes there so the reply is one keystroke away.
+        // The caret goes to the end: focusing a field that holds text would
+        // otherwise select all of it on the Mac, and the next key would
+        // replace the draft the quote was appended under.
+        .onChange(of: viewModel.composerFocusRequest) {
+            inputSelection = TextSelection(insertionPoint: projectedDraft.wrappedValue.endIndex)
+            inputFocused = true
         }
         // Leaving the session must not leave the mic or typing status open.
         .onDisappear {

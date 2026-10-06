@@ -52,6 +52,10 @@ struct SessionsListView: View {
     /// bottom of the sessions sidebar; Mac keeps it in the sidebar header.
     @State private var showSupport = false
     @State private var supportQueue = SupportQueueModel()
+    /// The notification inbox: pushed on iPhone, a popover on the Mac.
+    @State private var showInbox = false
+    /// For inbox rows that open on the web (a PR no session owns).
+    @Environment(\.openURL) private var systemOpenURL
     #if os(iOS)
     /// The tools that are lists: what the team shipped and your own tasks.
     /// Each is pushed onto this stack like a ticket is, for the same reason:
@@ -197,6 +201,9 @@ struct SessionsListView: View {
     /// headings, and this takes them out.
     @AppStorage("os1.list.hideEmptyProjects") private var hideEmptyProjects = false
     @AppStorage("os1.sidebar.repoOrder") private var preferredRepoOrder = "[]"
+    /// The Active section's manual order, the account's `active-order`
+    /// ui-pref mirrored by `NativePreferences` (see `ActiveOrder`).
+    @AppStorage(ActiveOrder.storageKey) private var activeOrderJSON = "[]"
     /// Section headings the person has folded shut: repo bands, status lanes,
     /// Active and Snoozed. They are keyed like the web sidebar's collapse state and stored
     /// as a JSON array so the choice survives relaunches.
@@ -515,6 +522,7 @@ struct SessionsListView: View {
                 autoOpenFromEnvironment()
                 openRequestedSession()
                 openDeleteConfirmationFromEnvironment()
+                consumeInboxOpen()
             }
             // "Start an Agent" (StartAgentIntent — Action Button, widget,
             // Siri). It can run before this view exists (cold launch) or while
@@ -531,6 +539,13 @@ struct SessionsListView: View {
                     peopleFilterRaw = SidebarPersonLens.everyone
                     searchText = query
                 }
+                #if os(macOS)
+                // The palette is a keyboard chord away, which a scripted run
+                // cannot press; the query rides `OS1_OPEN_PALETTE`.
+                if ProcessInfo.processInfo.environment["OS1_OPEN_PALETTE"] != nil {
+                    showPalette = true
+                }
+                #endif
                 #endif
             }
             .onChange(of: quickCapture.request?.id) { openQuickCapture() }
@@ -664,10 +679,12 @@ struct SessionsListView: View {
                     .onChange(of: archivedSession, initial: true) { _, open in
                         ReadsStore.shared.open(open)
                         MentionStore.shared.open(open.id)
+                        NotificationInboxStore.shared.viewing(open.id)
                     }
                     .onDisappear {
                         ReadsStore.shared.close(archivedSession.id)
                         MentionStore.shared.close(archivedSession.id)
+                        NotificationInboxStore.shared.stopViewing(archivedSession.id)
                     }
             } else if let selectedID = selectedSessionID,
                let session = viewModel.sessions.first(where: { $0.id == selectedID }) {
@@ -698,10 +715,12 @@ struct SessionsListView: View {
                     .onChange(of: session, initial: true) { _, open in
                         ReadsStore.shared.open(open)
                         MentionStore.shared.open(open.id)
+                        NotificationInboxStore.shared.viewing(open.id)
                     }
                     .onDisappear {
                         ReadsStore.shared.close(session.id)
                         MentionStore.shared.close(session.id)
+                        NotificationInboxStore.shared.stopViewing(session.id)
                     }
             } else {
                 ContentUnavailableView(
@@ -763,6 +782,19 @@ struct SessionsListView: View {
             pendingArchivedOpen = nil
             Task { openedArchivedSession = await viewModel.hydrated(session) }
         }
+        // A row tapped in the inbox popover, or a banner tapped from outside.
+        .onChange(of: NotificationInboxStore.shared.openRequest?.id) {
+            inboxOpenRequested()
+        }
+        #if DEBUG
+        // Screenshot hook: the popover hangs off a toolbar-sized button a
+        // scripted run cannot reliably click. Opened once the window is laid out.
+        .task {
+            guard ProcessInfo.processInfo.environment["OS1_OPEN_INBOX"] != nil else { return }
+            try? await Task.sleep(for: .seconds(6))
+            showInbox = true
+        }
+        #endif
         .sheet(isPresented: $showDesk) {
             DeskSheet()
                 .frame(minWidth: 520, minHeight: 600)
@@ -940,6 +972,25 @@ struct SessionsListView: View {
         for session in viewModel.sessions where session.archived != true {
             items.append(paletteItem(for: session))
         }
+        #if os(macOS)
+        // Archived work, for a query only (`CommandPaletteRanking`). Opening
+        // one hydrates it first: archived rows arrive as slim summaries, and a
+        // summary opened as-is comes up without its PR or walkthrough.
+        let archived = viewModel.archivedSessions
+        let liveWorkspaceIds = Set(viewModel.sessions.compactMap(\.workspaceId))
+        for entry in CommandPaletteArchive.entries(
+            archived: archived,
+            liveWorkspaceIds: liveWorkspaceIds,
+            workspaceNames: viewModel.workspaceNames
+        ) {
+            items.append(CommandPaletteItem(entry: entry) {
+                guard case .session(let id)? = CommandPaletteArchive.target(
+                    for: entry.id, in: archived
+                ), let session = archived.first(where: { $0.id == id }) else { return }
+                openArchivedSearchResult(session)
+            })
+        }
+        #endif
         return items
     }
 
@@ -1013,7 +1064,22 @@ struct SessionsListView: View {
     /// the app menu (Cmd+,), where Mac users expect it.
     private var macSidebarHeader: some View {
         VStack(alignment: .leading, spacing: 9) {
-            ServerAccountPicker(iconSize: 28, openSettings: { openSettings() })
+            // The bell sits in the top row, as on the web's desktop sidebar.
+            HStack(spacing: 7) {
+                ServerAccountPicker(iconSize: 28, openSettings: { openSettings() })
+                Spacer(minLength: 4)
+                Button {
+                    showInbox.toggle()
+                } label: {
+                    InboxBellLabel()
+                }
+                .buttonStyle(.borderless)
+                .help("Inbox")
+                .popover(isPresented: $showInbox, arrowEdge: .bottom) {
+                    InboxView(inPopover: true)
+                        .frame(width: 380, height: 480)
+                }
+            }
 
             HStack(spacing: 7) {
                 Text("Sessions")
@@ -1100,6 +1166,13 @@ struct SessionsListView: View {
                     }
                     .sharedBackgroundVisibility(.hidden)
                     ToolbarItem(placement: .topTrailingCompat) {
+                        Button {
+                            showInbox = true
+                        } label: {
+                            InboxBellLabel()
+                        }
+                    }
+                    ToolbarItem(placement: .topTrailingCompat) {
                         filterButton
                     }
                     ToolbarItem(placement: .topTrailingCompat) {
@@ -1175,6 +1248,18 @@ struct SessionsListView: View {
                         requestToolSessionOpen(sessionId)
                     }
                 }
+                .navigationDestination(isPresented: $showInbox) {
+                    InboxView()
+                }
+                // Like the tool screens: a row's session is pushed once the
+                // inbox has left the stack, not underneath it.
+                .onChange(of: showInbox) { _, shown in
+                    if !shown { consumeInboxOpen() }
+                }
+                // A row tapped in the inbox, or a banner tapped from outside.
+                .onChange(of: NotificationInboxStore.shared.openRequest?.id) {
+                    inboxOpenRequested()
+                }
                 // Pushed onto this stack, not thrown over it: a ticket is
                 // somewhere you go from the list, the same as a session, and
                 // a sheet would have covered the list you came from. It can't
@@ -1221,6 +1306,7 @@ struct SessionsListView: View {
                     // a scripted run would have to find and scroll to.
                     if env["OS1_OPEN_FEED"] != nil { showFeed = true }
                     if env["OS1_OPEN_TASKS"] != nil { showTasks = true }
+                    if env["OS1_OPEN_INBOX"] != nil { showInbox = true }
                     // Same reason again: Archived is a row at the foot of the
                     // list, below whatever is live.
                     if env["OS1_OPEN_ARCHIVED"] != nil { showArchived = true }
@@ -1489,6 +1575,84 @@ struct SessionsListView: View {
     private func openRequestedSession() {
         guard viewModel.hasLoaded, let request = requestedSession.take() else { return }
         _ = openSessionLink(id: request.sessionId)
+    }
+
+    private func inboxOpenRequested() {
+        guard NotificationInboxStore.shared.openRequest != nil else { return }
+        if showInbox {
+            // iPhone routes once the pushed inbox has left the stack.
+            showInbox = false
+            #if os(macOS)
+            consumeInboxOpen()
+            #endif
+        } else {
+            consumeInboxOpen()
+        }
+    }
+
+    /// Route an inbox row once the list can resolve it. A place the app has
+    /// no screen for, or a session it cannot fetch, opens on the web.
+    private func consumeInboxOpen() {
+        guard viewModel.hasLoaded, !showInbox,
+              let request = NotificationInboxStore.shared.takeOpenRequest()
+        else { return }
+        switch request.destination {
+        case .session(let id):
+            openInboxSession(id, fallback: request.url)
+        case .workspace(let id):
+            let newest = viewModel.sessions
+                .filter { $0.workspaceId == id }
+                .max { ($0.lastActivityDate ?? .distantPast) < ($1.lastActivityDate ?? .distantPast) }
+            if let newest {
+                openInboxSession(newest.id, fallback: request.url)
+            } else {
+                openOnWeb(request.url)
+            }
+        case .pullRequest(let repo, let branch):
+            let owner = viewModel.sessions
+                .filter { $0.repo == repo && $0.branch == branch }
+                .max { ($0.lastActivityDate ?? .distantPast) < ($1.lastActivityDate ?? .distantPast) }
+            if let owner {
+                openInboxSession(owner.id, fallback: request.url)
+            } else {
+                openOnWeb(request.url)
+            }
+        case .tasks:
+            #if os(iOS)
+            showTasks = true
+            #else
+            showDesk = true
+            #endif
+        case .web(let path):
+            openOnWeb(path)
+        }
+    }
+
+    private func openInboxSession(_ id: String, fallback: String) {
+        if viewModel.sessions.contains(where: { $0.id == id })
+            || viewModel.archivedSessions.contains(where: { $0.id == id }) {
+            _ = openSessionLink(id: id)
+            return
+        }
+        // Not in the polled list (archived away, another person's): fetch it.
+        Task {
+            guard let session = try? await OS1API.session(id: id) else {
+                openOnWeb(fallback.isEmpty ? "/session/\(id)" : fallback)
+                return
+            }
+            #if os(macOS)
+            openedArchivedSession = session
+            #else
+            path.append(session)
+            #endif
+        }
+    }
+
+    private func openOnWeb(_ path: String) {
+        guard let base = ServerConfig.shared.baseURL,
+              let url = URL(string: path.isEmpty ? "/" : path, relativeTo: base)?.absoluteURL
+        else { return }
+        systemOpenURL(url)
     }
 
     private func loadAutomationOwners() async {
@@ -1997,7 +2161,7 @@ struct SessionsListView: View {
                 SessionGroup(
                     id: "\(namespace)inbox-active",
                     title: "Active",
-                    workspaces: active,
+                    workspaces: ActiveOrder.sort(active, order: activeOrder),
                     repo: nil
                 ),
                 snoozedGroup,
@@ -2085,10 +2249,12 @@ struct SessionsListView: View {
     private func nextWorkspace(after session: Session) -> SidebarWorkspace? {
         guard let current = workspace(containing: session), !current.isDraftWorkspace
         else { return nil }
+        let lens = peopleLens
         return SidebarNext.workspace(
             after: current.id,
             in: renderedChatWorkspaces,
-            isUnread: { ReadsStore.shared.isUnread($0.sessions) }
+            isMine: { lens.isMine($0) },
+            isUnread: { ReadsStore.shared.isUnread($0) }
         )
     }
 
@@ -2358,13 +2524,158 @@ struct SessionsListView: View {
     }
     #endif
 
+    /// One section's rows. The Active section is the one a person orders by
+    /// hand, so its rows take a drag (`onMove`) and Move up / Move down.
     @ViewBuilder
-    private func sessionRow(_ workspace: SidebarWorkspace) -> some View {
+    private func groupRows(_ group: SessionGroup) -> some View {
+        let shown = visibleWorkspaces(group.workspaces, collapsedKey: group.id)
+        if isActiveSection(group) {
+            let keys = group.workspaces.map(SidebarRowKeys.sharedRowKey)
+            ForEach(shown) { workspace in
+                sessionRow(workspace, activeKeys: keys)
+            }
+            .onMove { source, destination in
+                moveActiveRows(in: group, shown: shown, from: source, to: destination)
+            }
+        } else {
+            ForEach(shown) { workspace in
+                sessionRow(workspace)
+            }
+        }
+    }
+
+    private var activeOrder: [String] { ActiveOrder.decode(activeOrderJSON) }
+
+    private func isActiveSection(_ group: SessionGroup) -> Bool {
+        groupBy == .inbox && group.id.hasSuffix("inbox-active")
+    }
+
+    private func moveActiveRows(
+        in group: SessionGroup,
+        shown: [SidebarWorkspace],
+        from source: IndexSet,
+        to destination: Int
+    ) {
+        let moved = ActiveOrder.moving(
+            shown.map(SidebarRowKeys.sharedRowKey), from: source, to: destination
+        )
+        let movedKeys = Set(moved)
+        // Rows past a collapsed section's "Show more" keep their place
+        // behind the ones that were on screen.
+        let rest = group.workspaces.map(SidebarRowKeys.sharedRowKey)
+            .filter { !movedKeys.contains($0) }
+        ActiveOrderWriter.save(ActiveOrder.place(saved: activeOrder, section: moved + rest))
+    }
+
+    private func stepActiveRow(_ workspace: SidebarWorkspace, keys: [String], by step: Int) {
+        guard let next = ActiveOrder.stepping(
+            keys, key: SidebarRowKeys.sharedRowKey(for: workspace), by: step
+        ) else { return }
+        withAnimation(.snappy(duration: 0.28)) {
+            ActiveOrderWriter.save(ActiveOrder.place(saved: activeOrder, section: next))
+        }
+    }
+
+    /// Move up / Move down for a row in the Active section: the same order a
+    /// drag writes, reachable from the menu, by keyboard and VoiceOver.
+    @ViewBuilder
+    private func activeOrderButtons(_ workspace: SidebarWorkspace, keys: [String]?) -> some View {
+        if let keys {
+            let key = SidebarRowKeys.sharedRowKey(for: workspace)
+            if ActiveOrder.stepping(keys, key: key, by: -1) != nil {
+                Button {
+                    stepActiveRow(workspace, keys: keys, by: -1)
+                } label: {
+                    Label("Move up", systemImage: "arrow.up")
+                }
+            }
+            if ActiveOrder.stepping(keys, key: key, by: 1) != nil {
+                Button {
+                    stepActiveRow(workspace, keys: keys, by: 1)
+                } label: {
+                    Label("Move down", systemImage: "arrow.down")
+                }
+            }
+        }
+    }
+
+    /// The row's own swatch, shared with the browser through the tab-colors
+    /// map. Checked like any picker, with None to clear it.
+    @ViewBuilder
+    private func colorMenu(_ workspace: SidebarWorkspace) -> some View {
+        let store = RowColorStore.shared
+        Menu {
+            Picker("Color", selection: Binding(
+                get: { store.color(for: workspace)?.rawValue ?? "" },
+                set: { store.setColor(RowColor(rawValue: $0), for: workspace) }
+            )) {
+                Text("None").tag("")
+                ForEach(RowColor.allCases) { swatch in
+                    Label {
+                        Text(swatch.label)
+                    } icon: {
+                        Image(systemName: "circle.fill")
+                            .foregroundStyle(swatch.color)
+                    }
+                    .tag(swatch.rawValue)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Label("Color", systemImage: "paintpalette")
+        }
+    }
+
+    /// Teammates who share this workspace as their own work. Toggling one is
+    /// a server write; the server notifies them the first time they are added.
+    @ViewBuilder
+    private func collaboratorsMenu(_ workspace: SidebarWorkspace) -> some View {
+        if let workspaceId = workspace.workspaceId, !workspaceId.isEmpty {
+            let listed = WorkspaceCollaboratorsStore.shared.names(for: workspaceId)
+            let creator = viewModel.workspaces.first { $0.id == workspaceId }?.createdBy
+                ?? workspace.workspace?.createdBy
+            let choices = WorkspaceCollaborators.choices(
+                roster: TeamDirectory.shared.names,
+                listed: listed,
+                creator: creator
+            )
+            if !choices.isEmpty {
+                let pending = WorkspaceCollaboratorsStore.shared.pendingWorkspaceId == workspaceId
+                Menu {
+                    ForEach(choices, id: \.self) { name in
+                        Toggle(isOn: Binding(
+                            get: { WorkspaceCollaborators.contains(listed, name) },
+                            set: { _ in
+                                Task { await viewModel.toggleCollaborator(name, on: workspace) }
+                            }
+                        )) {
+                            Text(name)
+                        }
+                        .disabled(pending)
+                    }
+                } label: {
+                    Label(
+                        listed.isEmpty ? "Add collaborator" : "Collaborators (\(listed.count))",
+                        systemImage: "person.2"
+                    )
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sessionRow(
+        _ workspace: SidebarWorkspace,
+        activeKeys: [String]? = nil
+    ) -> some View {
         let session = workspace.mainSession
         let canArchive = !workspace.isOptimistic && !workspace.isDraftWorkspace
         let snoozeValue = WorkspaceSnoozeStore.shared.value(for: workspace)
         let pinned = PinStore.shared.isPinned(workspace)
         let repo = inboxRowRepo(workspace)
+        let lens = peopleLens
+        let ownWork = lens.isOwnWork(workspace)
+        let tint = RowColorStore.shared.color(for: workspace)
         #if os(macOS)
         // Selection drives the detail column; select by id so rows replaced
         // by polling (fresh struct values every refresh) keep the selection.
@@ -2379,6 +2690,8 @@ struct SessionsListView: View {
             selected: workspace.sessions.contains { $0.id == selectedSessionID },
             isWorkspaceDraft: workspace.isDraftWorkspace,
             snoozeValue: snoozeValue,
+            ownWork: ownWork,
+            tint: tint,
             pinned: pinned,
             onTogglePin: canArchive ? { PinStore.shared.toggle(workspace) } : nil,
             onToggleSnooze: canArchive ? { toggleSnooze(workspace) } : nil,
@@ -2391,6 +2704,10 @@ struct SessionsListView: View {
             } else {
                 pinButton(workspace)
                 snoozeButton(workspace)
+                activeOrderButtons(workspace, keys: activeKeys)
+                colorMenu(workspace)
+                collaboratorsMenu(workspace)
+                Divider()
                 archiveButton(workspace)
                 deleteWorkspaceButton(workspace)
             }
@@ -2412,7 +2729,9 @@ struct SessionsListView: View {
                 searchSnippet: workspaceSearchSnippet(workspace),
                 highlighted: isLastOpened(workspace),
                 isWorkspaceDraft: workspace.isDraftWorkspace,
-                snoozeValue: snoozeValue
+                snoozeValue: snoozeValue,
+                ownWork: ownWork,
+                tint: tint
             )
         }
         .buttonStyle(.plain)
@@ -2449,7 +2768,7 @@ struct SessionsListView: View {
             if workspace.isDraftWorkspace {
                 draftWorkspaceMenu(workspace)
             } else if canArchive {
-                workspaceMenu(workspace)
+                workspaceMenu(workspace, activeKeys: activeKeys)
             }
         })
         #endif
@@ -2568,11 +2887,17 @@ struct SessionsListView: View {
     }
 
     @ViewBuilder
-    private func workspaceMenu(_ workspace: SidebarWorkspace) -> some View {
+    private func workspaceMenu(
+        _ workspace: SidebarWorkspace,
+        activeKeys: [String]? = nil
+    ) -> some View {
         // The same three filing actions as the row: Pin, Snooze, Archive.
         pinButton(workspace)
         snoozeButton(workspace)
         readButton(workspace)
+        activeOrderButtons(workspace, keys: activeKeys)
+        colorMenu(workspace)
+        collaboratorsMenu(workspace)
 
         Button {
             renameText = workspace.title
@@ -3086,14 +3411,7 @@ struct SessionsListView: View {
                         if !isCollapsed(bandKey) {
                             ForEach(repoGroup.sections) { group in
                                 statusLaneHeader(group)
-                                ForEach(
-                                    visibleWorkspaces(
-                                        group.workspaces,
-                                        collapsedKey: group.id
-                                    )
-                                ) { workspace in
-                                    sessionRow(workspace)
-                                }
+                                groupRows(group)
                             }
                         }
                     } header: {
@@ -3108,11 +3426,7 @@ struct SessionsListView: View {
             } else {
                 ForEach(groups) { group in
                     Section {
-                        ForEach(
-                            visibleWorkspaces(group.workspaces, collapsedKey: group.id)
-                        ) { workspace in
-                            sessionRow(workspace)
-                        }
+                        groupRows(group)
                     } header: {
                         if !group.title.isEmpty {
                             groupHeader(
@@ -4007,7 +4321,7 @@ private struct ArchivedSessionsView: View {
     let loadFailure: String?
     let onRetry: () -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var searchText = ""
+    @State private var searchText = Self.initialLens("OS1_ARCHIVED_SEARCH", or: "")
     /// "mine", "everyone", or one teammate's canonical key — see
     /// `ArchivedOwners`.
     @State private var owner = Self.initialLens("OS1_ARCHIVED_OWNER", or: ArchivedOwners.mine)
@@ -4085,12 +4399,7 @@ private struct ArchivedSessionsView: View {
             }
             if reason == "auto", !isAutoArchived(session) { return false }
             if reason == "manual", isAutoArchived(session) { return false }
-            guard !query.isEmpty else { return true }
-            let terms = [session.displayTitle, session.effectiveRepo]
-                + [session.branch, session.startedBy].compactMap { $0 }
-            return terms
-                .map { $0.lowercased() }
-                .contains { $0.contains(query) }
+            return ArchivedPresentation.matchesSearch(session, query: query)
         }
     }
 
@@ -4489,6 +4798,12 @@ struct SessionRow: View {
     var isWorkspaceDraft = false
     /// Active snooze value: an ISO wake time or Someday.
     var snoozeValue: String? = nil
+    /// The row is the viewer's own work (`PeopleLens.isOwnWork`). A review
+    /// request on its pull request is then GitHub asking the author's team,
+    /// not someone waiting on you, so it takes no review mark.
+    var ownWork = false
+    /// The person's own swatch for this row (`RowColorStore`), as a faint wash.
+    var tint: RowColor? = nil
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// Settings → Appearance → Show last used time. Off by default, like the
     /// web's resting sidebar, and per device like the web's own copy of it.
@@ -4703,13 +5018,28 @@ struct SessionRow: View {
         // row rather than as a box drawn around its contents.
         .padding(.horizontal, 10)
         .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(uiColor: .tertiarySystemFill).opacity(highlighted ? 1 : 0))
+            ZStack {
+                if let tint {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(tint.color.opacity(RowColor.washOpacity))
+                }
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(uiColor: .tertiarySystemFill).opacity(highlighted ? 1 : 0))
+            }
         }
         .padding(.horizontal, -10)
         .animation(.easeOut(duration: 0.2), value: highlighted)
         #else
         .padding(.vertical, 3)
+        // Under the list's own selection, inset like it so the two plates
+        // line up when the coloured row is the selected one.
+        .background {
+            if let tint {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(tint.color.opacity(RowColor.washOpacity))
+                    .padding(.horizontal, -6)
+            }
+        }
         #endif
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
@@ -4873,7 +5203,7 @@ struct SessionRow: View {
     }
 
     private var reviewWaitsOnMe: Bool {
-        ReviewRequests.waitsOnViewer(
+        !ownWork && ReviewRequests.waitsOnViewer(
             rowSessions,
             viewerName: ServerConfig.shared.userName,
             viewerLogin: ServerConfig.shared.githubLogin
@@ -4884,6 +5214,7 @@ struct SessionRow: View {
     /// where it knows one, otherwise the GitHub login the wire carried.
     private var reviewAskerName: String? {
         guard
+            !ownWork,
             let login = ReviewRequests.askerLogin(
                 rowSessions,
                 viewerName: ServerConfig.shared.userName,

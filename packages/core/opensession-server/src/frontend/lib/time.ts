@@ -1,3 +1,10 @@
+// toLocale*String with options builds a fresh Intl.DateTimeFormat per call,
+// and these run for every bubble, turn and tool row a transcript mounts.
+// Built once on first use, in the same default locale those calls used.
+let clockFormat: Intl.DateTimeFormat | undefined;
+let dayFormat: Intl.DateTimeFormat | undefined;
+let dayYearFormat: Intl.DateTimeFormat | undefined;
+
 /** Very short relative time ("now", "5m", "3h", "2d", then a date). Used by
  * message labels and sidebar workspace rows; pair with a tooltip/title carrying
  * the full local time. */
@@ -9,7 +16,10 @@ export function shortTime(ts: string): string {
   if (s < 3600) return `${Math.floor(s / 60)}m`;
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   if (s < 7 * 86400) return `${Math.floor(s / 86400)}d`;
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return (dayFormat ??= new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+  })).format(d);
 }
 
 /** The real wall-clock time behind a message, written out: "Today at 14:32",
@@ -24,21 +34,27 @@ export function shortTime(ts: string): string {
 export function fullTime(ts: string, now: Date = new Date()): string {
   const d = new Date(ts);
   if (Number.isNaN(+d)) return "";
-  const time = d.toLocaleTimeString(undefined, {
+  clockFormat ??= new Intl.DateTimeFormat(undefined, {
     hour: "numeric",
     minute: "2-digit",
   });
+  const time = clockFormat.format(d);
   const midnight = (x: Date) =>
     new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   const days = Math.round((midnight(now) - midnight(d)) / 86_400_000);
   if (days === 0) return `Today at ${time}`;
   if (days === 1) return `Yesterday at ${time}`;
-  const dateOptions: Intl.DateTimeFormatOptions = {
-    month: "short",
-    day: "numeric",
-  };
-  if (d.getFullYear() !== now.getFullYear()) dateOptions.year = "numeric";
-  const date = d.toLocaleDateString(undefined, dateOptions);
+  const date =
+    d.getFullYear() === now.getFullYear()
+      ? (dayFormat ??= new Intl.DateTimeFormat(undefined, {
+          month: "short",
+          day: "numeric",
+        })).format(d)
+      : (dayYearFormat ??= new Intl.DateTimeFormat(undefined, {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        })).format(d);
   return `${date} at ${time}`;
 }
 

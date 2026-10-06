@@ -171,6 +171,27 @@ describe("expandSkillCommand", () => {
     ).toEndWith("</skill>\n\nthe deploy bit");
   });
 
+  test("expands after injected context and a steer attribution", () => {
+    const { filePath, baseDir } = ws();
+    const skills = [{ name: "bro", filePath, baseDir }];
+    const memory =
+      '<opensession:context source="memory">\nsome fact\n</opensession:context>';
+    const portals =
+      '<opensession:context source="portals-note">\nnote\n</opensession:context>';
+    const block = expandSkillCommand("/bro", skills);
+
+    expect(expandSkillCommand(`${memory}\n\n/bro`, skills)).toBe(
+      `${memory}\n\n${block}`,
+    );
+    expect(
+      expandSkillCommand(`${memory}\n\n${portals}\n\n/bro shorter`, skills),
+    ).toBe(`${memory}\n\n${portals}\n\n${block}\n\nshorter`);
+    expect(expandSkillCommand("[ada] /bro", skills)).toBe(`[ada] ${block}`);
+    expect(expandSkillCommand(`${memory}\n\nsee /bro`, skills)).toBe(
+      `${memory}\n\nsee /bro`,
+    );
+  });
+
   test("anything that is not a loaded skill is left alone", () => {
     const { filePath, baseDir } = ws();
     const skills = [{ name: "bro", filePath, baseDir }];

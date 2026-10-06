@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   __resetSessionRowPublishesForTest,
+  __scheduledSessionRowsForTest,
+  publishSessionRow,
   SESSION_ROW_COALESCE_MS,
   sessionRowVisible,
   sidebarSubscribers,
@@ -53,6 +55,13 @@ const scope = (patch: Partial<SidebarSessionScope> = {}) =>
 describe("session row fan-out", () => {
   test("coalesces a burst into one frame per session", () => {
     expect(SESSION_ROW_COALESCE_MS).toBe(250);
+  });
+
+  test("sessions published in one window flush together, once each", () => {
+    publishSessionRow("a");
+    publishSessionRow("b");
+    publishSessionRow("a");
+    expect(__scheduledSessionRowsForTest()).toEqual(["a", "b"]);
   });
 
   test("groups subscribed sockets by scope and skips the rest", () => {

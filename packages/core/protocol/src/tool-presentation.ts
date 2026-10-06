@@ -42,6 +42,8 @@ const TOOL_ALIASES: Record<string, string> = {
   apply_patch: "Edit",
   bash: "Bash",
   shell: "Bash",
+  // pi's codemode: one JavaScript script that calls the other tools.
+  codemode: "Codemode",
   exec_command: "Bash",
   notebook_edit: "NotebookEdit",
   str_replace_editor: "Edit",
@@ -254,6 +256,7 @@ export function toolFamily(toolName: string): ToolFamily {
   switch (canonicalToolName(toolName)) {
     case "Bash":
     case "BashOutput":
+    case "Codemode":
       return "run";
     case "Read":
     case "NotebookEdit":
@@ -463,6 +466,14 @@ function stripLeadingCd(command: string): string {
   return rest.trim() ? rest : command;
 }
 
+/** A codemode call's script, without the optional `// @options:` first
+ *  line (output budget and timeout, not what the script does). Exported for
+ *  clients' expanded views. */
+export function codemodeScript(inp: Record<string, unknown>): string {
+  const code = typeof inp.code === "string" ? inp.code : "";
+  return code.replace(/^\s*\/\/\s*@options:.*(?:\n|$)/, "").trim();
+}
+
 function truncate(str: string, max: number): string {
   return str.length > max ? `${str.slice(0, max - 1)}…` : str;
 }
@@ -555,6 +566,21 @@ export function toolDetail(toolName: string, input: unknown): ToolDetail {
         kind: "command",
         command: truncate(
           stripLeadingCd(command).replace(/\s*\n\s*/g, " ⏎ "),
+          160,
+        ),
+      };
+    }
+    case "Codemode": {
+      const script = codemodeScript(inp);
+      if (!script) return { kind: "none" };
+      return {
+        kind: "command",
+        command: truncate(
+          script
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .join(" ⏎ "),
           160,
         ),
       };

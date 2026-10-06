@@ -37,6 +37,15 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   row stays findable and its menu offers "Restore to my sidebar". An open
   teammate, automation, or spawned session can also be claimed from its native
   action surface with "Add to sidebar", sharing `/api/lanes` with the web.
+  A row's menu also adds or removes workspace collaborators
+  (`/api/workspaces/:id/collaborators`): a collaborator gets the workspace in
+  their own lanes and teammate lens, its review requests are not asks of them,
+  and they are never offered "Add to sidebar" for it. Rows in Inbox's Active
+  section can be dragged or moved up and down into the account's
+  `active-order` ui-pref, and tinted with a swatch stored as `row:<row key>`
+  in the shared `/api/tab-colors` map, drawn in the platform's system colours.
+  Next chat jumps only to your own unread work, and PR review runs
+  (`bks-ghpr-…-review` / `-adversarial`) take no tab unless opened directly.
   A claim, snooze or hide made on another client lands here without a
   foreground: the server's `user_map_changed` frame names the map, the
   matching store re-reads it (`UserMapSync`), and the list refetches its rows.
@@ -55,6 +64,17 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   cross-owner work to My sessions, lift its workspace into Needs action in Inbox
   mode, and show the sender's face with an @ badge. Opening the session clears
   the mention across the native and web clients.
+- **Inbox** — the server's notification inbox (`/api/notifications`): review
+  requests and results, mentions, workspace invites and Desk reminders, one row
+  per subject, with read and done state shared with the web. A bell in the top
+  bar (iPhone) or sidebar header (Mac) opens it; rows swipe or right-click to
+  read, unread, done or back. Opening a row marks it read and routes it to its
+  session, workspace or PR session (or the web for anything else); reading a
+  session marks its row read. Which kinds alert is an account setting under
+  Settings → Notifications; banners, sound, when to notify and the icon badge
+  (the inbox's unread count) stay on the device. A banner only comes from a
+  live `notification` socket frame the server marked as alerting, so reconnects
+  and relaunches never replay one. Agent runs and questions do not notify.
 - **Feed** (iOS) — recent merged pull requests and commits in one page, with
   person and project filters.
 - **Tasks** (iOS) — the shared `/api/todos` list, with actions to add, complete,
@@ -209,6 +229,15 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
 - **Agent runs**: the Agents panel reads every workflow a session started and
   updates each run immediately from `workflow_update` socket frames. A 3-second
   poll remains while a run is live for compatibility with older servers.
+- **Action cards** — when the agent needs a person, the session ends with a
+  card: register a keychain credential (the secret goes straight to the
+  keychain over HTTP, never to the agent), answer a keychain ask for a
+  credential you own, or confirm a force merge (only the driver confirms, with
+  a second confirmation; anyone signed in may cancel). Script runs show state,
+  credential call counts, a polled output tail and Stop. `SessionActionCardsModel`
+  owns them per session and re-reads all of them on every handshake. A You
+  should know note offers Learn more, Ask about this (quotes it under the
+  draft), I knew this and Turn off (press twice); Preferences has the toggle.
 - **Changes** — every file the worktree has touched, and the diff of any one of
   them, reached from the overflow menu or the workspace sheet (whose file rows
   open that file directly, and whose "Show all N files" replaces what used to
@@ -282,7 +311,11 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   failing checks, a draft, requested changes — then held for a five-second
   undo window with a countdown before `POST …/pr-merge` goes out; closing the
   panel inside the window takes it back too, see `DeferredMerge`), and
-  **Close pull request** (`POST …/pr-close`). The session overflow menu also
+  **Close pull request** (`POST …/pr-close`). An open draft also gets
+  **Ready for review** (status row and actions menu, `POST …/pr-ready`); each
+  draft related PR row gets its own **Ready** button that sends its repo and
+  branch. `PrReadyTarget` also covers the sessionless
+  `POST /api/pr-preview-ready` route. The session overflow menu also
   exposes squash, merge-commit and rebase merge actions directly, with the same
   warnings and confirmation. PR surfaces can copy the GitHub link or open an
   editable Slack post that appends the link and defaults to the server-selected
@@ -380,6 +413,14 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   composer onto the card, where the arrows and Return pick (`AskKeyBridge`,
   `AskLetterShortcuts`). For questions without options, the command focuses
   the free-text answer field instead.
+  Personal → **Keychain** (a pane of its own on macOS) mirrors the web's:
+  requests only a credential's owner can answer (`canAnswer`; a grouped
+  scripted run is one answer naming every credential, owner and call cap),
+  the person's own requests waiting on an owner, active grants with revoke,
+  and credentials, deletable when `mine`. It adds API credentials (optionally
+  status only) and logins (sign-in page, username, password). The models hold
+  no secret, and the add request goes over an ephemeral `URLSession` so the
+  typed secret never reaches the on-disk URL cache.
   Infrastructure → **Runners** lists the machines this instance trusts, read
   only: each one's status, hardware, workspace roots, toolchains and what it is
   working on. Connecting, revoking and permissions stay in the web settings —
@@ -435,12 +476,31 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   device. The orb's level is sampled off the realtime audio threads at ~15Hz
   rather than pushed per buffer, and honors Reduce Motion.
 
+## SVG images
+
+Transcript SVGs (an `OPENSESSION_IMAGE` file, an upload, a local path the
+server serves from `/media`) are untrusted markup. `DisplayableImageData`
+sniffs them before any image decoder runs and `SVGSanitizer` rebuilds them from
+an allowlist: no script, `foreignObject`, event handlers, external `href`s,
+outside `url()`s, stylesheet imports or entity declarations. The Mac then hands
+the clean markup to `NSImage`, which draws SVG itself. `UIImage` cannot, so the
+phone's `SVGRasterizer` draws it as an `<img>` (WebKit's no-script, no-fetch
+image mode) in a throwaway web view that also has JavaScript off, a
+`data:`-only CSP, a content rule list blocking every network and file scheme,
+a non-persistent store and one permitted navigation, and snapshots it to PNG.
+Raster images pass through untouched. Thumbnails, figures, compare sliders,
+walkthrough stills, the info filmstrip and the full-screen viewer all go
+through it, so each keeps its own caching and retry tile.
+
 ## Mermaid diagrams
 
 A ```mermaid fence in an assistant message renders as a drawn diagram, the same
 way the web client does it — and with the same fallback: source mermaid cannot
 parse keeps its code fence, which is also what an in-flight message looks like
-while it streams.
+while it streams. Like the web, an ER diagram that fails only because an
+attribute is named `pk`/`fk`/`uk` or typed like `Vec<Track>` gets one retry
+with those words backtick-quoted (`MermaidRepair`); the cache key and the code
+fence keep the source as written.
 
 There is no native mermaid. The layout engines (dagre for flowcharts, one per
 diagram type besides) are most of the library, so fidelity means running the
@@ -495,10 +555,12 @@ against both schemes.
 OS1/
   OS1App.swift               App entry; forces Settings on first run
   NativePreferences.swift    Cross-device preference hydration/cache
-  NativeNotifications.swift  Local notifications and the iOS unread icon badge
+  NativeNotifications.swift  Device-local banners, sound and the inbox icon badge
+  NotificationInboxStore.swift  Server inbox state, marks, live frames, deep links
   PlatformCompat.swift       iOS/macOS API bridging shims
   Models/
     Session.swift            Tolerant subset of the server's UnifiedSession
+    NotificationInbox.swift  Inbox wire model, filters and destinations
     TranscriptEntry.swift    Transcript entry (REST + WS frames)
     AskQuestion.swift        Pending AskUserQuestion
     AttachedImage.swift      Composer image attachments
@@ -566,10 +628,14 @@ OS1/
     Native*SettingsViews.swift  Native Tools, Personal, Workspace panels
     MacSettings.swift        macOS settings window
     Glass · ImageAttachments · UserAvatar · WebIcon  smaller shared views
+    SVGImage.swift           SVG sniffing, allowlist sanitizer, displayable bytes
+    SVGRasterizer.swift      Sandboxed WebKit SVG-to-PNG for the phone
   Mermaid/
     MermaidSegmenter.swift   Splits ```mermaid fences out of message markdown
     MermaidHostPage.swift    Locates the bundled renderer page
     MermaidRenderer.swift    Offscreen WebKit render + snapshot + cache
+    MermaidRepair.swift      ER attribute quoting for the one parse retry
+    MermaidFixtures.swift    Debug-only diagrams for tests and screenshots
     MermaidDiagramView.swift The diagram row: code fence, then the picture
 ````
 
@@ -586,6 +652,12 @@ OS1/
 - When Settings → Personal → Preferences → Live typing is on, `stream_text`
   deltas render immediately. It defaults off; otherwise each durable part
   appears through `transcript_append`.
+- `credential_registration_request`, `keychain_asks_changed` and
+  `force_merge_request` carry no viewer identity, so they only trigger a
+  re-read of `/api/keychain/registrations`, `/api/keychain/asks` and
+  `/api/force-merge`, which answer with this viewer's permissions. The
+  `*_resolved` frames clear the matching card, and a read that started before
+  a resolution cannot bring it back. `script_runs` replaces the run list.
 - `reply_suggestions` carries a session id and optional `{label,text}` choices.
   A JSON `null` suggestion payload clears the current row; a new stream or send
   clears it locally so stale replies cannot follow the next turn.

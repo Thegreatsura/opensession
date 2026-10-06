@@ -28,6 +28,14 @@ final class Dictation {
 
     var active: Bool { state == .listening }
 
+    /// When the current utterance started listening, for the recording timer.
+    private(set) var startedAt: Date?
+    /// Recent input levels, 0...1, newest last. Read only by the recording
+    /// pills, so the composer itself never re-evaluates on a level tick.
+    private(set) var levels: [Float] = []
+    private static let maxLevels = 24
+    private var lastLevelAt = Date.distantPast
+
     /// Non-nil only while a session is running: the recognizer hands back the
     /// whole utterance each time, so the caller needs the draft as it was when
     /// dictation started to append onto.
@@ -82,6 +90,8 @@ final class Dictation {
             return
         }
 
+        levels = []
+        startedAt = Date()
         state = .listening
         task = recognizer.recognitionTask(with: request) { [weak self] result, error in
             // The recognizer calls back off the main actor.
@@ -108,6 +118,15 @@ final class Dictation {
         teardown()
         if state == .listening { state = .idle }
     }
+
+    #if DEBUG
+    /// Listening state with a still level history, for headless captures.
+    func showForScreenshot() {
+        startedAt = Date().addingTimeInterval(-7)
+        levels = (0..<Self.maxLevels).map { Float(0.25 + 0.6 * abs(sin(Double($0) * 0.9))) }
+        state = .listening
+    }
+    #endif
 
     /// Clears a refusal/failure so the next tap tries again rather than
     /// showing a stale complaint.
@@ -178,11 +197,32 @@ final class Dictation {
     private func startCapture(into request: SFSpeechAudioBufferRecognitionRequest) throws {
         let input = audio.inputNode
         let format = input.outputFormat(forBus: 0)
-        input.installTap(onBus: 0, bufferSize: 1_024, format: format) { buffer, _ in
+        input.installTap(onBus: 0, bufferSize: 1_024, format: format) { [weak self] buffer, _ in
             request.append(buffer)
+            let level = Self.rms(buffer)
+            Task { @MainActor in self?.pushLevel(level) }
         }
         audio.prepare()
         try audio.start()
+    }
+
+    /// Root mean square of the first channel, scaled so speech fills the meter.
+    nonisolated private static func rms(_ buffer: AVAudioPCMBuffer) -> Float {
+        guard let samples = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return 0 }
+        let count = Int(buffer.frameLength)
+        var sum: Float = 0
+        for i in 0..<count { sum += samples[i] * samples[i] }
+        return min(1, (sum / Float(count)).squareRoot() * 6)
+    }
+
+    /// Throttled to the meter's frame rate; the tap fires roughly every 20ms.
+    private func pushLevel(_ level: Float) {
+        guard state == .listening else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastLevelAt) >= 0.08 else { return }
+        lastLevelAt = now
+        levels.append(level)
+        if levels.count > Self.maxLevels { levels.removeFirst(levels.count - Self.maxLevels) }
     }
 
     /// Safe to call more than once — both `stop()` and the failure paths run it.
@@ -194,6 +234,8 @@ final class Dictation {
         recognizer = nil
         onTranscript = nil
         base = ""
+        startedAt = nil
+        levels = []
         if audio.isRunning { audio.stop() }
         audio.inputNode.removeTap(onBus: 0)
         #if os(iOS)

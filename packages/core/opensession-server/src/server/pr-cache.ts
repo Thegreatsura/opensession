@@ -30,6 +30,7 @@ import {
   cachedReviewTeamLogins,
   fetchReviewTeamLogins,
   reviewRequestPersonKeys,
+  teamReviewRequestPersonKeys,
   type ReviewRequestRef,
 } from "./github-review-requests";
 import type { UnifiedSession, OsReviewSummary } from "./types";
@@ -71,6 +72,9 @@ export interface PrInfo {
   mergeable: string;
   /** Person keys ("kent") of teammates with a pending review request. */
   reviewRequested: string[];
+  /** The subset of `reviewRequested` asked only through a team, mapped to
+   *  that team's name. Absent when every request names the person. */
+  reviewRequestedTeams?: Record<string, string>;
   /** Person keys whose latest submitted PR review stands (approved /
    *  changes requested / commented). Populated for open PRs only. */
   reviewedBy: string[];
@@ -546,6 +550,16 @@ function schedulePrCachePersist() {
   }, 5_000);
 }
 
+/** Omit the team map when nobody was asked through a team, so rows and
+ *  persisted snapshots stay the shape they were. */
+function teamRequestsField(teams: Record<string, string> | undefined): {
+  reviewRequestedTeams?: Record<string, string>;
+} {
+  return teams && Object.keys(teams).length
+    ? { reviewRequestedTeams: teams }
+    : {};
+}
+
 /**
  * Write-through from a GitHub webhook delivery (dispatched by pr-webhook.ts).
  * A `pull_request` payload carries the full PR object, so the bulk-cache row
@@ -678,6 +692,14 @@ export function applyPrWebhookToBulkCache(
         ...(unresolvedTeam ? prev?.reviewRequested || [] : []),
       ]),
     ],
+    ...teamRequestsField({
+      ...(unresolvedTeam ? prev?.reviewRequestedTeams : undefined),
+      ...teamReviewRequestPersonKeys(
+        reviewRequests,
+        teamLoginsBySlug,
+        pr.user?.login,
+      ),
+    }),
     reviewedBy: prev?.reviewedBy || [],
     assignees: Array.isArray(pr.assignees)
       ? pr.assignees
@@ -703,14 +725,24 @@ export function applyPrWebhookToBulkCache(
         hydratedTeams,
         pr.user?.login,
       );
+      const stillUnresolved = teamLogins.some((logins) => logins === null);
       current.reviewRequested = [
         ...new Set([
           ...resolved,
-          ...(teamLogins.some((logins) => logins === null)
-            ? current.reviewRequested
-            : []),
+          ...(stillUnresolved ? current.reviewRequested : []),
         ]),
       ];
+      const teams = teamRequestsField({
+        ...(stillUnresolved ? current.reviewRequestedTeams : undefined),
+        ...teamReviewRequestPersonKeys(
+          reviewRequests,
+          hydratedTeams,
+          pr.user?.login,
+        ),
+      });
+      if (teams.reviewRequestedTeams)
+        current.reviewRequestedTeams = teams.reviewRequestedTeams;
+      else delete current.reviewRequestedTeams;
       schedulePrCachePersist();
     });
   }
@@ -779,14 +811,21 @@ export function prsBySessionRef(
     string,
     Array<{ repo: string; branch: string; pr: PrInfo }>
   >();
+  // This runs for every live sidebar row update, over every cached PR. Read
+  // the bot logins once and decide each author once, not once per PR.
+  const botLogins = new Set(githubBotLogins());
+  const trusted = new Map<string, boolean>();
   for (const [repoId, byBranch] of prsByRepo)
     for (const [branch, pr] of byBranch) {
       if (!pr.sessionRef) continue;
-      if (
-        !githubBotLogins().includes(pr.author.toLowerCase()) &&
-        !githubLoginToPersonKey(pr.author)
-      )
-        continue;
+      let authorTrusted = trusted.get(pr.author);
+      if (authorTrusted === undefined) {
+        authorTrusted =
+          botLogins.has(pr.author.toLowerCase()) ||
+          !!githubLoginToPersonKey(pr.author);
+        trusted.set(pr.author, authorTrusted);
+      }
+      if (!authorTrusted) continue;
       const list = out.get(pr.sessionRef);
       if (list) list.push({ repo: repoId, branch, pr });
       else out.set(pr.sessionRef, [{ repo: repoId, branch, pr }]);
@@ -1048,6 +1087,13 @@ async function refreshPrCacheInner(): Promise<Set<string>> {
           teamLoginsBySlug,
           pr.author?.login,
         ),
+        ...teamRequestsField(
+          teamReviewRequestPersonKeys(
+            pr.reviewRequests || [],
+            teamLoginsBySlug,
+            pr.author?.login,
+          ),
+        ),
         reviewedBy: reviewedByNumber.get(pr.number) || [],
         assignees: (pr.assignees || [])
           .map((a) => a.login)
@@ -1198,6 +1244,8 @@ export interface OpenPrEntry {
   mergeable: string;
   /** Person keys of teammates with a pending review request on this PR. */
   reviewRequested: string[];
+  /** Who of `reviewRequested` was asked only through a team, and which. */
+  reviewRequestedTeams?: Record<string, string>;
   /** An automated Open Session review is still running for this PR. */
   reviewActive: boolean;
   /** What the last automated review concluded, so the queue can show the
@@ -1470,6 +1518,7 @@ function openPrRows(): Array<{
           checks: pr.checks,
           mergeable: pr.mergeable,
           reviewRequested: pr.reviewRequested,
+          ...teamRequestsField(pr.reviewRequestedTeams),
         },
       });
     }
