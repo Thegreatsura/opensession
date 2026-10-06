@@ -100,7 +100,8 @@ export function buildRunInstructions(input: {
   parts.push(
     "## References\nFor PRs outside the current primary repository, write " +
       "`<repo>#<number>`, never bare `#<number>`. A bare `#<number>` reads as a " +
-      "PR; write GitHub issues as `issue #<number>`.",
+      "PR; write GitHub issues as `issue #<number>`. A PR URL renders as that " +
+      "reference, so write one, not both.",
   );
   parts.push(
     "## Working directory\nRelative paths in this prompt resolve against the working " +
