@@ -323,6 +323,7 @@ import {
   workspaceSummaryShift,
 } from "../lib/workspace-summary-open";
 import { matchesShortcut } from "../lib/shortcuts";
+import { useComposerNoteShortcut } from "../hooks/useComposerNoteShortcut";
 import { PulseDot } from "../ui/status";
 import { TURN_SPACER } from "../lib/app-shell-classes";
 import {
@@ -831,6 +832,7 @@ export function SessionViewer({
   const { newSiblingKeys } = workspaceTools.shortcuts;
   const { transcriptDownKeys, composerRef } = workspaceTools.shortcuts;
   const stableComposerRef = useRef(composerRef);
+  useComposerNoteShortcut(focused, setNoteMode, composerRef);
   // ⌃⇧↑/⌃⇧↓ page the transcript up/down — keyboard scrolling that works while
   // the composer is focused. A programmatic scroll carries no reader gesture,
   // so useSessionScroll won't re-engage auto-follow from it: a Down that would
