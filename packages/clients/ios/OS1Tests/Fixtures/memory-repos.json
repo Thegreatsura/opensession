@@ -1,1 +1,20 @@
-{"repos":[{"name":"team","label":"Workspace","head":"e2805c48a845b633c134b4d12f7eeeda7c28d706","remote":{"url":"git@example.test:acme/memory-team.git","lastSyncAt":"2026-10-06T07:24:53.714Z","ok":true}},{"name":"user-alex","label":"alex","head":"e2ad4448df95d609cd3d642e2cf17b001c5ef253","remote":{}}]}
+{
+  "repos": [
+    {
+      "name": "team",
+      "label": "Workspace",
+      "head": "e2805c48a845b633c134b4d12f7eeeda7c28d706",
+      "remote": {
+        "url": "git@example.test:acme/memory-team.git",
+        "lastSyncAt": "2026-10-06T07:24:53.714Z",
+        "ok": true
+      }
+    },
+    {
+      "name": "user-alex",
+      "label": "alex",
+      "head": "e2ad4448df95d609cd3d642e2cf17b001c5ef253",
+      "remote": {}
+    }
+  ]
+}

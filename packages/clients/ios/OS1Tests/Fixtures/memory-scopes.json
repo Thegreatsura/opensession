@@ -1,1 +1,40 @@
-{"scopes":[{"scope":{"key":"workspace","kind":"team","label":"team"},"count":4,"pinnedCount":0,"reviewCount":2,"ambientChars":0,"repo":"team"},{"scope":{"key":"repo-acme-todo","kind":"repo","label":"acme-todo"},"count":1,"pinnedCount":0,"reviewCount":0,"ambientChars":0,"repo":"team"},{"scope":{"key":"user-alex","kind":"user","label":"alex"},"count":1,"pinnedCount":0,"reviewCount":0,"ambientChars":0,"repo":"user-alex"}],"stats":{"mode":"repo","ambientBudgetBytes":6000,"retrievalBudgetBytes":4000,"ambientUsedBytes":0,"reviewCount":2,"legacyAmbientBudgetBytes":2500}}
+{
+  "scopes": [
+    {
+      "scope": { "key": "workspace", "kind": "team", "label": "team" },
+      "count": 4,
+      "pinnedCount": 0,
+      "reviewCount": 2,
+      "ambientChars": 0,
+      "repo": "team"
+    },
+    {
+      "scope": {
+        "key": "repo-acme-todo",
+        "kind": "repo",
+        "label": "acme-todo"
+      },
+      "count": 1,
+      "pinnedCount": 0,
+      "reviewCount": 0,
+      "ambientChars": 0,
+      "repo": "team"
+    },
+    {
+      "scope": { "key": "user-alex", "kind": "user", "label": "alex" },
+      "count": 1,
+      "pinnedCount": 0,
+      "reviewCount": 0,
+      "ambientChars": 0,
+      "repo": "user-alex"
+    }
+  ],
+  "stats": {
+    "mode": "repo",
+    "ambientBudgetBytes": 6000,
+    "retrievalBudgetBytes": 4000,
+    "ambientUsedBytes": 0,
+    "reviewCount": 2,
+    "legacyAmbientBudgetBytes": 2500
+  }
+}
