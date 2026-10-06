@@ -499,6 +499,28 @@ struct SessionsListView: View {
             .onChange(of: sessionCacheScope) {
                 sessionPageCache.removeAll()
             }
+            // A session opened from Settings (a memory change's session).
+            .onReceive(NotificationCenter.default.publisher(for: .os1OpenSessionLink)) { note in
+                guard let id = note.object as? String else { return }
+                #if os(macOS)
+                // The Settings window is key; bring the list's window forward.
+                NSApp.windows.first {
+                    $0.isVisible && $0.canBecomeMain
+                        && $0.identifier?.rawValue.localizedCaseInsensitiveContains("settings") != true
+                }?.makeKeyAndOrderFront(nil)
+                #else
+                showSettings = false
+                #endif
+                let known = viewModel.sessions.contains { $0.id == id }
+                    || viewModel.archivedSessions.contains { $0.id == id }
+                if known {
+                    _ = openSessionLink(id: id)
+                } else if let base = ServerConfig.shared.baseURL {
+                    // Not in this list (another person's, or long archived):
+                    // the web route is the same fallback a transcript link has.
+                    systemOpenURL(base.appendingPathComponent("session").appendingPathComponent(id))
+                }
+            }
             #if os(macOS)
             // File > New Session from the app's account-bound menu command.
             .onReceive(NotificationCenter.default.publisher(for: .os1NewSession)) { _ in

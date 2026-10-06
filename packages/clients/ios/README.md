@@ -400,7 +400,10 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   copy arrives.
 - **Settings** — native SwiftUI Tools, Personal, and Workspace administration,
   plus multi-organization server/GitHub/token configuration and a connection
-  test. The top-bar logo on iOS and the row above Feed on macOS switch servers
+  test. Settings → Memory lists the memory repositories (git) with each one's
+  private remote and sync state (including conflicts), recent changes (diff,
+  originating session, confirmed revert) and files, above the per-scope entry
+  editor. The top-bar logo on iOS and the row above Feed on macOS switch servers
   and show the active connection; each account keeps its own keychain token, and
   passive WebSockets remain connected for inactive accounts
   while the app is active so mentions can badge the picker. Cross-device
@@ -575,6 +578,7 @@ OS1/
     AssetLinks.swift         Written scratch files in prose -> AssetOpen
     PrDetails.swift          PR panel payload
     SettingsModels.swift     Settings payloads (tools/personal/workspace)
+    MemoryRepos.swift        Memory repository, history, remote payloads
     WorkspaceRunner.swift    Instance Runner list + the shared status words
     SandboxOffering.swift    What run environments a new session may choose
     SandboxMove.swift        Which sessions may move into a Sandbox later, and
@@ -626,6 +630,7 @@ OS1/
     SettingsView.swift       Native settings index + connection controls
     RunnersSettingsView.swift  Read-only list of the instance's Runners
     Native*SettingsViews.swift  Native Tools, Personal, Workspace panels
+    MemoryRepoSettingsViews.swift  Memory repositories: remote, changes, files
     MacSettings.swift        macOS settings window
     Glass · ImageAttachments · UserAvatar · WebIcon  smaller shared views
     SVGImage.swift           SVG sniffing, allowlist sanitizer, displayable bytes

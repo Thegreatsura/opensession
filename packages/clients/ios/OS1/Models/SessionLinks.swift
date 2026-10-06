@@ -1,5 +1,12 @@
 import Foundation
 
+extension Notification.Name {
+    /// Open a session from a surface outside the sessions list (Settings);
+    /// the object is the session id. The list closes the settings sheet on
+    /// iPhone and selects the session in the main window on Mac.
+    static let os1OpenSessionLink = Notification.Name("os1.openSessionLink")
+}
+
 /// Session ids inside agent output, turned into links you can follow.
 ///
 /// An orchestrator says "delegated to `os-019f…`" constantly, and on the web
@@ -38,6 +45,12 @@ enum SessionLinks {
     /// resolves a tapped transcript chip.
     static func url(for id: String) -> URL? {
         URL(string: "\(scheme):\(id)")
+    }
+
+    /// Ask the sessions list to open `id`. Settings is a sheet on iPhone and
+    /// its own window on Mac, so neither can push onto the list's stack.
+    static func requestOpen(_ id: String) {
+        NotificationCenter.default.post(name: .os1OpenSessionLink, object: id)
     }
 
     /// The session id a transcript link points at, or nil for a normal URL.

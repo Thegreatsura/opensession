@@ -540,17 +540,24 @@ extension ConnectionRow where Trailing == EmptyView {
     }
 }
 
+/// Settings → Memory: the memory repositories (each with its remote, history,
+/// diffs, revert and files, in MemoryRepoSettingsViews.swift), then every
+/// scope's entries with the add / edit / delete editor. Entry edits still go
+/// through `/api/memory`, which the server commits to the right repository.
 struct MemorySettingsView: View {
-    @State private var scopes: [MemoryScope]? = SettingsCache.value("memory")
-    @State private var loading = true
-    @State private var error: String?
+    @State private var model = MemorySettingsModel()
     @State private var editor: MemoryEditTarget?
+    #if DEBUG
+    /// Screenshot hook: `OS1_MEMORY_REPO=<name>` opens that repository.
+    @State private var fixtureRepo: String? = ProcessInfo.processInfo.environment["OS1_MEMORY_REPO"]
+    #endif
 
     var body: some View {
         List {
-            if loading, scopes == nil { settingsLoadingRow }
-            if let error { settingsErrorRow(error) { Task { await load() } } }
-            if let scopes {
+            if model.loading, model.scopes == nil, model.repos == nil { settingsLoadingRow }
+            repositories
+            if let error = model.error { settingsErrorRow(error) { Task { await model.load() } } }
+            if let scopes = model.scopes {
                 if scopes.isEmpty { ContentUnavailableView("No memory entries", systemImage: "brain") }
                 ForEach(scopes.filter { $0.scope?.key?.isEmpty == false }, id: \.id) { scope in
                     Section(scope.scope?.label ?? scope.scope?.kind ?? "Memory") {
@@ -558,7 +565,11 @@ struct MemorySettingsView: View {
                         if entries.isEmpty { Text("No entries.").foregroundStyle(.secondary) }
                         ForEach(entries, id: \.id) { entry in
                             Button { editor = MemoryEditTarget(scope: scope.scope!, entry: entry) } label: {
-                                VStack(alignment: .leading) { Text(entry.text ?? ""); Text([entry.by, entry.at].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary) }
+                                VStack(alignment: .leading) {
+                                    Text(entry.displayText)
+                                    let byline = entry.byline
+                                    if !byline.isEmpty { Text(byline).font(.caption).foregroundStyle(.secondary) }
+                                }
                             }.foregroundStyle(.primary)
                         }
                         Button { editor = MemoryEditTarget(scope: scope.scope!, entry: nil) } label: { Label("Add entry", systemImage: "plus") }
@@ -567,12 +578,33 @@ struct MemorySettingsView: View {
             }
         }
         .navigationTitle("Memory")
-        .task { await load() }.refreshable { await load() }
+        .inlineTitleBarCompat()
+        .task { await model.load() }.refreshable { await model.load() }
         .sheet(item: $editor) { target in MemoryEditor(target: target, onSave: save, onDelete: delete) }
+        #if DEBUG
+        .navigationDestination(item: $fixtureRepo) { name in MemoryRepoDetailView(repoName: name, model: model) }
+        #endif
     }
-    private func load() async { loading = true; error = nil; do { let fetched = try await SettingsAPI.memory().scopes ?? []; scopes = fetched; SettingsCache.save("memory", fetched) } catch { self.error = error.localizedDescription }; loading = false }
-    private func save(_ target: MemoryEditTarget, text: String) async { guard let key = target.scope.key else { return }; do { if let id = target.entry?.id { _ = try await SettingsAPI.updateMemory(scopeKey: key, id: id, text: text) } else { _ = try await SettingsAPI.addMemory(scopeKey: key, text: text, by: ServerConfig.shared.userName) }; editor = nil; await load() } catch { self.error = error.localizedDescription } }
-    private func delete(_ target: MemoryEditTarget) async { guard let key = target.scope.key, let id = target.entry?.id else { return }; do { _ = try await SettingsAPI.deleteMemory(scopeKey: key, id: id); editor = nil; await load() } catch { self.error = error.localizedDescription } }
+
+    @ViewBuilder
+    private var repositories: some View {
+        if let reposError = model.reposError {
+            Section("Repositories") { settingsErrorRow(reposError) { Task { await model.loadRepos() } } }
+        } else if let repos = model.repos, !repos.isEmpty {
+            Section {
+                ForEach(repos) { repo in
+                    NavigationLink { MemoryRepoDetailView(repoName: repo.name, model: model) } label: { MemoryRepoRow(repo: repo) }
+                }
+            } header: {
+                Text("Repositories")
+            } footer: {
+                Text("Memory lives in git. Open a repository for its remote, recent changes and files.")
+            }
+        }
+    }
+
+    private func save(_ target: MemoryEditTarget, text: String) async { guard let key = target.scope.key else { return }; do { if let id = target.entry?.id { _ = try await SettingsAPI.updateMemory(scopeKey: key, id: id, text: text) } else { _ = try await SettingsAPI.addMemory(scopeKey: key, text: text, by: ServerConfig.shared.userName) }; editor = nil; await model.repositoryChanged() } catch { model.error = error.localizedDescription } }
+    private func delete(_ target: MemoryEditTarget) async { guard let key = target.scope.key, let id = target.entry?.id else { return }; do { _ = try await SettingsAPI.deleteMemory(scopeKey: key, id: id); editor = nil; await model.repositoryChanged() } catch { model.error = error.localizedDescription } }
 }
 
 /// Settings → Prewarming. Dependency templates and preview containers are the
@@ -1099,7 +1131,7 @@ struct GitHubConnectionFlowView: View {
 private struct MemoryEditor: View {
     let target: MemoryEditTarget; let onSave: (MemoryEditTarget, String) async -> Void; let onDelete: (MemoryEditTarget) async -> Void
     @Environment(\.dismiss) private var dismiss; @State private var text = ""
-    var body: some View { NavigationStack { Form { TextEditor(text: $text).frame(minHeight: 150); if target.entry != nil { Button("Delete entry", role: .destructive) { Task { await onDelete(target) } } } } .navigationTitle(target.entry == nil ? "Add Memory" : "Edit Memory").onAppear { text = target.entry?.text ?? "" }.toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button("Save") { Task { await onSave(target, text) } }.disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) } } } }
+    var body: some View { NavigationStack { Form { TextEditor(text: $text).frame(minHeight: 150); if target.entry != nil { Button("Delete entry", role: .destructive) { Task { await onDelete(target) } } } } .navigationTitle(target.entry == nil ? "Add Memory" : "Edit Memory").onAppear { text = target.entry?.displayText ?? "" }.toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button("Save") { Task { await onSave(target, text) } }.disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) } } } }
 }
 
 /// Shared settings vocabulary: every native settings page shows the same
