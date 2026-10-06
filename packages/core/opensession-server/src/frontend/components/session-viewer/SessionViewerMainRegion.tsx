@@ -1102,6 +1102,17 @@ export function SessionViewerMainRegion({
                     cancelIndexAnchorHold();
                     scrollToLatest("auto");
                   }}
+                  onDismiss={() => {
+                    // Null is the protocol's dismissal. The server answers
+                    // with ask_resolved, even for a stale card it no longer
+                    // holds, which clears it on every open client.
+                    send({
+                      type: "answer_question",
+                      sessionId: session.id,
+                      questionId: ask.questionId,
+                      answers: null,
+                    });
+                  }}
                 />
               )}
 

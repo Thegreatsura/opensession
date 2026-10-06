@@ -941,7 +941,7 @@ export function makeAskHandler(sessionId: string) {
       return {
         behavior: "deny",
         message:
-          "Nobody answered in time (web or Slack). Proceed with your best judgment and clearly note the open question and the assumption you made.",
+          "The question was dismissed or nobody answered in time (web or Slack). Proceed with your best judgment and clearly note the open question and the assumption you made.",
       };
     }
     return { behavior: "allow", updatedInput: { ...input, answers } };

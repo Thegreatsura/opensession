@@ -1801,6 +1801,14 @@ export const websocketHandlers: WebSocketHandler<WSClientData> = {
             await pending.resolve(
               answers && typeof answers === "object" ? answers : null,
             );
+          } else if (typeof questionId === "string") {
+            // A card for an ask the server no longer holds: retract it on
+            // every open client so a dismissal sticks everywhere.
+            broadcastToSession(sessionId, {
+              type: "ask_resolved",
+              sessionId,
+              questionId,
+            });
           }
           break;
         }

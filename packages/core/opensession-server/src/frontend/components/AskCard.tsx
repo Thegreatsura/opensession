@@ -4,8 +4,9 @@ import { AGENT_NAME } from "../lib/brand";
 import { renderMarkdown } from "../lib/markdown";
 import type { AskQuestion } from "../lib/types";
 import { Button } from "../ui/button";
+import { Tooltip } from "../ui/tooltip";
 import { cn } from "../ui/cn";
-import { IconCheck, IconReturn } from "./icons";
+import { IconCheck, IconReturn, IconX } from "./icons";
 import { useMarkdownRepo } from "./MarkdownBody";
 import { ASK_CARD_SHELL, ASK_CHOICE_ROW } from "../lib/ask-card-classes";
 import {
@@ -25,6 +26,12 @@ interface Props {
    * only the focused session's. Defaults on for a card standing alone.
    */
   active?: boolean;
+  /**
+   * Close the card without answering. The run that asked hears no answer
+   * and proceeds on its own judgment; a card left over from a run that has
+   * long moved on simply goes away.
+   */
+  onDismiss?: () => void;
 }
 
 /**
@@ -86,7 +93,12 @@ const HIDE_WHEN_INERT = "[&[hidden]]:hidden";
  * composer is the one place the letters cannot reach (they are typing there),
  * so the `ask-focus` chord brings the keyboard to the card instead.
  */
-export function AskCard({ questions, onAnswer, active = true }: Props) {
+export function AskCard({
+  questions,
+  onAnswer,
+  onDismiss,
+  active = true,
+}: Props) {
   const repo = useMarkdownRepo();
   const titleBase = React.useId();
   const [picks, setPicks] = React.useState<Record<string, string[]>>({});
@@ -307,6 +319,25 @@ export function AskCard({ questions, onAnswer, active = true }: Props) {
               {lone.header}
             </span>
           </>
+        )}
+        {/* Negative margins keep the 28px target from growing the status
+            row; on a phone it takes the full 44px. */}
+        {onDismiss && (
+          <Tooltip label="Dismiss question">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              icon={<IconX size={18} />}
+              aria-label="Dismiss question"
+              disabled={submitted}
+              onClick={() => {
+                setSubmitted(true);
+                onDismiss();
+              }}
+              className="-my-1.5 -mr-1.5 ml-auto phone:min-h-11 phone:min-w-11"
+            />
+          </Tooltip>
         )}
       </div>
 

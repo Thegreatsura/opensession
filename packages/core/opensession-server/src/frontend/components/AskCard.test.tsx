@@ -271,3 +271,17 @@ test("multi-select and free-text answers retain the explicit Answer action", () 
   expect(html).toContain('type="checkbox"');
   expect(html).not.toContain('type="radio"');
 });
+
+test("a dismiss handler adds a close button that never submits the form", () => {
+  const question = [{ question: "Still relevant?" }];
+  const without = renderToStaticMarkup(
+    <AskCard questions={question} onAnswer={() => {}} />,
+  );
+  expect(without).not.toContain('aria-label="Dismiss question"');
+
+  const html = renderToStaticMarkup(
+    <AskCard questions={question} onAnswer={() => {}} onDismiss={() => {}} />,
+  );
+  const button = html.match(/<button[^>]*aria-label="Dismiss question"[^>]*>/);
+  expect(button?.[0]).toContain('type="button"');
+});
