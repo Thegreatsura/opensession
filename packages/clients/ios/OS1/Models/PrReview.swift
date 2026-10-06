@@ -12,9 +12,45 @@ struct PrDiff: Decodable, Sendable, Equatable {
     let skippedFiles: Int?
 }
 
+/// GitHub's per-viewer viewed state. `changed` is GitHub's DIRTY state:
+/// files the viewer marked viewed that later commits changed. Older servers
+/// send only `viewed`, so both lists default to empty.
 struct PrViewedFiles: Decodable, Sendable, Equatable {
     let prId: String
     let viewed: [String]
+    let changed: [String]
+
+    init(prId: String, viewed: [String], changed: [String] = []) {
+        self.prId = prId
+        self.viewed = viewed
+        self.changed = changed
+    }
+
+    private enum CodingKeys: String, CodingKey { case prId, viewed, changed }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        prId = try values.decodeIfPresent(String.self, forKey: .prId) ?? ""
+        viewed = (try? values.decodeIfPresent([String].self, forKey: .viewed)) ?? []
+        changed = (try? values.decodeIfPresent([String].self, forKey: .changed)) ?? []
+    }
+}
+
+/// A resolved code-review thread (`GET /api/pr-review-threads`). Only the
+/// fields the native surface draws; everything optional.
+struct PrReviewThread: Decodable, Sendable, Equatable, Identifiable {
+    struct Comment: Decodable, Sendable, Equatable {
+        let login: String?
+        let body: String?
+    }
+
+    let id: String
+    let isResolved: Bool?
+    let isOutdated: Bool?
+    let path: String?
+    let line: Int?
+    let rootAuthor: String?
+    let comments: [Comment]?
 }
 
 struct PrInlineComment: Hashable, Sendable, Identifiable {
@@ -234,7 +270,11 @@ extension PrPatchParser {
 
 /// The generated review guide: the diff grouped into a handful of sections to
 /// read in order. The server answers `null` when there is no PR or generation
-/// failed, and the canvas falls back to the plain diff.
+/// failed, and the canvas groups files by type instead.
+///
+/// `stale` means the guide was written for an earlier head commit: the server
+/// serves it at once after a push while it updates in the background. Older
+/// servers never send it, so it defaults to false.
 struct PrReviewGuide: Decodable, Sendable, Equatable {
     struct Section: Decodable, Sendable, Equatable, Identifiable {
         let title: String
@@ -242,11 +282,44 @@ struct PrReviewGuide: Decodable, Sendable, Equatable {
         let files: [String]
 
         var id: String { "\(title)|\(files.joined(separator: ","))" }
+
+        init(title: String, explanation: String, files: [String]) {
+            self.title = title
+            self.explanation = explanation
+            self.files = files
+        }
+
+        private enum CodingKeys: String, CodingKey { case title, explanation, files }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            title = try values.decodeIfPresent(String.self, forKey: .title) ?? "Untitled"
+            explanation = try values.decodeIfPresent(String.self, forKey: .explanation) ?? ""
+            files = try values.decodeIfPresent([String].self, forKey: .files) ?? []
+        }
     }
 
     let number: Int?
     let headRefOid: String?
     let sections: [Section]
+    let stale: Bool
+
+    init(number: Int?, headRefOid: String?, sections: [Section], stale: Bool = false) {
+        self.number = number
+        self.headRefOid = headRefOid
+        self.sections = sections
+        self.stale = stale
+    }
+
+    private enum CodingKeys: String, CodingKey { case number, headRefOid, sections, stale }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        number = try values.decodeIfPresent(Int.self, forKey: .number)
+        headRefOid = try values.decodeIfPresent(String.self, forKey: .headRefOid)
+        sections = try values.decodeIfPresent([Section].self, forKey: .sections) ?? []
+        stale = (try? values.decodeIfPresent(Bool.self, forKey: .stale)) ?? false
+    }
 }
 
 /// The structural call/branch trees behind a change. `status` stays a plain

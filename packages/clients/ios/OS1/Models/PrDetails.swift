@@ -38,6 +38,17 @@ struct PrDetails: Decodable, Equatable {
     /// the diff route; this is what the overview lists without loading it.
     var files: [PrFile]?
     var staging: PrStaging?
+    /// What the PR's host supports. Absent on GitHub-only servers, which
+    /// means everything is.
+    var capabilities: PrHostCapabilities?
+}
+
+/// The host features the review surface branches on (`PrHostCapabilities`
+/// in pr-contract.ts). A missing flag means supported, as on the web.
+struct PrHostCapabilities: Decodable, Equatable {
+    /// Per-viewer "Viewed" state. Without it, review marks stay on device.
+    var viewedState: Bool?
+    var reviewComments: Bool?
 }
 
 struct PrCommit: Decodable, Equatable, Identifiable {

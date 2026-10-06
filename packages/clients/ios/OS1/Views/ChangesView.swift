@@ -28,6 +28,19 @@ struct ChangesView: View {
     @State private var loadFailed = false
     /// The file being read, pushed one level deeper.
     @State private var openFile: FilePatch?
+    /// repo id → path → hash of that file's diff.
+    @State private var hashIndex: [String: [String: String]] = [:]
+    /// repo id → this device's review marks for that repo's worktree.
+    @State private var marksByRepo: [String: PrReviewMarks] = [:]
+
+    /// Where the worktree diff comes from; the screenshot fixture swaps it.
+    var loadDiff: @MainActor (String) async throws -> OS1API.SessionDiffResponse = {
+        try await OS1API.sessionDiff(sessionId: $0)
+    }
+    /// A worktree has no provider-side viewed state, so review marks stay on
+    /// this device, keyed by each file's diff: an agent edit to a reviewed
+    /// file shows it as changed since review.
+    var reviewStore = PrLocalReviewStore()
 
     var body: some View {
         Group {
@@ -88,6 +101,35 @@ struct ChangesView: View {
                         .pickerStyle(.segmented)
                     }
                 }
+                if let marks = activeMarks {
+                    let paths = diff.files.map(\.path)
+                    let reviewed = paths.filter(marks.reviewed.contains).count
+                    let changed = paths.filter(marks.changed.contains).count
+                    Section {
+                        PrReviewProgressHeader(
+                            total: paths.count,
+                            reviewed: reviewed,
+                            changed: changed,
+                            bulk: { action in
+                                let change = PrReviewGroups.bulkChanges(
+                                    paths, reviewed: marks.reviewed, action: action
+                                )
+                                setReviewed(change.mark, reviewed: true)
+                                setReviewed(change.unmark, reviewed: false)
+                            }
+                        )
+                        .padding(.vertical, 4)
+                        if changed > 0 {
+                            PrReviewCallout(
+                                tone: .warning,
+                                symbol: "exclamationmark.arrow.circlepath",
+                                title: "\(changed) file\(changed == 1 ? "" : "s") changed since you reviewed \(changed == 1 ? "it" : "them")",
+                                message: "These files were edited after you marked them reviewed. Read them again."
+                            )
+                            .listRowInsets(EdgeInsets())
+                        }
+                    }
+                }
                 Section {
                     ForEach(diff.files) { file in
                         row(file)
@@ -116,7 +158,23 @@ struct ChangesView: View {
 
     private func row(_ file: OS1API.DiffFile) -> some View {
         let patch = patch(for: file)
-        return Button {
+        let state = activeMarks?.state(of: file.path) ?? .unreviewed
+        return HStack(spacing: 10) {
+            // Only a file with a diff has a hash to vouch for.
+            if activeMarks != nil, patch != nil {
+                PrReviewStateButton(state: state) {
+                    setReviewed([file.path], reviewed: state != .reviewed)
+                }
+            }
+            fileButton(file, patch: patch, state: state)
+        }
+        .listRowBackground(
+            state == .changed ? OS1VisualStyle.yellow.opacity(0.10) : nil
+        )
+    }
+
+    private func fileButton(_ file: OS1API.DiffFile, patch: FilePatch?, state: PrFileReviewState) -> some View {
+        Button {
             openFile = patch
         } label: {
             HStack(spacing: 10) {
@@ -125,6 +183,9 @@ struct ChangesView: View {
                     .foregroundStyle(DiffFileStyle.color(file.status))
                     .frame(width: 20)
                 VStack(alignment: .leading, spacing: 1) {
+                    if state == .changed {
+                        PrChangedSinceReviewBadge().padding(.bottom, 2)
+                    }
                     Text(Self.fileName(file.path))
                         .font(.subheadline)
                         .foregroundStyle(OS1VisualStyle.text)
@@ -241,6 +302,18 @@ struct ChangesView: View {
 
     private var activeDiff: OS1API.SessionDiff? { activeRepo?.diff }
 
+    private var activeMarks: PrReviewMarks? {
+        activeRepo.flatMap { marksByRepo[$0.repo] }
+    }
+
+    private func setReviewed(_ paths: [String], reviewed: Bool) {
+        guard !paths.isEmpty, let repo = activeRepo?.repo,
+              case .local(let key) = marksByRepo[repo]?.source else { return }
+        let hashes = hashIndex[repo] ?? [:]
+        let stored = reviewStore.setReviewed(key, paths: paths, reviewed: reviewed, hashes: hashes)
+        marksByRepo[repo] = .local(key: key, stored: stored, hashes: hashes)
+    }
+
     private var repoSelection: Binding<String> {
         Binding(
             get: { activeRepo?.repo ?? "" },
@@ -263,26 +336,37 @@ struct ChangesView: View {
     private func load() async {
         loading = true
         loadFailed = false
-        let response = try? await OS1API.sessionDiff(sessionId: sessionId)
+        let response = try? await loadDiff(sessionId)
         guard !Task.isCancelled else { return }
         if let response {
             let loaded = response.repos
             // Splitting a multi-megabyte patch is the one expensive thing
             // here; keep it off the main actor like every other decode.
-            let index = await Task.detached(priority: .userInitiated) {
+            let (index, hashes) = await Task.detached(priority: .userInitiated) {
                 var index: [String: [String: FilePatch]] = [:]
+                var hashes: [String: [String: String]] = [:]
                 for repo in loaded {
                     let patches = PatchSplitter.split(repo.diff.rawPatch ?? "")
                     index[repo.repo] = Dictionary(
                         patches.map { ($0.path, $0) },
                         uniquingKeysWith: { first, _ in first }
                     )
+                    hashes[repo.repo] = PrReviewHash.hashes(of: patches)
                 }
-                return index
+                return (index, hashes)
             }.value
             guard !Task.isCancelled else { return }
             repos = loaded
             patchIndex = index
+            hashIndex = hashes
+            marksByRepo = Dictionary(uniqueKeysWithValues: loaded.map { repo in
+                let key = PrLocalReviewStore.worktreeKey(sessionId: sessionId, repo: repo.repo)
+                return (repo.repo, PrReviewMarks.local(
+                    key: key,
+                    stored: reviewStore.read(key),
+                    hashes: hashes[repo.repo] ?? [:]
+                ))
+            })
             loadFailed = false
         } else {
             loadFailed = repos.isEmpty
