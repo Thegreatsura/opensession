@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -57,6 +58,7 @@ import type { LiveTurnStore } from "../lib/live-turn-store";
 import type { TranscriptViewStore } from "../lib/transcript-view-store";
 import type { SessionPrRef } from "../lib/types";
 import type { PortalTarget } from "../lib/portals";
+import { onPortalPinRequest } from "../lib/portal-pin";
 import type { SessionViewerProps } from "../lib/session-viewer-bindings";
 
 type WorkspaceSummaryStyle = CSSProperties & {
@@ -332,12 +334,13 @@ export function useSessionViewStateController({
     setPinnedPortal(target);
     return true;
   };
-  /** Move a full-width Portal tab into the side panel, beside the chat. */
-  const pinPortalTab = (target: PortalTarget, closeTab?: () => void) => {
+  // A Portal tab dropped on the side panel (see useSessionTabs) lands here.
+  const pinDroppedPortal = useEffectEvent((target: PortalTarget) => {
+    if (target.sessionId !== session.id) return;
     pinPortal(target);
     setActivePanelOpen(true);
-    closeTab?.();
-  };
+  });
+  useEffect(() => onPortalPinRequest(pinDroppedPortal), []);
   const closePinnedPortal = () => {
     if (pinnedPortal?.sessionId !== session.id) return;
     setPinnedPortal(null);
@@ -482,7 +485,6 @@ export function useSessionViewStateController({
       pinnedPortal:
         pinnedPortal?.sessionId === session.id ? pinnedPortal : null,
       pinPortal,
-      pinPortalTab,
       autoPinPortal,
       closePinnedPortal,
       expandPinnedPortal,
