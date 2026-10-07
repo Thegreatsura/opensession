@@ -2060,16 +2060,12 @@ struct SessionsListView: View {
         // a session of theirs is blocked on a question (the poll consumes the
         // hide when that happens), and except while searching, which is how a
         // hidden row is found again so its menu can restore it.
-        #if os(iOS)
         let hides = query.isEmpty ? HideStore.shared.hides : [:]
-        #endif
         return { workspace in
-            #if os(iOS)
             if !hides.isEmpty, workspace.lane != .needsInput,
-               hides[SidebarRowKeys.rowKey(for: workspace)] != nil {
+               SidebarRowKeys.hideKeys(for: workspace).contains(where: { hides[$0] != nil }) {
                 return false
             }
-            #endif
             if !lens.matches(workspace, person: person, agentKey: agentKey) {
                 return false
             }
@@ -2776,6 +2772,7 @@ struct SessionsListView: View {
                 colorMenu(workspace)
                 collaboratorsMenu(workspace)
                 Divider()
+                membershipButton(workspace)
                 archiveButton(workspace)
                 deleteWorkspaceButton(workspace)
             }
@@ -2900,6 +2897,44 @@ struct SessionsListView: View {
         }
     }
     #endif
+
+    /// One sidebar-membership action, chosen by the "me" lens's own rule
+    /// (`PeopleLens.membership`): Hide for a row your sidebar holds, Keep for
+    /// one you only see through another lens, Restore for a hidden row.
+    @ViewBuilder
+    private func membershipButton(_ workspace: SidebarWorkspace) -> some View {
+        if !workspace.sessions.isEmpty {
+            switch peopleLens.membership(
+                of: workspace,
+                hidden: HideStore.shared.isHidden(workspace)
+            ) {
+            case .restore:
+                Button {
+                    HideStore.shared.restore(workspace)
+                } label: {
+                    Label("Restore to sidebar", systemImage: "eye")
+                }
+            case .hide:
+                Button {
+                    hide(workspace)
+                } label: {
+                    Label("Hide from sidebar", systemImage: "eye.slash")
+                }
+            case .keep:
+                Button {
+                    LaneStore.shared.claim(workspace.sessions)
+                } label: {
+                    Label("Keep in sidebar", systemImage: "tray.and.arrow.down")
+                }
+            }
+        }
+    }
+
+    private func hide(_ workspace: SidebarWorkspace) {
+        withAnimation(.snappy(duration: 0.28)) {
+            HideStore.shared.hide(workspace)
+        }
+    }
 
     #if os(iOS)
     /// Leading swipe (and context menu) action. Non-destructive: the row stays
@@ -3039,19 +3074,7 @@ struct SessionsListView: View {
             // a context menu and wrapped onto a second line — the only item in
             // the menu that did. The shorter phrasing is the web's own, from
             // its narrower menus (FeedRows, the band header).
-            if HideStore.shared.isHidden(workspace) {
-                Button {
-                    HideStore.shared.clear([SidebarRowKeys.rowKey(for: workspace)])
-                } label: {
-                    Label("Restore to sidebar", systemImage: "eye")
-                }
-            } else {
-                Button {
-                    hide(workspace)
-                } label: {
-                    Label("Hide from sidebar", systemImage: "eye.slash")
-                }
-            }
+            membershipButton(workspace)
             Button(role: .destructive) {
                 archive(workspace)
             } label: {
@@ -3181,12 +3204,6 @@ struct SessionsListView: View {
                 prActionError = (error as? LocalizedError)?.errorDescription
                     ?? error.localizedDescription
             }
-        }
-    }
-
-    private func hide(_ workspace: SidebarWorkspace) {
-        withAnimation(.snappy(duration: 0.28)) {
-            HideStore.shared.hide(workspace)
         }
     }
 

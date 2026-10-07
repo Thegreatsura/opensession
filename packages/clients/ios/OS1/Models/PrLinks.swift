@@ -25,6 +25,13 @@ import Foundation
 /// Conservative in the same way as the other rewrites: code — fenced,
 /// indented, or a span — is left alone, and a URL already inside a link keeps
 /// its own destination unless that destination is itself a PR we can open.
+///
+/// One chip per PR per message, as on the web: a reply that names the same PR
+/// a dozen times would otherwise bury its prose under a dozen filled, tinted
+/// pills. The first mention is the chip; every later one is an ordinary link
+/// on the same private scheme, so it still opens the review in place. Which
+/// PRs a message has already drawn is a `Ledger`, and the message boundary is
+/// whoever owns it (`MarkdownBody`), not a line or a paragraph.
 @MainActor
 enum PrLinks {
     /// Private scheme, so a chip can never escape to a browser by accident.
@@ -38,6 +45,22 @@ enum PrLinks {
     struct Reference: Equatable {
         let repo: String
         let number: Int
+    }
+
+    /// The PRs a message has already drawn as a chip. A reference type so
+    /// the per-line rewrite can fill it in as it goes; one per message.
+    final class Ledger {
+        private(set) var drawn: Set<String>
+
+        init(drawn: Set<String> = []) {
+            self.drawn = drawn
+        }
+
+        /// Whether this is the first time the message names `reference`,
+        /// recording it either way.
+        fileprivate func claim(_ reference: Reference) -> Bool {
+            drawn.insert(Index.key(reference.repo, reference.number)).inserted
+        }
     }
 
     // MARK: - What the app knows
@@ -196,12 +219,24 @@ enum PrLinks {
     /// `sessionId` is whose transcript this is: a bare `#5528` means the PR of
     /// that session's repo, exactly as the web's `renderMarkdown(src, { repo })`
     /// resolves one against the surface it renders on.
-    static func linkify(_ markdown: String, sessionId: String?) -> String {
+    ///
+    /// `ledger` carries what the message has already drawn across the pieces
+    /// it is rendered in (prose, table cells, a callout). Without one, the
+    /// text is a whole message of its own.
+    static func linkify(
+        _ markdown: String,
+        sessionId: String?,
+        ledger: Ledger = Ledger()
+    ) -> String {
         guard markdown.contains("#") || markdown.contains("/pull/") else { return markdown }
         let contextRepo = sessionId.flatMap { index.repos[$0] }
         return MarkdownProse.rewrite(markdown) { line in
             guard line.contains("#") || line.contains("/pull/") else { return line }
-            return rewriteMentions(in: retargetLinks(in: line), repo: contextRepo)
+            return rewriteMentions(
+                in: retargetLinks(in: line),
+                repo: contextRepo,
+                ledger: ledger
+            )
         }
     }
 
@@ -233,7 +268,11 @@ enum PrLinks {
         return result
     }
 
-    private static func rewriteMentions(in line: String, repo contextRepo: String?) -> String {
+    private static func rewriteMentions(
+        in line: String,
+        repo contextRepo: String?,
+        ledger: Ledger
+    ) -> String {
         let ns = line as NSString
         var result = ""
         var cursor = 0
@@ -243,7 +282,8 @@ enum PrLinks {
         ) {
             // Group 1 matched: an existing link or code span, copied verbatim.
             guard match.range(at: 1).location == NSNotFound else { continue }
-            guard let chip = chip(for: match, in: ns, repo: contextRepo) else { continue }
+            guard let chip = chip(for: match, in: ns, repo: contextRepo, ledger: ledger)
+            else { continue }
             result += ns.substring(with: NSRange(
                 location: cursor,
                 length: match.range.location - cursor
@@ -261,7 +301,8 @@ enum PrLinks {
     private static func chip(
         for match: NSTextCheckingResult,
         in ns: NSString,
-        repo contextRepo: String?
+        repo contextRepo: String?,
+        ledger: Ledger
     ) -> String? {
         if match.range(at: 2).location != NSNotFound {
             guard let reference = reference(
@@ -271,7 +312,7 @@ enum PrLinks {
             ) else { return nil }
             // A pasted URL is labelled like a mention: the address is 50
             // characters of noise, and the chip already says it is a PR.
-            return link(label: "PR #\(reference.number)", to: reference)
+            return link(label: "PR #\(reference.number)", to: reference, ledger: ledger)
         }
         let cue = match.range(at: 6).location == NSNotFound
             ? ""
@@ -290,7 +331,7 @@ enum PrLinks {
         // The cue stays prose: it reads as `PR` + a chip labelled `#92`, so a
         // chip that already says PR doesn't also spell the word out.
         let written = ns.substring(with: match.range).dropFirst(cue.count)
-        return cue + link(label: String(written), to: reference)
+        return cue + link(label: String(written), to: reference, ledger: ledger)
     }
 
     /// The repo a mention points at, or nil when it can't be placed.
@@ -318,7 +359,13 @@ enum PrLinks {
         return nil
     }
 
-    private static func link(label: String, to reference: Reference) -> String {
+    /// A chip the first time a message names `reference`, a plain link on the
+    /// same private scheme after that: still tappable, still kept in the app,
+    /// just not another filled pill. The tone belongs to the chip alone.
+    private static func link(label: String, to reference: Reference, ledger: Ledger) -> String {
+        guard ledger.claim(reference) else {
+            return "[\(escaped(label))](\(destination(for: reference)))"
+        }
         let summary = index.states[Index.key(reference.repo, reference.number)]
         return TranscriptChip(
             kind: .pullRequest,
@@ -335,6 +382,13 @@ enum PrLinks {
                 ?? "Open PR \(reference.number)",
             destination: destination(for: reference)
         ).markdown
+    }
+
+    private static func escaped(_ label: String) -> String {
+        label
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "[", with: "\\[")
+            .replacingOccurrences(of: "]", with: "\\]")
     }
 
     private static func destination(for reference: Reference) -> String {

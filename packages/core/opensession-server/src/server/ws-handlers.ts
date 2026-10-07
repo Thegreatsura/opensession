@@ -909,11 +909,15 @@ export const websocketHandlers: WebSocketHandler<WSClientData> = {
               message,
             }),
           );
-          if (retryable)
+          if (retryable) {
+            console.warn(
+              `[ws] ${msg.type} for ${commandSessionId} failed (${message}); closing the socket so the client retries`,
+            );
             setTimeout(
               () => ws.close(1012, "Retry session command"),
               50,
             ).unref?.();
+          }
         } finally {
           kernelDispatchTokens.delete(kernelToken);
           kernelDispatchResults.delete(kernelToken);
@@ -1914,7 +1918,7 @@ export const websocketHandlers: WebSocketHandler<WSClientData> = {
     }
   },
 
-  close(ws) {
+  close(ws, code, reason) {
     if (sandboxWsClose(ws)) return;
     if (runnerWsClose(ws)) return;
     if (sandboxPortalRelayClose(ws)) return;
@@ -1926,6 +1930,11 @@ export const websocketHandlers: WebSocketHandler<WSClientData> = {
     releaseTranscriptV2(ws);
     leaveSession(ws);
     stopAllTerminals(ws); // the Shell tabs' PTYs die with their socket
-    console.log("WebSocket client disconnected");
+    // The close code tells a client that left (1001, 1005, 1006) from one
+    // this server sent away, which is what separates a flaky network from a
+    // reconnect loop the server causes.
+    console.log(
+      `WebSocket client disconnected code=${code}${reason ? ` reason=${JSON.stringify(reason)}` : ""}`,
+    );
   },
 };

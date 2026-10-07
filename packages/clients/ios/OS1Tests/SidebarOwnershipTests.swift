@@ -103,11 +103,14 @@ final class CollaboratorLensTests: XCTestCase {
             SidebarAddition.intent(
                 for: session,
                 siblings: [session],
-                claims: [],
-                hidden: false,
-                viewerName: "Grace Hopper",
-                viewerLogin: "ghopper",
-                collaborators: collaborators
+                lens: PeopleLens(
+                    names: ["grace hopper", "grace", "ghopper"],
+                    claims: [],
+                    collaborators: collaborators.isEmpty ? [:] : ["ws-1": collaborators],
+                    viewerName: "Grace Hopper",
+                    viewerLogin: "ghopper"
+                ),
+                hidden: false
             )
         }
 
