@@ -486,6 +486,7 @@ function parseConfig(text: string): OpenSessionConfig {
         publicBaseUrl: str(server.publicBaseUrl),
         previewHost: str(server.previewHost),
         caddyAdmin: str(server.caddyAdmin),
+        trustForwardedFor: bool(server.trustForwardedFor),
       });
     }
 
