@@ -31,6 +31,7 @@ import {
   resolveSlackChannel,
 } from "../slack/channel-directory";
 import { shippedChangesChannel } from "./constants";
+import { slackMessageLength } from "../../shared/slack-mentions";
 
 export interface ShippedVisualChange {
   sessionId: string;
@@ -216,11 +217,15 @@ export function shippedChangeOneLiner(markdown: string, max = 280): string {
   return `${clipped.slice(0, wordBoundary > max * 0.7 ? wordBoundary : undefined).trimEnd()}…`;
 }
 
-function slackText(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+export function slackText(value: string): string {
+  return (
+    value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      // A person picked in the composer stays a real mention.
+      .replace(/&lt;@([UW][A-Z0-9]{2,})&gt;/g, "<@$1>")
+  );
 }
 
 export function shippedChangeChannels(): ShippedChangeChannel[] {
@@ -237,7 +242,7 @@ export function shippedChangeChannels(): ShippedChangeChannel[] {
 export function normalizeShippedChangeMessage(value: unknown): string {
   if (typeof value !== "string") return "";
   const message = value.replace(/\s+/g, " ").trim();
-  if (message.length > 500)
+  if (slackMessageLength(message) > 500)
     throw new Error("Slack message must be 500 characters or fewer");
   return message;
 }

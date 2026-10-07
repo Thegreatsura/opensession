@@ -10,6 +10,7 @@ import {
   shippedChangeAnnouncementKey,
   shippedChangeOneLiner,
   normalizeShippedChangeMessage,
+  slackText,
   validWalkthroughScreenshot,
   validFeaturedScreenshot,
 } from "./shipped-change-notify";
@@ -191,5 +192,13 @@ describe("shipped change announcement receipts", () => {
     expect(
       claimShippedChangeAnnouncement(retryKey, statePath, 3_001),
     ).toBeString();
+  });
+});
+
+describe("slackText", () => {
+  test("escapes markup but keeps user mentions", () => {
+    expect(slackText("<@U02ALEXK> fixed a < b & <!channel>")).toBe(
+      "<@U02ALEXK> fixed a &lt; b &amp; &lt;!channel&gt;",
+    );
   });
 });

@@ -1,8 +1,15 @@
 import React, { useEffect, useEffectEvent, useRef, useState } from "react";
 import {
   fetchShippedChangeChannels,
+  fetchSlackUsers,
   updateSlackComposer,
 } from "../lib/api/shipped-changes";
+import {
+  decodeSlackMentions,
+  encodeSlackMentions,
+  type SlackMentionUser,
+} from "../../shared/slack-mentions";
+import { useSlackMentions } from "./useSlackMentions";
 import { imageFilesFromPaste, uploadFile } from "../lib/images";
 import { noAutofill } from "../lib/composer-autofill";
 import { Button } from "../ui/button";
@@ -151,6 +158,32 @@ export function ShippedChangeComposer({
   const [canUploadImages, setCanUploadImages] = useState(true);
   const [composingAfterSent, setComposingAfterSent] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [slackUsers, setSlackUsers] = useState<SlackMentionUser[]>([]);
+  // Name -> Slack id for every person mentioned, so the sent text notifies
+  // them while the textarea keeps showing "@Name".
+  const mentionsRef = useRef(new Map<string, string>());
+  const readable = (text: string) => {
+    const decoded = decodeSlackMentions(text, slackUsers);
+    for (const [name, id] of decoded.mentions)
+      mentionsRef.current.set(name, id);
+    return decoded.text;
+  };
+  const slackMessage = (text: string) =>
+    encodeSlackMentions(text, mentionsRef.current);
+  // A pick counts as an edit. It has its own ref because the compiler
+  // freezes whatever the picker's callback captures.
+  const mentionPickedRef = useRef(false);
+  const mentions = useSlackMentions({
+    value: message,
+    onPick: (next, user) => {
+      mentionsRef.current.set(user.name, user.id);
+      mentionPickedRef.current = true;
+      setMessage(next);
+    },
+    textareaRef,
+    users: slackUsers,
+  });
   const sessionRef = useRef(sessionId);
   const draftDirtyRef = useRef(false);
   // A channel the person picked stays picked when a suggested one arrives.
@@ -163,15 +196,21 @@ export function ShippedChangeComposer({
     const sessionChanged = sessionRef.current !== sessionId;
     if (sessionChanged) {
       draftDirtyRef.current = false;
+      mentionPickedRef.current = false;
       channelPickedRef.current = false;
+      mentionsRef.current = new Map();
     }
     // A new default (the written draft arriving after the title fallback, a
     // walkthrough landing) replaces the text only while it is still ours;
     // once the person has typed, their words stay.
-    if (!draftDirtyRef.current) {
-      setMessage(defaultMessage);
+    const dirty = draftDirtyRef.current || mentionPickedRef.current;
+    if (!dirty) {
+      const decoded = decodeSlackMentions(defaultMessage, slackUsers);
+      for (const [name, id] of decoded.mentions)
+        mentionsRef.current.set(name, id);
+      setMessage(decoded.text);
     }
-    if (sessionChanged || (draftId && !draftDirtyRef.current)) {
+    if (sessionChanged || (draftId && !dirty)) {
       sessionRef.current = sessionId;
       setScreenshots(
         [...(screenshot ? [screenshot] : []), ...(initialScreenshots || [])]
@@ -179,7 +218,24 @@ export function ShippedChangeComposer({
           .slice(0, 10),
       );
     }
-  }, [defaultMessage, screenshot, initialScreenshots, sessionId, draftId]);
+    // slackUsers: a draft's mention tokens read as names once the roster lands.
+  }, [
+    defaultMessage,
+    screenshot,
+    initialScreenshots,
+    sessionId,
+    draftId,
+    slackUsers,
+  ]);
+  useEffect(() => {
+    let current = true;
+    void fetchSlackUsers().then((users) => {
+      if (current) setSlackUsers(users);
+    });
+    return () => {
+      current = false;
+    };
+  }, []);
   useEffect(() => {
     setScreenshots((current) =>
       screenshot && !current.includes(screenshot)
@@ -211,7 +267,8 @@ export function ShippedChangeComposer({
             )!.id
           : result.channels[0]?.id || "";
         setChannel((current) =>
-          ((draftId && draftDirtyRef.current) || channelPickedRef.current) &&
+          ((draftId && (draftDirtyRef.current || mentionPickedRef.current)) ||
+            channelPickedRef.current) &&
           result.channels.some((candidate) => candidate.id === current)
             ? current
             : preferredChannel,
@@ -237,7 +294,7 @@ export function ShippedChangeComposer({
       sessionId,
       {
         requestId: draftId,
-        message,
+        message: slackMessage(message),
         channel,
         screenshots,
       },
@@ -349,7 +406,7 @@ export function ShippedChangeComposer({
         {...sent}
         onUndo={onUndo}
         onSendAnother={() => {
-          setMessage(nextMessage?.trim().slice(0, 500) || "");
+          setMessage(readable(nextMessage?.trim().slice(0, 500) || ""));
           setScreenshots([]);
           setComposingAfterSent(true);
         }}
@@ -397,8 +454,11 @@ export function ShippedChangeComposer({
         }}
       >
         <textarea
+          ref={textareaRef}
+          {...mentions.inputProps}
           className="block min-h-14 max-h-32 w-full resize-none border-0 bg-transparent p-0 text-body leading-[1.55] text-fg outline-none [field-sizing:content] placeholder:text-faint phone:text-input-phone"
           aria-label="Slack message"
+          placeholder="Type @ to mention someone"
           {...noAutofill}
           value={message}
           maxLength={500}
@@ -407,7 +467,11 @@ export function ShippedChangeComposer({
             draftDirtyRef.current = true;
             setMessage(event.target.value);
           }}
+          onKeyUp={mentions.sync}
+          onClick={mentions.sync}
+          onBlur={mentions.close}
           onKeyDown={(event) => {
+            if (mentions.handleKeyDown(event)) return;
             // Cmd+Enter (Ctrl+Enter off Mac) sends; plain Enter stays a newline.
             if (
               event.key !== "Enter" ||
@@ -416,7 +480,8 @@ export function ShippedChangeComposer({
             )
               return;
             event.preventDefault();
-            if (canSend) onShare(message.trim(), channel, screenshots);
+            if (canSend)
+              onShare(slackMessage(message.trim()), channel, screenshots);
           }}
           onPaste={(event) => {
             const files = imageFilesFromPaste(event);
@@ -426,6 +491,7 @@ export function ShippedChangeComposer({
             }
           }}
         />
+        {mentions.popup}
         {screenshots.length > 0 && (
           <div className="mt-0.5 flex gap-2 overflow-x-auto pt-2 pr-2 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {screenshots.map((path, index) => (
@@ -528,7 +594,7 @@ export function ShippedChangeComposer({
             onClick={() =>
               needsReconnect
                 ? void reconnect()
-                : onShare(message.trim(), channel, screenshots)
+                : onShare(slackMessage(message.trim()), channel, screenshots)
             }
           >
             {awaitingSlack

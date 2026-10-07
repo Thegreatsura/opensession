@@ -1,5 +1,6 @@
 import type { SessionSlackShare } from "../types";
 import { request } from "./request";
+import type { SlackMentionUser } from "../../../shared/slack-mentions";
 
 export function shareShippedChange(
   sessionId: string,
@@ -176,4 +177,20 @@ export function cancelSlackComposer(
     body: { requestId },
     label: "Couldn't close the Slack composer",
   });
+}
+
+let slackUsers: Promise<SlackMentionUser[]> | null = null;
+
+/** The workspace roster for the composer's "@" picker, fetched once per page
+ *  load. A failure is retried the next time a composer asks. */
+export function fetchSlackUsers(): Promise<SlackMentionUser[]> {
+  slackUsers ??= request<{ users: SlackMentionUser[] }>("/slack/users", {
+    label: "Couldn't load Slack people",
+  })
+    .then((result) => result.users || [])
+    .catch(() => {
+      slackUsers = null;
+      return [];
+    });
+  return slackUsers;
 }

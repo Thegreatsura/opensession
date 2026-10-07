@@ -117,6 +117,19 @@ export async function handleSlackChannelRoutes(
     return Response.json(await slackChannelsPayload(ctx));
   }
 
+  // The composer's "@" picker. Signed-in only: it is the workspace roster.
+  if (path === "/api/slack/users" && req.method === "GET") {
+    if (!ctx.authUser?.login && !ctx.authUser?.name)
+      return Response.json({ error: "Sign in first" }, { status: 401 });
+    const { demoSlackMentionUsers, slackMentionUsers } =
+      await import("../../agents/slack/user-directory");
+    const users =
+      process.env.OPENSESSION_DEMO === "1"
+        ? demoSlackMentionUsers()
+        : await slackMentionUsers();
+    return Response.json({ users });
+  }
+
   // Viewing the pane marks the channel read (as Slack itself does) — moves
   // the caller's OWN read cursor via their grant, so the sidebar unread dot
   // clears. No grant → no-op (the bot has no per-user cursor to move).

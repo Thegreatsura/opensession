@@ -27,6 +27,7 @@ import {
   resolveSlackChannel,
 } from "../../agents/slack/channel-directory";
 import type { RouteContext } from "./context";
+import { slackMessageLength } from "../../shared/slack-mentions";
 
 /** The channel to post to: any the caller can reach, with the configured
  *  default when the composer sent none. */
@@ -167,7 +168,7 @@ export async function handleSlackComposeRoutes(
 
   if (ctx.req.method === "PATCH") {
     const message = typeof body?.message === "string" ? body.message : "";
-    if (message.length > 500)
+    if (slackMessageLength(message) > 500)
       return Response.json(
         { error: "Slack message must be 500 characters or fewer" },
         { status: 400 },
@@ -200,7 +201,7 @@ export async function handleSlackComposeRoutes(
       { status: 400 },
     );
   const message = typeof body?.message === "string" ? body.message.trim() : "";
-  if (message.length > 500)
+  if (slackMessageLength(message) > 500)
     return Response.json(
       { error: "Slack message must be 500 characters or fewer" },
       { status: 400 },
