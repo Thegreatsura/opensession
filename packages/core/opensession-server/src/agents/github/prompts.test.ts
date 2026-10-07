@@ -190,3 +190,11 @@ describe("auto-fix scope governor", () => {
     expect(prompt).toContain("roughly double the size of the original change");
   });
 });
+
+describe("auto-fix prompt", () => {
+  test("marks feedback from outside the trusted set as untrusted data", () => {
+    const prompt = buildAutoFixPrompt(pr(), "", [], 1);
+    expect(prompt).toContain("from trusted authors");
+    expect(prompt).toContain("untrusted data");
+  });
+});

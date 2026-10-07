@@ -25,6 +25,7 @@ import {
   noteGhRateLimited,
 } from "../../server/github-limit";
 import { noteGithubGraphqlCall } from "../../server/github-budget";
+import { isTrustedGithubLogin } from "../../server/shared/user-mappings";
 /** The PR agent's target — the instance's default repo (config-driven). */
 export const GITHUB_REPO = defaultRepo().ghRepo;
 /** The bot account our token posts as — used to recognise our own comments/events. */
@@ -311,6 +312,8 @@ export interface ReviewCommentInfo {
   line: number | null;
   body: string;
   login: string;
+  /** GitHub account type ("User", "Bot", "Organization"). */
+  userType: string;
   outdated: boolean;
 }
 
@@ -332,6 +335,7 @@ async function listReviewComments(
       line: typeof c.line === "number" ? c.line : null,
       body: typeof c.body === "string" ? c.body : "",
       login: c.user?.login || "",
+      userType: c.user?.type || "",
       outdated: c.line == null && c.original_line != null,
     }))
     .reverse();
@@ -339,6 +343,7 @@ async function listReviewComments(
 
 export interface ReviewInfo {
   login: string;
+  userType: string;
   body: string;
   state: string;
 }
@@ -357,6 +362,7 @@ async function listReviews(
     .filter((rv) => typeof rv.body === "string" && rv.body.trim())
     .map((rv) => ({
       login: rv.user?.login || "",
+      userType: rv.user?.type || "",
       body: rv.body,
       state: rv.state || "",
     }));
@@ -714,28 +720,41 @@ export async function removeLabel(
 }
 
 /**
- * All open review feedback on the PR, formatted for a fix prompt — inline
- * comments AND review summaries, from EVERY reviewer (the agent, Greptile, humans),
- * each tagged with its author so the agent addresses them all (not just the agent's,
- * not just CI). Skips outdated inline comments and the agent's own boilerplate review
- * body. Returns "" when there's nothing. Shared by auto-fix and the review handoff.
+ * Whether review feedback by this author may be handed to a fixing agent as
+ * work to do. The fixer runs with a shell and push rights, so on a public
+ * repository a comment from an arbitrary GitHub account must never become its
+ * instructions. Trusted: our own bot, roster members (isTrustedGithubLogin),
+ * and GitHub App accounts (type "Bot"), which can only act on a repository
+ * whose owner installed them. Everyone else fails closed.
  */
-export async function fetchReviewFindings(
-  prNumber: number,
-  ghRepo?: string,
-): Promise<string> {
-  const [comments, reviews] = await Promise.all([
-    listReviewComments(prNumber, ghRepo),
-    listReviews(prNumber, ghRepo),
-  ]);
+export function isTrustedFeedbackAuthor(
+  login: string | null | undefined,
+  userType?: string | null,
+): boolean {
+  if (!login) return false;
+  return (
+    isGithubBotLogin(login) ||
+    isTrustedGithubLogin(login) ||
+    (userType === "Bot" && login.toLowerCase().endsWith("[bot]"))
+  );
+}
+
+/** Pure formatter behind fetchReviewFindings, exported for tests. */
+export function formatReviewFindings(
+  comments: ReviewCommentInfo[],
+  reviews: ReviewInfo[],
+): string {
   const lines: string[] = [];
-  for (const c of comments.filter((c) => !c.outdated && c.line != null)) {
+  for (const c of comments) {
+    if (c.outdated || c.line == null) continue;
+    if (!isTrustedFeedbackAuthor(c.login, c.userType)) continue;
     // `comment <id>` lets the agent reply in that thread after fixing.
     lines.push(
       `- [@${c.login} · comment ${c.id}] ${c.path}:${c.line} — ${c.body.replace(/\s+/g, " ").trim().slice(0, 400)}`,
     );
   }
   for (const rv of reviews) {
+    if (!isTrustedFeedbackAuthor(rv.login, rv.userType)) continue;
     // Skip the agent's own short review boilerplate. Inline comments already
     // carry its findings.
     if (
@@ -751,4 +770,22 @@ export async function fetchReviewFindings(
     );
   }
   return lines.join("\n");
+}
+
+/**
+ * Open review feedback on the PR, formatted for a fix prompt: inline comments
+ * AND review summaries from trusted authors only (our bot, the team roster,
+ * installed GitHub Apps), each tagged with its author. Skips outdated inline
+ * comments and the agent's own boilerplate review body. Returns "" when there's
+ * nothing. Shared by auto-fix and the review handoff.
+ */
+export async function fetchReviewFindings(
+  prNumber: number,
+  ghRepo?: string,
+): Promise<string> {
+  const [comments, reviews] = await Promise.all([
+    listReviewComments(prNumber, ghRepo),
+    listReviews(prNumber, ghRepo),
+  ]);
+  return formatReviewFindings(comments, reviews);
 }
