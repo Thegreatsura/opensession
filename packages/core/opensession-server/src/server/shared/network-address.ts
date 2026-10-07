@@ -24,12 +24,6 @@ export function isTailnetIpv4(address: string): boolean {
   );
 }
 
-/** Tailscale CGNAT plus loopback for a self-hosted single-box installation. */
-export function isTailnetAddress(address: string): boolean {
-  const ip = normalizeAddress(address);
-  return ip === "127.0.0.1" || ip === "::1" || isTailnetIpv4(ip);
-}
-
 /** RFC1918 + loopback + link-local (cloud metadata) + CGNAT/tailnet +
  * multicast/reserved, and the IPv6 equivalents. */
 export function isBlockedAddress(ip: string): boolean {

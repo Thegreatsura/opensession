@@ -6,7 +6,6 @@ import {
   authenticateRunner,
   createRunnerPairing,
   bindRunnerPairingMigration,
-  isTailnetAddress,
   listRunners,
   normalizeAddress,
   registerRunner,
@@ -51,17 +50,21 @@ function register(
 }
 
 describe("Runner registry security", () => {
-  test("accepts only tailnet and loopback addresses", () => {
-    for (const address of ["100.64.0.1", "100.127.255.254", "127.0.0.1", "::1"])
-      expect(isTailnetAddress(address)).toBe(true);
+  test("registers only from a tailnet origin, before spending the code", () => {
     for (const address of [
       "100.63.255.255",
       "100.128.0.1",
       "10.0.0.1",
       "192.168.1.1",
+      "127.0.0.1",
+      "::1",
       "",
-    ])
-      expect(isTailnetAddress(address)).toBe(false);
+    ]) {
+      const { code } = createRunnerPairing("tester");
+      const rejected = register({ code, address });
+      expect(rejected.ok).toBe(false);
+      expect(register({ code }).ok).toBe(true);
+    }
     expect(normalizeAddress("::ffff:100.64.0.1")).toBe("100.64.0.1");
   });
 

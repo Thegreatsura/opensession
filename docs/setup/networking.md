@@ -152,6 +152,11 @@ where Open Session is actually listening. Configure the proxy with the
 certificate files and bind the proxy itself to the tailnet address. A proxy
 adds TLS, not authentication.
 
+Runners that reach the server through such a proxy are refused until you also
+set `"server": { "trustForwardedFor": true }`, which lets the Runner tailnet
+gate read the proxy's `X-Forwarded-For` header. Set it only when that proxy
+fronts every route to the server; see [Runners](../runners.md#the-tailnet-gate).
+
 ### Verify you are actually private
 
 ```sh

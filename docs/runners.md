@@ -29,6 +29,27 @@ Connect cannot install a service, it says why;
 The Runner connects outbound over the tailnet. Open Session never dials into
 the machine.
 
+### The tailnet gate
+
+Pairing, heartbeats and the Runner channel are accepted only from a Tailscale
+address (`100.64.0.0/10`), on top of the pairing code and Runner token. The
+server decides from the connection it receives:
+
+- **Open Session listens on a tailnet address.** The connecting address is
+  checked directly. With the source install's supervisor, its proxy listening
+  on a tailnet address vouches for every client it relays.
+- **A loopback connection is never enough on its own.** SSH forwards, private
+  tunnels and local proxies all arrive from `127.0.0.1`, whoever the real
+  client is. A Runner reaching the server this way is refused.
+- **A TLS reverse proxy on the tailnet in front of loopback** (the setup in
+  [networking](setup/networking.md#nicer-urls-and-https)) must say who the
+  client is. Set `"server": { "trustForwardedFor": true }` in
+  `~/.opensession/config.json`, or `OPENSESSION_TRUST_FORWARDED_FOR=1`, and the
+  last `X-Forwarded-For` hop must be a tailnet address. Enable this only when a
+  proxy that overwrites that header fronts every route to the server, as Caddy
+  does by default. Clients can set the header themselves through an SSH
+  forward or a raw tunnel.
+
 A paired Apple silicon Mac can also host **Mac VM** Sandboxes: isolated macOS
 virtual machines, one per session, driven through the same Runner channel. See
 [self-hosting-sandboxes.md](self-hosting-sandboxes.md#mac-vm-tart-on-a-mac-runner)
