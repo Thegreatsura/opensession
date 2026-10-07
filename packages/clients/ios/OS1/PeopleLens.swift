@@ -42,6 +42,10 @@ struct PeopleLens {
     var mentions: Set<String> = []
     /// Workspace id to the names of the teammates added to it.
     var collaborators: [String: [String]] = [:]
+    /// Your display name and GitHub login as typed, for the loose prefix
+    /// match every native surface uses (`MessageAttribution.isViewer`).
+    var viewerName = ""
+    var viewerLogin = ""
 
     /// The collaborator lists of the workspaces that have any, keyed by id.
     static func collaboratorIndex(
@@ -73,7 +77,9 @@ struct PeopleLens {
             roster: TeamDirectory.shared.displayNames,
             claims: LaneStore.shared.claims,
             mentions: MentionStore.shared.sessionIds,
-            collaborators: WorkspaceCollaboratorsStore.shared.index
+            collaborators: WorkspaceCollaboratorsStore.shared.index,
+            viewerName: user,
+            viewerLogin: login
         )
     }
 
@@ -82,6 +88,11 @@ struct PeopleLens {
         let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !normalized.isEmpty else { return false }
         if names.contains(normalized) { return true }
+        if MessageAttribution.isViewer(
+            normalized,
+            viewerName: viewerName,
+            viewerLogin: viewerLogin
+        ) { return true }
         guard let canonical = ArchivedOwners.canonical(name, in: roster)?.lowercased() else {
             return false
         }
@@ -130,11 +141,38 @@ struct PeopleLens {
     /// sessions is — a workspace is shared work, not a possession.
     func owns(_ workspace: SidebarWorkspace) -> Bool {
         if workspace.isDraftWorkspace,
-           let owner = workspace.workspace?.createdBy?.lowercased() {
-            return names.contains(owner) || collaborates(on: workspace)
+           let owner = workspace.workspace?.createdBy {
+            return isViewer(owner) || collaborates(on: workspace)
         }
         if collaborates(on: workspace) { return true }
         return workspace.sessions.contains { isMine($0) || mentions.contains($0.id) }
+    }
+}
+
+// ── Sidebar membership ──────────────────────────────────────────────────────
+// The row menu's one membership action, decided by the same rule that files a
+// row under "me" (`rowBelongsToPerson` in src/frontend/lib/sidebar-derived.ts
+// drives both on the web). Hide is offered exactly for the rows your sidebar
+// already holds, Keep for the rest, Restore for a hidden row. Two rules here
+// would offer Hide on a row the lens never shows, or Keep on one it does.
+
+/// The single sidebar-membership action a row offers.
+enum SidebarMembership: Equatable {
+    /// Outside your sidebar: claim it in.
+    case keep
+    /// Already in your sidebar: hide it.
+    case hide
+    /// Hidden by you: bring it back.
+    case restore
+}
+
+extension PeopleLens {
+    /// `owns` is the "me" lens: you started one of the row's ordinary sessions
+    /// (spawned work included), claimed one, were tagged in one, were added to
+    /// its workspace, or parked its draft.
+    func membership(of workspace: SidebarWorkspace, hidden: Bool) -> SidebarMembership {
+        if hidden { return .restore }
+        return owns(workspace) ? .hide : .keep
     }
 }
 
