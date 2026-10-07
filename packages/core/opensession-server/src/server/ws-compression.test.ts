@@ -45,7 +45,10 @@ test("Bun ends a short compressed message with a BFINAL block", async () => {
     websocket: {
       perMessageDeflate: { compress: "shared", decompress: "shared" },
       open(ws) {
-        ws.send(JSON.stringify({ type: "transcript_append", text: "hi" }), true);
+        ws.send(
+          JSON.stringify({ type: "transcript_append", text: "hi" }),
+          true,
+        );
       },
       message() {},
     },

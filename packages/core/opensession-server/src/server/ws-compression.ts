@@ -18,6 +18,7 @@ export function clientAcceptsCompressedFrames(
   if (!userAgent) return true;
   if (/\bCFNetwork\//.test(userAgent)) return false;
   return !(
-    /\bAppleWebKit\//.test(userAgent) && !/\b(?:Chrome|Chromium)\//.test(userAgent)
+    /\bAppleWebKit\//.test(userAgent) &&
+    !/\b(?:Chrome|Chromium)\//.test(userAgent)
   );
 }
