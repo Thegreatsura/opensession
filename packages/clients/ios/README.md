@@ -314,7 +314,10 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   session's staged file channel before Start becomes available.
 - **AskUserQuestion:** blocking questions render as an inline card with option
   buttons + free-text answer, wired to `answer_question`. After you submit, the
-  card becomes a read-only receipt showing the question and your answer.
+  card becomes a read-only receipt showing the question and your answer. The
+  card's X dismisses without answering: it sends `answers: null`, the asking
+  run proceeds on its own judgment, and the server's `ask_resolved` (sent even
+  for a card it no longer holds) retires the card on every open client.
 - **Review progress** — the PR code page tracks which files you reviewed
   and which changed after you did. GitHub PRs use GitHub's viewed state
   (`GET /api/pr-viewed-files`, whose `changed` list is GitHub's DIRTY state);
@@ -652,7 +655,7 @@ OS1/
     WalkthroughCard.swift    Published walkthrough: demo video, writeup, stills
     MarkdownBody.swift       Streaming/durable markdown rendering, block switch
     Blocks/                  One view per block kind (choices, tree, compare, …)
-    AskQuestionCard.swift    Options + free text answer
+    AskQuestionCard.swift    Options, free text answer, dismiss
     PrPanel.swift            Pull-request overview, actions, and review entry
     PrReviewCanvas.swift     Committed diff, inline pending comments, guide steps
     PrReviewProgressViews.swift  Review progress, changed-since-review, step chips
