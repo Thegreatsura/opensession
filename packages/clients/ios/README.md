@@ -37,9 +37,15 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   one, sharing `/api/hides` — while the session keeps running for everyone else.
   A hidden row comes back while one of its sessions is blocked on a question,
   prompting in a session clears its hide, and search ignores hides, so a hidden
-  row stays findable and its menu offers "Restore to my sidebar". An open
-  teammate, automation, or spawned session can also be claimed from its native
-  action surface with "Add to sidebar", sharing `/api/lanes` with the web.
+  row stays findable and its menu offers "Restore to sidebar". The row menu
+  (phone and Mac) offers one membership action, decided by the "me" lens's own
+  rule (`PeopleLens.membership`): "Hide from sidebar" for a row your sidebar
+  already holds (your own or spawned work, a claim, a mention, a collaborator
+  entry), "Keep in sidebar" for any other row, which claims it into
+  `/api/lanes` like the web, and "Restore to sidebar" for a hidden one. A Mac
+  session row hides under its workspace's key, as the web draws it. An open
+  session outside your sidebar offers the same claim from its native action
+  surface as "Add to sidebar".
   A row's menu also adds or removes workspace collaborators
   (`/api/workspaces/:id/collaborators`): a collaborator gets the workspace in
   their own lanes and teammate lens, its review requests are not asks of them,
