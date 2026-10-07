@@ -267,6 +267,135 @@ final class PrLinksTests: XCTestCase {
         XCTAssertNil(index.states[key("opensession", 6)])
     }
 
+    // MARK: - One chip per PR per message
+
+    private func chipCount(_ markdown: String) -> Int {
+        markdown.components(separatedBy: "[os1chip](").count - 1
+    }
+
+    /// The web's rule: the first mention is the chip, later ones are
+    /// ordinary links that still open the same review, never github.com.
+    func testRepeatedMentionAcrossParagraphsIsOneChip() {
+        let raw = PrLinks.linkify(
+            "#5528 fixes it.\n\n**opensession#5528** lands first, then PR #5528.",
+            sessionId: session
+        )
+        XCTAssertEqual(chipCount(raw), 1, raw)
+        XCTAssertEqual(
+            chipsAsLinks(raw),
+            "[#5528](os1pr:opensession/5528) fixes it.\n\n"
+                + "**[opensession#5528](os1pr:opensession/5528)** lands first, "
+                + "then PR [#5528](os1pr:opensession/5528)."
+        )
+    }
+
+    /// A pasted URL and a mention are the same PR, so they share one chip;
+    /// the repeat keeps the URL's short label and the private scheme.
+    func testUrlAfterAMentionIsAQuietLink() {
+        let raw = PrLinks.linkify(
+            "opened #5528\nsee https://github.com/tellahq/opensession/pull/5528",
+            sessionId: session
+        )
+        XCTAssertEqual(chipCount(raw), 1, raw)
+        XCTAssertTrue(raw.hasSuffix("see [PR #5528](os1pr:opensession/5528)"), raw)
+    }
+
+    /// Only the same repo AND number is the same PR.
+    func testDistinctReposAndNumbersEachGetAChip() {
+        let raw = PrLinks.linkify(
+            "#5528 and tella-fusion#5528 and #5832, then #5528 and tella-fusion#5528.",
+            sessionId: session
+        )
+        XCTAssertEqual(chipCount(raw), 3, raw)
+        XCTAssertTrue(
+            raw.hasSuffix("then [#5528](os1pr:opensession/5528) and "
+                + "[tella-fusion#5528](os1pr:tella-fusion/5528)."),
+            raw
+        )
+    }
+
+    /// The state tone belongs to the chip: the first mention carries it, and
+    /// a repeat is a plain link with no chip parameters at all.
+    func testToneStaysOnTheFirstChip() {
+        let raw = PrLinks.linkify("opensession#92 merged. #92 is done.", sessionId: session)
+        XCTAssertEqual(chipCount(raw), 1, raw)
+        XCTAssertEqual(chipParameter("chipTone", in: raw), "purple")
+        XCTAssertTrue(raw.hasSuffix(" [#92](os1pr:opensession/92) is done."), raw)
+    }
+
+    /// An explicit link keeps the label its author wrote and stays a link; it
+    /// neither becomes a chip nor uses up the chip a later mention gets.
+    func testExplicitLinkNeitherChipsNorConsumesTheChip() {
+        let raw = PrLinks.linkify(
+            "see [the PR](https://github.com/tellahq/opensession/pull/5528), #5528, and #5528",
+            sessionId: session
+        )
+        XCTAssertEqual(chipCount(raw), 1, raw)
+        XCTAssertEqual(
+            chipsAsLinks(raw),
+            "see [the PR](os1pr:opensession/5528), [#5528](os1pr:opensession/5528), "
+                + "and [#5528](os1pr:opensession/5528)"
+        )
+    }
+
+    /// Code is not a mention, so it can't use up the chip either.
+    func testCodeNeitherLinksNorConsumesTheChip() {
+        let raw = PrLinks.linkify(
+            "`#5528`\n\n```\n#5528\n```\n\nthen #5528 and #5528",
+            sessionId: session
+        )
+        XCTAssertEqual(chipCount(raw), 1, raw)
+        XCTAssertTrue(raw.hasPrefix("`#5528`\n\n```\n#5528\n```\n\nthen [os1chip]("), raw)
+        XCTAssertTrue(raw.hasSuffix(" and [#5528](os1pr:opensession/5528)"), raw)
+    }
+
+    /// The ledger is the message boundary: pieces of one message rendered
+    /// apart (prose, a table cell, a callout) share one; a new message, or a
+    /// call without one, starts over.
+    func testLedgerIsTheMessageBoundary() {
+        let message = PrLinks.Ledger()
+        let prose = PrLinks.linkify("opened #5528", sessionId: session, ledger: message)
+        let cell = PrLinks.linkify("#5528", sessionId: session, ledger: message)
+        XCTAssertEqual(chipCount(prose), 1, prose)
+        XCTAssertEqual(cell, "[#5528](os1pr:opensession/5528)")
+
+        // A nested body (callout, slide) starts from what came before it.
+        let callout = PrLinks.Ledger(drawn: message.drawn)
+        XCTAssertEqual(
+            PrLinks.linkify("#5528", sessionId: session, ledger: callout),
+            "[#5528](os1pr:opensession/5528)"
+        )
+
+        let next = PrLinks.linkify("merged #5528", sessionId: session)
+        XCTAssertEqual(chipCount(next), 1, next)
+    }
+
+    /// A row re-renders whenever a registry changes, and the text grows while
+    /// it settles out of the stream. Each render is the whole message from
+    /// scratch, so the chip never migrates or disappears.
+    func testRerenderingAMessageIsStable() {
+        let first = PrLinks.linkify("opened #5528", sessionId: session)
+        let grown = PrLinks.linkify("opened #5528, then #5528 again", sessionId: session)
+        XCTAssertEqual(PrLinks.linkify("opened #5528", sessionId: session), first)
+        XCTAssertTrue(grown.hasPrefix(first), grown)
+        XCTAssertEqual(chipCount(grown), 1, grown)
+        XCTAssertEqual(
+            PrLinks.linkify("opened #5528, then #5528 again", sessionId: session),
+            grown
+        )
+    }
+
+    /// A repeat is still a private-scheme link, so the transcript's `openURL`
+    /// handler claims it instead of Safari.
+    func testRepeatLinkReadsBackAsTheSameReference() throws {
+        let raw = PrLinks.linkify("#5528 #5528", sessionId: session)
+        let destination = try XCTUnwrap(raw.components(separatedBy: "](").last?.dropLast())
+        XCTAssertEqual(
+            PrLinks.reference(from: try XCTUnwrap(URL(string: String(destination)))),
+            PrLinks.Reference(repo: "opensession", number: 5528)
+        )
+    }
+
     // MARK: - Living beside the other rewrites
 
     /// The order `MarkdownBody` uses. A PR URL has to become a chip before

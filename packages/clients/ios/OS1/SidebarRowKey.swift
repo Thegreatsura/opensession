@@ -33,6 +33,14 @@ enum SidebarRowKeys {
         return rowKey(for: workspace)
     }
 
+    /// The keys a row's hide can be stored under: its own, and the shared
+    /// key the web writes for a Mac session row inside a workspace.
+    static func hideKeys(for workspace: SidebarWorkspace) -> [String] {
+        let own = rowKey(for: workspace)
+        let shared = sharedRowKey(for: workspace)
+        return own == shared ? [own] : [own, shared]
+    }
+
     /// Every row key a session can sit under. Used to clear an overlay entry
     /// (over-clearing is safe — it only ever restores a row) and to spot the
     /// hidden rows a blocked session should resurface.
