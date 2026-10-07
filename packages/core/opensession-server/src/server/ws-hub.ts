@@ -90,6 +90,9 @@ export interface WSClientData {
   transcriptV2?: boolean;
   /** User-agent provenance for presence diagnostics. */
   presenceClient?: string;
+  /** False for clients that cannot read Bun's short compressed frames
+   *  (ws-compression.ts). Stamped at upgrade. */
+  compressFrames?: boolean;
   /** Automated and hosted-loopback clients never appear in presence. */
   presenceSuppressed?: boolean;
   /** A local folder bridge (local-folders.ts), not a person's view. */

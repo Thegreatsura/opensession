@@ -150,6 +150,7 @@ import {
 } from "./src/server/session-social-card";
 import { sweepArchivedWorktrees } from "./src/server/worktree";
 import { type WSClientData, broadcastToAll } from "./src/server/ws-hub";
+import { clientAcceptsCompressedFrames } from "./src/server/ws-compression";
 import { mkdirSync, watch, writeFileSync } from "fs";
 import { join } from "node:path";
 
@@ -652,6 +653,9 @@ const server: import("bun").Server<WSClientData> = hotServe({
           // session. Local-profile clients are deliberately exempt: loopback is
           // their real user-facing transport.
           away: hostedLoopback || authUser?.automation === true,
+          compressFrames: clientAcceptsCompressedFrames(
+            req.headers.get("user-agent"),
+          ),
           // Internal presence provenance only: when a face is reported on a
           // session its owner never opened, the watch needs to be traceable to
           // web / native / TUI / a local-profile proxy without logging tokens.

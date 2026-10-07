@@ -332,10 +332,15 @@ function classifyV2Entries(entries: SeqEntry[]): SeqEntry[] {
 }
 
 function sendTranscriptFrame(
-  ws: { send(payload: string, compress?: boolean): unknown },
+  ws: {
+    send(payload: string, compress?: boolean): unknown;
+    data?: { compressFrames?: boolean };
+  },
   frame: Record<string, unknown>,
 ): void {
-  ws.send(JSON.stringify(frame), true);
+  // Apple networking clients reject Bun's short compressed frames; see
+  // ws-compression.ts.
+  ws.send(JSON.stringify(frame), ws.data?.compressFrames !== false);
 }
 
 async function sendTranscriptIndex(
