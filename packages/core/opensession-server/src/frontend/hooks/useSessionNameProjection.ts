@@ -11,7 +11,8 @@
  * the whole reference. A title is prose, and picking it apart a letter at a
  * time would leave half a name standing where a reference belongs.
  * The id rides the clipboard, so a copied reference still pastes as a
- * reference anywhere else.
+ * reference anywhere else. So does an ordinary space where the field showed a
+ * widened one beside a mention (MENTION_SPACE in lib/composer-highlight.ts).
  *
  * Undo needs its own bookkeeping: the browser's history holds the DISPLAY
  * text, so an entry that crosses a token has to be replayed against canonical
@@ -33,6 +34,7 @@ import {
   type ComposerSessionProjection,
   type DisplaySessionRange,
 } from "../lib/composer-session-projection";
+import { MENTION_SPACE, narrowMentionSpaces } from "../lib/composer-highlight";
 import { onSessionTitlesChanged } from "../lib/markdown";
 
 /** How a value reached the field, which decides what undo owes it. */
@@ -161,11 +163,14 @@ export function useSessionNameProjection({
   );
 
   const setDisplayText = (
-    next: string,
+    fieldText: string,
     selectionStart?: number,
     selectionEnd?: number,
     options?: SetDisplayTextOptions,
   ) => {
+    // The field may show a mention's neighbouring spaces widened; the draft
+    // never holds them.
+    const next = narrowMentionSpaces(fieldText);
     const resolvedStart = selectionStart ?? next.length;
     const resolvedEnd = selectionEnd ?? resolvedStart;
     const inputKind = options?.inputKind ?? "programmatic";
@@ -242,6 +247,7 @@ export function useSessionNameProjection({
   }
 
   function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>): boolean {
+    const value = narrowMentionSpaces(e.target.value);
     const inputType =
       e.nativeEvent instanceof InputEvent ? e.nativeEvent.inputType : "";
     const historyInput =
@@ -254,12 +260,12 @@ export function useSessionNameProjection({
         inputType === "historyUndo" &&
         history &&
         text === history.afterCanonical &&
-        e.target.value === history.beforeDisplay;
+        value === history.beforeDisplay;
       const redo =
         inputType === "historyRedo" &&
         history &&
         text === history.beforeCanonical &&
-        e.target.value === history.afterDisplay;
+        value === history.afterDisplay;
       if (history && (undo || redo)) {
         source.pop();
         (undo ? redoHistory.current : editHistory.current).push(history);
@@ -277,7 +283,7 @@ export function useSessionNameProjection({
     let editHint: ComposerDisplayEdit | undefined;
     if (before) {
       let { start, end } = before;
-      const removed = Math.max(0, displayText.length - e.target.value.length);
+      const removed = Math.max(0, displayText.length - value.length);
       const kind = inputType || before.inputType;
       if (start === end && kind.endsWith("Backward"))
         start = Math.max(0, start - removed);
@@ -292,14 +298,14 @@ export function useSessionNameProjection({
     if (before)
       options.beforeSelection = { start: before.start, end: before.end };
     setDisplayText(
-      e.target.value,
+      value,
       e.target.selectionStart,
       e.target.selectionEnd,
       options,
     );
     if (
       inputType === "historyUndo" &&
-      editHistory.current.at(-1)?.afterDisplay === e.target.value
+      editHistory.current.at(-1)?.afterDisplay === value
     ) {
       editHistory.current.at(-1)!.blockedByNativeEdits = false;
     }
@@ -407,7 +413,10 @@ export function useSessionNameProjection({
       (session) =>
         el.selectionStart < session.end && el.selectionEnd > session.start,
     );
-    if (!touchesSession) return null;
+    const widened = el.value
+      .slice(el.selectionStart, el.selectionEnd)
+      .includes(MENTION_SPACE);
+    if (!touchesSession && !widened) return null;
     const selection = composerCanonicalSelection(
       projection,
       el.selectionStart,

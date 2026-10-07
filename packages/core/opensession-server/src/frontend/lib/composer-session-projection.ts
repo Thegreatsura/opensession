@@ -40,7 +40,9 @@ export interface ComposerSessionEditResult {
   touchedSession: boolean;
 }
 
-function codeRanges(text: string): Array<{ start: number; end: number }> {
+export function codeRanges(
+  text: string,
+): Array<{ start: number; end: number }> {
   const ranges: Array<{ start: number; end: number }> = [];
   const fences = /```[\s\S]*?```|```[\s\S]*$/g;
   for (let match = fences.exec(text); match; match = fences.exec(text))

@@ -115,6 +115,49 @@ export const SESSION_GLYPH_SLOT = "\u2007\u2007";
  */
 export const SESSION_PILL_MARGIN = "\u2009";
 
+/**
+ * The room beside a mention pill. A pill's wash is painted rather than laid
+ * out, so the only air it can have is the space character next to it, and an
+ * ordinary 3.7px space cannot hold both the wash and a gap to the next word.
+ * Widening every space with `word-spacing` was rejected twice: the whole
+ * sentence reads as broken. So the field shows just the ONE space on each side
+ * of a mention as an en space (half an em). It is the same length as the space
+ * it replaces, so every offset, caret and selection maps one to one, and it
+ * never reaches the draft: the field writes it back as an ordinary space
+ * (hooks/useSessionNameProjection.ts), and copy and cut do the same.
+ */
+export const MENTION_SPACE = "\u2002";
+
+/** The draft as the field shows it: spaces beside a mention widened. */
+export function widenMentionSpaces(
+  text: string,
+  mentions: MentionRange[],
+  protectedRanges: Array<{ start: number; end: number }> = [],
+): string {
+  if (!mentions.length) return text;
+  const chars = text.split("");
+  for (const mention of mentions) {
+    // A mention inside code is quoted text and gets no pill, so no room.
+    if (
+      protectedRanges.some(
+        (range) => mention.start >= range.start && mention.start < range.end,
+      )
+    )
+      continue;
+    if (chars[mention.start - 1] === " ")
+      chars[mention.start - 1] = MENTION_SPACE;
+    if (chars[mention.end] === " ") chars[mention.end] = MENTION_SPACE;
+  }
+  return chars.join("");
+}
+
+/** Field text back to draft text. */
+export function narrowMentionSpaces(text: string): string {
+  return text.includes(MENTION_SPACE)
+    ? text.replaceAll(MENTION_SPACE, " ")
+    : text;
+}
+
 /** One stable session or workspace reference in the draft. */
 export interface SessionRange {
   start: number;

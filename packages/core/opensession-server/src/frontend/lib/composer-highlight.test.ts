@@ -5,7 +5,10 @@ import {
   SESSION_PILL_MARGIN,
   composerMentionRanges,
   composerSessionRanges,
+  MENTION_SPACE,
+  narrowMentionSpaces,
   needsComposerHighlight,
+  widenMentionSpaces,
 } from "./composer-highlight";
 
 const TEAM = [
@@ -291,5 +294,28 @@ describe("needsComposerHighlight", () => {
     expect(needsComposerHighlight(`look at ${ID}`)).toBe(true);
     // A draft full of hyphens is not a draft full of pills.
     expect(needsComposerHighlight("a well-worn re-check")).toBe(false);
+  });
+});
+
+describe("widenMentionSpaces", () => {
+  test("widens only the space on each side of a mention", () => {
+    const text = "ask @Kent about it";
+    const shown = widenMentionSpaces(text, composerMentionRanges(text, TEAM));
+    expect(shown).toBe(`ask${MENTION_SPACE}@Kent${MENTION_SPACE}about it`);
+    expect(shown.length).toBe(text.length);
+    expect(narrowMentionSpaces(shown)).toBe(text);
+    // The mirror still pills the mention in the widened text.
+    expect(composerMentionRanges(shown, TEAM)).toEqual(
+      composerMentionRanges(text, TEAM),
+    );
+  });
+
+  test("leaves a mention inside code alone", () => {
+    const text = "run `@Kent go` now";
+    expect(
+      widenMentionSpaces(text, composerMentionRanges(text, TEAM), [
+        { start: 4, end: 13 },
+      ]),
+    ).toBe(text);
   });
 });

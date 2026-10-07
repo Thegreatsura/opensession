@@ -29,6 +29,8 @@ import { useAttachmentUploads } from "../hooks/useAttachmentUploads";
 import {
   composerHighlightHtml,
   composerMentionRanges,
+  narrowMentionSpaces,
+  widenMentionSpaces,
   needsComposerHighlight,
   paintPillHover,
   pillRectAt,
@@ -36,6 +38,7 @@ import {
 import { insertPastedSessionId } from "../lib/session-url";
 import {
   composerDisplayOffset,
+  codeRanges,
   projectComposerSessions,
 } from "../lib/composer-session-projection";
 import { useSessionNameProjection } from "../hooks/useSessionNameProjection";
@@ -972,10 +975,17 @@ export function Composer({
   const hlRef = useRef<HTMLDivElement>(null);
   const sessionRanges = sessionNames.sessions;
   const hlActive = needsComposerHighlight(displayText, people, sessionRanges);
-  const hlHtml = hlActive
-    ? composerHighlightHtml(displayText, people, sessionRanges)
-    : "";
   const mentionRanges = composerMentionRanges(displayText, people);
+  // While pills are painted, the space on each side of a mention is shown as an
+  // en space so the pill's wash has room (MENTION_SPACE). Same length as the
+  // draft, so offsets are shared; the field writes it back as a plain space.
+  const fieldText =
+    hlActive && mentionRanges.length
+      ? widenMentionSpaces(displayText, mentionRanges, codeRanges(displayText))
+      : displayText;
+  const hlHtml = hlActive
+    ? composerHighlightHtml(fieldText, people, sessionRanges)
+    : "";
   useEffect(() => {
     // The textarea scrolls internally at max-height; keep the mirror locked to it.
     const el = textareaRef.current;
@@ -1598,7 +1608,7 @@ export function Composer({
                     ? "Chat with selected text"
                     : placeholder
             }
-            value={displayText}
+            value={fieldText}
             onBeforeInput={sessionNames.handleBeforeInput}
             onChange={(e) => {
               // A token undo/redo is replayed against canonical state and the
@@ -1607,10 +1617,8 @@ export function Composer({
               // effect, which is both later and more reliable than a microtask
               // queued from here (see useFileMentions).
               sessionNames.handleChange(e);
-              onTyping?.(
-                e.currentTarget.value.length > 0,
-                e.currentTarget.value,
-              );
+              const typed = narrowMentionSpaces(e.currentTarget.value);
+              onTyping?.(typed.length > 0, typed);
             }}
             onKeyDown={handleKeyDown}
             onKeyUp={syncMentions}
