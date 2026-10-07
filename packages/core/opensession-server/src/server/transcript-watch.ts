@@ -5,6 +5,7 @@ import type {
   TranscriptPage,
 } from "./transcript-store";
 import { v2SnapshotEntryWeight } from "./transcript-wire";
+import { type CompressibleSocket, sendCompressedFrame } from "./ws-compression";
 
 export interface TranscriptWatchStore {
   getLastChangeSeq(sessionId: string): number | Promise<number>;
@@ -25,7 +26,7 @@ export interface TranscriptWatchStore {
   ): TranscriptPage | Promise<TranscriptPage>;
 }
 
-export interface TranscriptWatchSocket {
+export interface TranscriptWatchSocket extends CompressibleSocket {
   send(payload: string, compress?: boolean): void;
 }
 
@@ -117,7 +118,10 @@ export async function startTranscriptWatch(
   let closed = false;
 
   const send = (frame: Record<string, unknown>, compress = false) => {
-    if (!closed && isCurrent()) socket.send(JSON.stringify(frame), compress);
+    if (closed || !isCurrent()) return;
+    const payload = JSON.stringify(frame);
+    if (compress) sendCompressedFrame(socket, payload);
+    else socket.send(payload, false);
   };
 
   async function sendSnapshot(): Promise<void> {
