@@ -220,6 +220,8 @@ export async function runIssueSession(
         body: issue.body,
         labels: issue.labels,
         author: args.author,
+        issueAuthor: issue.author,
+        issueAuthorTrusted: isTrustedGithubLogin(issue.author),
         commentBody: args.body || undefined,
         branch,
         baseRef,
