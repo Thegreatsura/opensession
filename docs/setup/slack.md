@@ -89,8 +89,8 @@ literal value `true` enables it; see
 | `SLACK_APP_TOKEN`            | for Socket Mode          | App-level token (`xapp-…`) with `connections:write`; never a bot token                                                                                                     |
 | `ALLOWED_SLACK_USER_ID`      | strongly recommended     | Restricts ordinary DMs and mentions and sets the `isAdmin` gate for admin, session-control and human-ask tools. Unset means every sender admitted by routing is an admin   |
 | `WORKTREE_HOOK_SECRET`       | only for worktree hooks  | Value callers send as `x-worktree-secret` to the two `/worktree/*` routes. Missing means every hook request is rejected with 403                                           |
-| `SLACK_MENTION_INTENT_MODEL` | no                       | Mention intent classifier; default `claude-haiku-4-5`                                                                                                                      |
-| `SCHEDULE_WHEN_MODEL`        | no                       | Natural-language parser used by one-off scheduling tools; default `claude-haiku-4-5`                                                                                       |
+| `SLACK_MENTION_INTENT_MODEL` | no                       | Mention intent classifier; default `claude-haiku-5-5`                                                                                                                      |
+| `SCHEDULE_WHEN_MODEL`        | no                       | Natural-language parser used by one-off scheduling tools; default `claude-haiku-5-5`                                                                                       |
 
 The setup dialog manages the bot token, signing secret, allowed user and
 worktree-hook secret. It does not expose Socket Mode or the two model overrides. Set those

@@ -180,8 +180,8 @@ export const DEFAULT_WORKSPACE_MODEL_SETTINGS: WorkspaceModelSettings = {
           role: "Implementation worker",
         },
         {
-          model: "pi/anthropic/claude-haiku-4-5",
-          effort: "high",
+          model: "pi/anthropic/claude-haiku-5-5",
+          effort: "medium",
           role: "Fast worker",
         },
       ],

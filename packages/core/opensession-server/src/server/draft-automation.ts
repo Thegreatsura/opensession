@@ -14,7 +14,7 @@ import { parseCron } from "./cron";
 import { readMcpConfig } from "./connections";
 import { defaultRepo, personaCompany, personaProduct } from "./config";
 
-const DRAFT_MODEL = process.env.DRAFT_AUTOMATION_MODEL || "claude-haiku-4-5";
+const DRAFT_MODEL = process.env.DRAFT_AUTOMATION_MODEL || "claude-haiku-5-5";
 
 /** Event keys automations can subscribe to (keep in sync with the form's
  *  Event-trigger options in Automations.tsx and the fireAutomationsForEvent

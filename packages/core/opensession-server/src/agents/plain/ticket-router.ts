@@ -26,7 +26,7 @@ import { writeJsonAtomic } from "../../server/shared/atomic-write";
 import { resolveModel } from "../../server/models";
 import { personaCompany, personaProduct } from "../../server/config";
 
-const ROUTER_MODEL = process.env.PLAIN_SPAM_CHECK_MODEL || "claude-haiku-4-5";
+const ROUTER_MODEL = process.env.PLAIN_SPAM_CHECK_MODEL || "claude-haiku-5-5";
 const CONFIG_PATH = stateDir("plain-router.json");
 
 export type TicketRoute = "spam" | "basic" | "full";

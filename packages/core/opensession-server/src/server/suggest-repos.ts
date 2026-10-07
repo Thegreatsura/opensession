@@ -37,7 +37,7 @@ import {
   type RepoCard,
 } from "./repo-context";
 
-const SUGGEST_MODEL = process.env.SUGGEST_REPOS_MODEL || "claude-haiku-4-5";
+const SUGGEST_MODEL = process.env.SUGGEST_REPOS_MODEL || "claude-haiku-5-5";
 /**
  * How long we WAIT, which is not the same as how long the call may take.
  *

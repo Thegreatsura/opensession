@@ -514,12 +514,12 @@ describe("workflowExecutor", () => {
       },
       makeCtx(),
     );
-    // Haiku's ladder is high/max, so "low" is dropped rather than coerced: the
-    // runner would have rewritten it to the model default anyway.
+    // gpt-oss-120b's ladder stops at high, so "max" is dropped rather than
+    // coerced: the runner would have rewritten it to the model default anyway.
     await workflowExecutor.execute(
       {
         prompt: "extract",
-        opts: { model: "claude-haiku-4-5", effort: "low" },
+        opts: { model: "cerebras/gpt-oss-120b", effort: "max" },
         seq: 2,
       },
       makeCtx(),

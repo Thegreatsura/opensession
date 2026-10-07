@@ -121,7 +121,8 @@ export function modelEfforts(
     return OPENAI_EFFORTS;
   if (provider === "anthropic") {
     if (slug.startsWith("claude-haiku-4-5")) return ["high", "max"];
-    if (/^claude-(?:fable|opus|sonnet)-/.test(slug)) return CLAUDE_EFFORTS;
+    if (/^claude-(?:fable|opus|sonnet|haiku)-/.test(slug))
+      return CLAUDE_EFFORTS;
   }
   if (provider === "cerebras" && slug === "gpt-oss-120b")
     return ["low", "medium", "high"];
@@ -164,6 +165,7 @@ const RETIRED_CLAUDE_REROUTE: Record<string, string> = {
   "claude-opus-4-8": "claude-opus-5-5",
   "claude-sonnet-5": "claude-sonnet-5-5",
   "claude-sonnet-4-6": "claude-sonnet-5-5",
+  "claude-haiku-4-5": "claude-haiku-5-5",
 };
 
 function rerouteRetiredClaudeModel(model: string): string {
@@ -179,7 +181,7 @@ export const DEFAULT_BRIDGE_PICKER_MODELS = [
   "claude-fable-5-1",
   "claude-opus-5-5",
   "claude-sonnet-5-5",
-  "claude-haiku-4-5",
+  "claude-haiku-5-5",
   "gpt-6-astra",
   "gpt-6.1-sol",
   "gpt-5.6-terra",
@@ -240,10 +242,17 @@ export const KNOWN_MODELS: ModelInfo[] = [
     aliases: ["sonnet4.6"],
   },
   {
+    id: "claude-haiku-5-5",
+    provider: "claude",
+    label: "Claude Haiku 5.5",
+    aliases: ["haiku", "haiku5.5"],
+  },
+  // Keep the retired Haiku id for historical labels; dispatch upgrades it.
+  {
     id: "claude-haiku-4-5",
     provider: "claude",
     label: "Claude Haiku 4.5",
-    aliases: ["haiku"],
+    aliases: ["haiku4.5"],
   },
   {
     id: "codex-best-available",
@@ -577,9 +586,9 @@ export const ORCHESTRATOR_WORKER_AGENTS: Record<
       "to the standard worker or do it yourself.",
     bridges: {
       anthropic: {
-        model: "anthropic/claude-haiku-4-5",
-        variant: "high",
-        label: "Haiku 4.5",
+        model: "anthropic/claude-haiku-5-5",
+        variant: "medium",
+        label: "Haiku 5.5",
       },
       openai: {
         model: "openai/gpt-6-luna",
@@ -881,6 +890,7 @@ const FALLBACK_TIER: Record<string, number> = {
   "claude-sonnet-5": 1,
   "gpt-5.4": 1,
   "claude-sonnet-4-6": 1,
+  "claude-haiku-5-5": 0,
   "claude-haiku-4-5": 0,
   "gpt-5.4-mini": 0,
   "gpt-5.3-codex-spark": 0,
@@ -907,7 +917,7 @@ const FALLBACK_DESTINATIONS = [
   // 272k-window models (RETIRED_CODEX_REROUTE) — falling back onto them would
   // land every session in the compact-every-turn loop.
   "claude-sonnet-5-5",
-  "claude-haiku-4-5",
+  "claude-haiku-5-5",
 ];
 
 /**
@@ -1493,6 +1503,7 @@ const CONTEXT_WINDOWS: Record<string, number> = {
   "claude-sonnet-5-5": 1_000_000,
   "claude-sonnet-5": 1_000_000,
   "claude-sonnet-4-6": 1_000_000,
+  "claude-haiku-5-5": 1_000_000,
   "claude-haiku-4-5": 200_000,
   // Pi's catalog caps GPT-6 at 272K (the long-context price tier starts
   // there), so the engine compacts at that ceiling.

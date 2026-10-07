@@ -108,6 +108,33 @@ describe("Pi-only model routing", () => {
     expect(fallbackTier("pi/anthropic/claude-sonnet-5-5")).toBe(1);
   });
 
+  test("upgrades old Haiku selections without changing historical labels", () => {
+    for (const prefix of [
+      "",
+      "anthropic/",
+      "pi/anthropic/",
+      "claude/anthropic/",
+    ]) {
+      expect(toPiModel(prefix + "claude-haiku-4-5")).toBe(
+        "pi/anthropic/claude-haiku-5-5",
+      );
+    }
+    for (const alias of ["haiku", "haiku4.5", "haiku5.5"]) {
+      expect(resolveModel(alias)?.id).toBe("claude-haiku-5-5");
+    }
+    expect(modelLabel("claude-haiku-4-5")).toBe("Claude Haiku 4.5");
+    expect(modelLabel("claude-haiku-5-5")).toBe("Claude Haiku 5.5");
+    expect(modelEfforts("pi/anthropic/claude-haiku-5-5")).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(contextWindowFor("pi/anthropic/claude-haiku-5-5")).toBe(1_000_000);
+    expect(fallbackTier("pi/anthropic/claude-haiku-5-5")).toBe(0);
+  });
+
   test("preserves explicit Pi ids and case-sensitive model suffixes", () => {
     expect(toPiModel("pi/wafer/glm-5.2")).toBe("pi/wafer/glm-5.2");
     expect(toPiModel(" pi/My-Gateway/Qwen/Qwen3-Coder ")).toBe(

@@ -20,7 +20,7 @@ import { personaCompany, personaName } from "../../server/config";
 import { suggestRepos } from "../../server/suggest-repos";
 
 const INTENT_MODEL =
-  process.env.SLACK_MENTION_INTENT_MODEL || "claude-haiku-4-5";
+  process.env.SLACK_MENTION_INTENT_MODEL || "claude-haiku-5-5";
 
 export type PrIntentAction =
   | "review"

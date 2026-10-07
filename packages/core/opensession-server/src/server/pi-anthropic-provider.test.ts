@@ -923,7 +923,50 @@ describe("buildPiAnthropicModels", () => {
       reasoning: true,
       contextWindow: 1_000_000,
       maxTokens: 128_000,
+      cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+    });
+  });
+
+  test("applies the halved Sonnet 5.5 cache-read price over the builtin row", () => {
+    const builtin = {
+      ...model,
+      id: "claude-sonnet-5-5",
       cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+    } as PiCatalogModel;
+    const [sonnet] = buildPiAnthropicModels([builtin], "claude-sonnet-5-5");
+    expect(sonnet!.cost).toEqual({
+      input: 2,
+      output: 10,
+      cacheRead: 0.1,
+      cacheWrite: 2.5,
+    });
+    expect(builtin.cost.cacheRead).toBe(0.2);
+  });
+
+  test("registers Haiku 5.5 with tiered pricing and every effort level", () => {
+    const [haiku] = buildPiAnthropicModels([], "claude-haiku-5-5");
+    expect(haiku).toMatchObject({
+      id: "claude-haiku-5-5",
+      name: "Claude Haiku 5.5",
+      reasoning: true,
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      cost: {
+        input: 0.1,
+        output: 0.5,
+        cacheRead: 0.01,
+        cacheWrite: 0.125,
+        tiers: [
+          {
+            inputTokensAbove: 100_000,
+            input: 0.5,
+            output: 2.5,
+            cacheRead: 0.05,
+            cacheWrite: 0.625,
+          },
+        ],
+      },
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
     });
   });
 

@@ -393,7 +393,7 @@ credentials its setup page marks as required. Common operator-facing variables:
 | `OPENSESSION_FALLBACK_MODEL`                     | `claude-opus-5`                       | global fallback model; `none` disables                                          |
 | `OPENSESSION_HAIKU_FALLBACK_MODEL`               | `gpt-5.6-luna`                        | OpenAI fallback for exhausted Haiku runs and derived one-shots; `none` disables |
 | `OPENSESSION_MCP_CONFIG`                         | `<checkout>/mcp-config.json`          | MCP config path override                                                        |
-| `SUGGEST_BRANCH_MODEL`, `DRAFT_AUTOMATION_MODEL` | `claude-haiku-4-5`                    | per-feature cheap-task models                                                   |
+| `SUGGEST_BRANCH_MODEL`, `DRAFT_AUTOMATION_MODEL` | `claude-haiku-5-5`                    | per-feature cheap-task models                                                   |
 
 **Integrations** — each has its own page with the full list:
 

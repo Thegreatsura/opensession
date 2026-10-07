@@ -54,7 +54,7 @@ export function AutomationDataFlowEditor({
                       minutes: 120,
                       overlapMinutes: 10,
                     },
-                    reduce: { model: "claude-haiku-4-5", maxOutputChars: 8000 },
+                    reduce: { model: "claude-haiku-5-5", maxOutputChars: 8000 },
                     source: {
                       type: "slack_channel",
                       channel: "",

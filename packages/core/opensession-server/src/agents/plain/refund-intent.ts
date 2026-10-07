@@ -9,7 +9,7 @@
 import { oneShot } from "../../server/one-shot";
 import { personaCompany, personaName } from "../../server/config";
 
-const MODEL = process.env.PLAIN_REFUND_INTENT_MODEL || "claude-haiku-4-5";
+const MODEL = process.env.PLAIN_REFUND_INTENT_MODEL || "claude-haiku-5-5";
 
 export interface RefundApproval {
   approve: boolean;

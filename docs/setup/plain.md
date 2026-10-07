@@ -14,8 +14,8 @@ customer or change thread state.
 | ----------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PLAIN_API_KEY`               | Plain API calls | required by the integration registry; used by the Support UI and agent's `PlainClient` (`packages/core/opensession-server/src/agents/plain/api.ts`) and by the archive safety sweep |
 | `PLAIN_WEBHOOK_SECRET`        | webhook intake  | **fail-closed**: unset or empty means every Plain webhook returns 401                                                                                                               |
-| `PLAIN_SPAM_CHECK_MODEL`      | optional        | tool-less pre-triage router model; default `claude-haiku-4-5`                                                                                                                       |
-| `PLAIN_REFUND_INTENT_MODEL`   | optional        | tool-less classifier for the legacy mention flow's refund/cancellation approval; default `claude-haiku-4-5`                                                                         |
+| `PLAIN_SPAM_CHECK_MODEL`      | optional        | tool-less pre-triage router model; default `claude-haiku-5-5`                                                                                                                       |
+| `PLAIN_REFUND_INTENT_MODEL`   | optional        | tool-less classifier for the legacy mention flow's refund/cancellation approval; default `claude-haiku-5-5`                                                                         |
 | `PLAIN_AGENT_API_KEY`         | optional        | key of a separate **Custom agent** machine user for Ask Sidekick (see [Internal agent](#internal-agent-ask-sidekick)); unset, the discussions use `PLAIN_API_KEY`                   |
 | `PLAIN_AGENT_MACHINE_USER_ID` | optional        | pins the agent's `mu_…` id instead of resolving it with `myMachineUser` at first use                                                                                                |
 

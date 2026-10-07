@@ -44,7 +44,8 @@ engine and dispatch id `routeModel()` returns for it.
 | `claude-sonnet-5-5` | Claude Sonnet 5.5 | pi | `pi/anthropic/claude-sonnet-5-5` |
 | `claude-sonnet-5` | Claude Sonnet 5 | pi | `pi/anthropic/claude-sonnet-5-5` |
 | `claude-sonnet-4-6` | Claude Sonnet 4.6 | pi | `pi/anthropic/claude-sonnet-5-5` |
-| `claude-haiku-4-5` | Claude Haiku 4.5 | pi | `pi/anthropic/claude-haiku-4-5` |
+| `claude-haiku-5-5` | Claude Haiku 5.5 | pi | `pi/anthropic/claude-haiku-5-5` |
+| `claude-haiku-4-5` | Claude Haiku 4.5 | pi | `pi/anthropic/claude-haiku-5-5` |
 | `codex-best-available` | Best available (Codex) | pi | `pi/openai/gpt-6.1-sol` |
 | `gpt-6-astra` | GPT-6 Astra | pi | `pi/openai/gpt-6-astra` |
 | `gpt-6.1-sol` | GPT-6.1 Sol | pi | `pi/openai/gpt-6.1-sol` |

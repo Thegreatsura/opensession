@@ -10,7 +10,7 @@ import {
 describe("oneShot", () => {
   test("routes native and legacy Pi model ids onto Pi", () => {
     expect(oneShotModel("claude-haiku-4-5")).toBe(
-      "pi/anthropic/claude-haiku-4-5",
+      "pi/anthropic/claude-haiku-5-5",
     );
     expect(oneShotModel("pi/openai/gpt-6-luna")).toBe("pi/openai/gpt-6-luna");
     expect(oneShotModel("pi/anthropic/claude-opus-5-5")).toBe(
@@ -25,13 +25,13 @@ describe("oneShot", () => {
   test("falls back from Haiku to OpenAI for provider exhaustion", () => {
     expect(
       haikuOneShotFallbackModel(
-        "pi/anthropic/claude-haiku-4-5",
+        "pi/anthropic/claude-haiku-5-5",
         "no usable Claude account in the pool",
       ),
     ).toBe("pi/openai/gpt-6-luna");
     expect(
       haikuOneShotFallbackModel(
-        "pi/anthropic/claude-haiku-4-5",
+        "pi/anthropic/claude-haiku-5-5",
         "timed out after 120000ms",
       ),
     ).toBe("pi/openai/gpt-6-luna");
@@ -41,7 +41,7 @@ describe("oneShot", () => {
     // Exact refusal from anthropic-bridge when no Claude account was added.
     const error =
       "no Claude accounts configured (add one in Settings → Providers)";
-    const primary = oneShotModel("claude-haiku-4-5");
+    const primary = oneShotModel("claude-haiku-5-5");
     expect(haikuOneShotShouldFallOver(error)).toBe(true);
     expect(oneShotFallbackModels(primary, error, undefined)).toEqual([
       "pi/openai/gpt-6-luna",
@@ -56,7 +56,7 @@ describe("oneShot", () => {
     );
     expect(
       haikuOneShotFallbackModel(
-        "pi/anthropic/claude-haiku-4-5",
+        "pi/anthropic/claude-haiku-5-5",
         "invalid model id",
       ),
     ).toBeUndefined();
@@ -95,7 +95,7 @@ describe("oneShot", () => {
   test("keeps Haiku on its configured fallback and never hops on caller errors", () => {
     expect(
       oneShotFallbackModels(
-        "pi/anthropic/claude-haiku-4-5",
+        "pi/anthropic/claude-haiku-5-5",
         "no usable Claude account in the pool",
         ["gpt-6-astra"],
       ),

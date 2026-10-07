@@ -25,6 +25,7 @@ const MODEL_NAMES = Object.fromEntries(
     "claude-opus-4-8": "Opus 4.8",
     "claude-sonnet-5-5": "Sonnet 5.5",
     "claude-sonnet-5": "Sonnet",
+    "claude-haiku-5-5": "Haiku 5.5",
     "claude-haiku-4-5-20251001": "Haiku",
     "gpt-5.5": "GPT-5.5",
     "gpt-5": "GPT-5",

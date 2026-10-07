@@ -29,7 +29,7 @@ function writeSession(id: string, extra: Record<string, unknown> = {}) {
       createdBy: "Alex",
       createdAt: "2026-07-08T00:00:00.000Z",
       lastActivity: "2026-07-08T00:00:00.000Z",
-      model: "claude-haiku-4-5",
+      model: "claude-haiku-5-5",
       ...extra,
     }),
   );
@@ -62,29 +62,29 @@ describe("migrateSessionEngine", async () => {
   test("flips the model and records modelHistory", async () => {
     const res = await migrateSessionEngine(
       "bks-mig-ok",
-      "pi/anthropic/claude-haiku-4-5",
+      "pi/anthropic/claude-haiku-5-5",
       "tester",
     );
     expect(res).toMatchObject({
       ok: true,
-      from: "claude-haiku-4-5",
-      to: "pi/anthropic/claude-haiku-4-5",
+      from: "claude-haiku-5-5",
+      to: "pi/anthropic/claude-haiku-5-5",
     });
     const data = JSON.parse(
       readFileSync(join(scratch, "bks-mig-ok.json"), "utf-8"),
     );
-    expect(data.model).toBe("pi/anthropic/claude-haiku-4-5");
+    expect(data.model).toBe("pi/anthropic/claude-haiku-5-5");
     expect(data.claudeSessionId).toBe("11111111-2222-7000-8000-000000000000"); // untouched
     expect(data.modelHistory).toHaveLength(1);
     expect(data.modelHistory[0]).toMatchObject({
-      model: "pi/anthropic/claude-haiku-4-5",
-      from: "claude-haiku-4-5",
+      model: "pi/anthropic/claude-haiku-5-5",
+      from: "claude-haiku-5-5",
       by: "tester",
     });
     // Idempotent: same target again is ok, no duplicate history entry.
     const again = await migrateSessionEngine(
       "bks-mig-ok",
-      "pi/anthropic/claude-haiku-4-5",
+      "pi/anthropic/claude-haiku-5-5",
     );
     expect(again.ok).toBe(true);
     expect(
@@ -123,17 +123,17 @@ describe("migrateSessionEngine", async () => {
     expect(legacy.ok).toBe(true);
     if (legacy.ok) expect(legacy.to).toBe("pi/anthropic/claude-opus-5-5");
     // Leave the session where the other tests expect it.
-    await migrateSessionEngine("bks-mig-ok", "pi/anthropic/claude-haiku-4-5");
+    await migrateSessionEngine("bks-mig-ok", "pi/anthropic/claude-haiku-5-5");
   });
 
   test("allows automation-owned sessions to migrate to Pi", async () => {
     for (const id of ["bks-mig-automation", "bks-mig-automation2"]) {
       const pi = await migrateSessionEngine(
         id,
-        "pi/anthropic/claude-haiku-4-5",
+        "pi/anthropic/claude-haiku-5-5",
       );
       expect(pi.ok).toBe(true);
-      if (pi.ok) expect(pi.to).toBe("pi/anthropic/claude-haiku-4-5");
+      if (pi.ok) expect(pi.to).toBe("pi/anthropic/claude-haiku-5-5");
     }
     expect(isAutomationOwnedSession({ automation: "x", createdBy: "y" })).toBe(
       true,
@@ -145,7 +145,7 @@ describe("migrateSessionEngine", async () => {
     writeSession("bks-mig-preserve");
     const res = await migrateSessionEngine(
       "bks-mig-preserve",
-      "pi/anthropic/claude-haiku-4-5",
+      "pi/anthropic/claude-haiku-5-5",
       "fleet",
       { preserveActivity: true },
     );
@@ -161,7 +161,7 @@ describe("migrateSessionEngine", async () => {
     expect(sessionHasJournaledRun("bks-mig-busy")).toBe(true);
     const res = await migrateSessionEngine(
       "bks-mig-busy",
-      "pi/anthropic/claude-haiku-4-5",
+      "pi/anthropic/claude-haiku-5-5",
     );
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain("in-flight");
@@ -170,7 +170,7 @@ describe("migrateSessionEngine", async () => {
   test("rejects unknown sessions", async () => {
     const res = await migrateSessionEngine(
       "bks-nope",
-      "pi/anthropic/claude-haiku-4-5",
+      "pi/anthropic/claude-haiku-5-5",
     );
     expect(res.ok).toBe(false);
   });

@@ -9,7 +9,7 @@
  */
 import { oneShot } from "../../server/one-shot";
 
-const WHEN_MODEL = process.env.SCHEDULE_WHEN_MODEL || "claude-haiku-4-5";
+const WHEN_MODEL = process.env.SCHEDULE_WHEN_MODEL || "claude-haiku-5-5";
 
 export async function parseWhen(
   when: string,
