@@ -150,6 +150,14 @@ describe("config loader", () => {
     });
 
     expect(configuredServer().caddyAdmin).toBe("http://localhost:2019");
+    expect(configuredServer().trustForwardedFor).toBe(false);
+  });
+
+  test("server.trustForwardedFor survives parsing", async () => {
+    await withConfig(JSON.stringify({ server: { trustForwardedFor: true } }));
+    expect(configuredServer().trustForwardedFor).toBe(true);
+    await withConfig(JSON.stringify({ server: { trustForwardedFor: "yes" } }));
+    expect(configuredServer().trustForwardedFor).toBe(false);
   });
 
   test("repos section is authoritative and applies id-derived defaults", async () => {
