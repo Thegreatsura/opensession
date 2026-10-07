@@ -97,12 +97,14 @@ final class HideStore {
     }
 
     func isHidden(_ workspace: SidebarWorkspace) -> Bool {
-        hides[SidebarRowKeys.rowKey(for: workspace)] != nil
+        SidebarRowKeys.hideKeys(for: workspace).contains { hides[$0] != nil }
     }
 
+    /// Written under the key the web sidebar draws the row with, so a Mac
+    /// session row inside a workspace hides the whole workspace there too.
     func hide(_ workspace: SidebarWorkspace) {
-        let key = SidebarRowKeys.rowKey(for: workspace)
-        guard SidebarRowKeys.isPersistable(key), hides[key] == nil else { return }
+        let key = SidebarRowKeys.sharedRowKey(for: workspace)
+        guard SidebarRowKeys.isPersistable(key), !isHidden(workspace) else { return }
         let timestamp = Self.timestamp.string(from: .now)
         hides[key] = timestamp
         record(.set(timestamp), for: key)
@@ -125,6 +127,10 @@ final class HideStore {
     /// when the user PROMPTS in a session: you can't be done with a session you're
     /// actively working in, and "I replied but it's still gone" reads as a bug.
     /// Opening a hidden session deliberately does NOT unhide it.
+    func restore(_ workspace: SidebarWorkspace) {
+        clear(SidebarRowKeys.hideKeys(for: workspace))
+    }
+
     func unhide(for session: Session) {
         clear(SidebarRowKeys.candidateKeys(for: session))
     }

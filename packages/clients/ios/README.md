@@ -37,9 +37,15 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   one, sharing `/api/hides` — while the session keeps running for everyone else.
   A hidden row comes back while one of its sessions is blocked on a question,
   prompting in a session clears its hide, and search ignores hides, so a hidden
-  row stays findable and its menu offers "Restore to my sidebar". An open
-  teammate, automation, or spawned session can also be claimed from its native
-  action surface with "Add to sidebar", sharing `/api/lanes` with the web.
+  row stays findable and its menu offers "Restore to sidebar". The row menu
+  (phone and Mac) offers one membership action, decided by the "me" lens's own
+  rule (`PeopleLens.membership`): "Hide from sidebar" for a row your sidebar
+  already holds (your own or spawned work, a claim, a mention, a collaborator
+  entry), "Keep in sidebar" for any other row, which claims it into
+  `/api/lanes` like the web, and "Restore to sidebar" for a hidden one. A Mac
+  session row hides under its workspace's key, as the web draws it. An open
+  session outside your sidebar offers the same claim from its native action
+  surface as "Add to sidebar".
   A row's menu also adds or removes workspace collaborators
   (`/api/workspaces/:id/collaborators`): a collaborator gets the workspace in
   their own lanes and teammate lens, its review requests are not asks of them,
@@ -321,7 +327,10 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   session's staged file channel before Start becomes available.
 - **AskUserQuestion:** blocking questions render as an inline card with option
   buttons + free-text answer, wired to `answer_question`. After you submit, the
-  card becomes a read-only receipt showing the question and your answer.
+  card becomes a read-only receipt showing the question and your answer. The
+  card's X dismisses without answering: it sends `answers: null`, the asking
+  run proceeds on its own judgment, and the server's `ask_resolved` (sent even
+  for a card it no longer holds) retires the card on every open client.
 - **Review progress** — the PR code page tracks which files you reviewed
   and which changed after you did. GitHub PRs use GitHub's viewed state
   (`GET /api/pr-viewed-files`, whose `changed` list is GitHub's DIRTY state);
@@ -659,7 +668,7 @@ OS1/
     WalkthroughCard.swift    Published walkthrough: demo video, writeup, stills
     MarkdownBody.swift       Streaming/durable markdown rendering, block switch
     Blocks/                  One view per block kind (choices, tree, compare, …)
-    AskQuestionCard.swift    Options + free text answer
+    AskQuestionCard.swift    Options, free text answer, dismiss
     PrPanel.swift            Pull-request overview, actions, and review entry
     PrReviewCanvas.swift     Committed diff, inline pending comments, guide steps
     PrReviewProgressViews.swift  Review progress, changed-since-review, step chips

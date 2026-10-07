@@ -11,10 +11,21 @@ private struct TranscriptSessionIdKey: EnvironmentKey {
     static let defaultValue: String? = nil
 }
 
+/// The PRs the enclosing message drew as chips before a nested body (a
+/// callout, a slide) starts, so the message keeps one chip per PR across it.
+private struct TranscriptPrChipsDrawnKey: EnvironmentKey {
+    static let defaultValue: Set<String> = []
+}
+
 extension EnvironmentValues {
     var transcriptSessionId: String? {
         get { self[TranscriptSessionIdKey.self] }
         set { self[TranscriptSessionIdKey.self] = newValue }
+    }
+
+    var transcriptPrChipsDrawn: Set<String> {
+        get { self[TranscriptPrChipsDrawnKey.self] }
+        set { self[TranscriptPrChipsDrawnKey.self] = newValue }
     }
 }
 
@@ -37,6 +48,7 @@ struct MarkdownBody: View {
     @Environment(\.transcriptSessionId) private var transcriptSessionId
     @Environment(\.transcriptQuoteSelection) private var quoteSelection
     @Environment(\.transcriptAnchorEntryId) private var anchorEntryId
+    @Environment(\.transcriptPrChipsDrawn) private var prChipsDrawn
 
     /// Whether fences, placed media, callouts and math become native blocks.
     /// Off inside a block that renders markdown of its own (a slide, a
@@ -55,17 +67,55 @@ struct MarkdownBody: View {
         // rewrites below would corrupt a URL or file path inside one into
         // markdown link syntax its parser can no longer read. Tables come out
         // of what's left, for the width reasons in MarkdownTableSegmenter.
-        let blocks = richBlocks ? Self.blocks(of: text) : [.markdown(text)]
-        if blocks.count == 1, case .markdown(let only) = blocks[0] {
+        let blocks = prepared(richBlocks ? Self.blocks(of: text) : [.markdown(text)])
+        if blocks.count == 1, case .markdown(let only) = blocks[0].block {
             // The overwhelmingly common shape — no extra stack around it.
-            markdown(only)
+            markdownView(only)
         } else {
             VStack(alignment: .leading, spacing: Self.segmentSpacing) {
-                ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                    view(for: block)
+                ForEach(Array(blocks.enumerated()), id: \.offset) { _, prepared in
+                    view(for: prepared.block)
+                        .environment(\.transcriptPrChipsDrawn, prepared.prChipsDrawn)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// A block with its prose already linkified, plus the PRs drawn as chips
+    /// before it, for a block that renders a markdown body of its own.
+    private struct PreparedBlock {
+        let block: TranscriptRichBlock
+        let prChipsDrawn: Set<String>
+    }
+
+    /// Runs the link rewrites over the message's blocks in reading order with
+    /// ONE PR ledger, because a message is the unit that gets one chip per
+    /// PR (see `PrLinks`), and a table or a callout between two paragraphs
+    /// is still the same message. Done up front rather than inside the view
+    /// builder, which promises no order.
+    private func prepared(_ blocks: [TranscriptRichBlock]) -> [PreparedBlock] {
+        let ledger = PrLinks.Ledger(drawn: prChipsDrawn)
+        return blocks.map { block in
+            let before = ledger.drawn
+            switch block {
+            case .markdown(let value):
+                return PreparedBlock(block: .markdown(linkified(value, ledger: ledger)), prChipsDrawn: before)
+            case .table(let table):
+                return PreparedBlock(block: .table(linkified(table, ledger: ledger)), prChipsDrawn: before)
+            case .callout(let callout):
+                // The callout draws its own body; it only needs the ledger so
+                // far, and the message needs to know what it drew.
+                _ = PrLinks.linkify(callout.body, sessionId: openPanel.sessionId, ledger: ledger)
+                return PreparedBlock(block: block, prChipsDrawn: before)
+            case .slides(let slides):
+                for slide in slides {
+                    _ = PrLinks.linkify(slide, sessionId: openPanel.sessionId, ledger: ledger)
+                }
+                return PreparedBlock(block: block, prChipsDrawn: before)
+            default:
+                return PreparedBlock(block: block, prChipsDrawn: before)
+            }
         }
     }
 
@@ -73,11 +123,12 @@ struct MarkdownBody: View {
     private func view(for block: TranscriptRichBlock) -> some View {
         switch block {
         case .markdown(let value):
-            markdown(value)
+            // Already linkified by `prepared`.
+            markdownView(value)
         case .mermaid(let source):
             MermaidDiagramView(source: source)
         case .table(let table):
-            MarkdownTableView(table: linkified(table), dimmed: dimmed)
+            MarkdownTableView(table: table, dimmed: dimmed)
         case .chart(let chart, let source):
             VegaLiteChartView(chart: chart, source: source)
         case .compare(let spec):
@@ -129,13 +180,13 @@ struct MarkdownBody: View {
 
     @MainActor private static var blockCache: [String: [TranscriptRichBlock]] = [:]
 
-    private func markdown(_ value: String) -> some View {
+    private func markdownView(_ linkifiedValue: String) -> some View {
         let base = dimmed ? MarkdownRenderConfig.os1Dim : .os1Static
         let config = quoteSelection == nil
             ? base
             : base.withTextContextMenu(value: .os1QuoteSelection)
         return SwiftStreamingMarkdown.MarkdownView(
-            text: linkified(value),
+            text: linkifiedValue,
             config: config,
             listener: quoteSelection?.listener(entryId: anchorEntryId)
         )
@@ -146,10 +197,10 @@ struct MarkdownBody: View {
     /// after the split, since a path or a session id never contains a pipe.
     /// Without this, the file named in a table cell would be dead text while
     /// the same name in the sentence above it is a link.
-    private func linkified(_ table: MarkdownTable) -> MarkdownTable {
+    private func linkified(_ table: MarkdownTable, ledger: PrLinks.Ledger) -> MarkdownTable {
         var out = table
-        out.headers = table.headers.map(linkified)
-        out.rows = table.rows.map { $0.map(linkified) }
+        out.headers = table.headers.map { linkified($0, ledger: ledger) }
+        out.rows = table.rows.map { $0.map { linkified($0, ledger: ledger) } }
         return out
     }
 
@@ -166,7 +217,7 @@ struct MarkdownBody: View {
     /// scratch file keeps its diff. `CommitLinks` also runs before autolinking:
     /// a bare configured GitHub commit URL is the long form of the same
     /// reference, not a generic browser link.
-    private func linkified(_ value: String) -> String {
+    private func linkified(_ value: String, ledger: PrLinks.Ledger) -> String {
         // Subscribes this row to the registries the rewrites below read.
         // They are static tables rather than observable state, so without
         // this a row drawn before the first poll — every row of a cold deep
@@ -179,7 +230,7 @@ struct MarkdownBody: View {
                     AutomationLinks.linkify(
                         MarkdownAutolink.linkify(
                             CommitLinks.linkify(
-                                PrLinks.linkify(value, sessionId: openPanel.sessionId),
+                                PrLinks.linkify(value, sessionId: openPanel.sessionId, ledger: ledger),
                                 sessionId: openPanel.sessionId ?? transcriptSessionId
                             )
                         )
