@@ -20,9 +20,9 @@ const BEHIND_GATEWAY = { OPENSESSION_GATEWAY_BACKEND_PORT: "41000" };
 describe("Runner tailnet origin", () => {
   test("a direct peer passes only from the tailnet range", () => {
     const options = { trustForwardedFor: false, env: {} };
-    expect(
-      runnerTailnetOrigin(request(), peer("100.64.0.1"), options),
-    ).toBe("100.64.0.1");
+    expect(runnerTailnetOrigin(request(), peer("100.64.0.1"), options)).toBe(
+      "100.64.0.1",
+    );
     expect(
       runnerTailnetOrigin(request(), peer("::ffff:100.127.255.254"), options),
     ).toBe("100.127.255.254");
@@ -90,7 +90,10 @@ describe("Runner tailnet origin", () => {
         env,
       });
     expect(
-      origin({ ...BEHIND_GATEWAY, OPENSESSION_GATEWAY_PUBLIC_HOST: "100.90.0.1" }),
+      origin({
+        ...BEHIND_GATEWAY,
+        OPENSESSION_GATEWAY_PUBLIC_HOST: "100.90.0.1",
+      }),
     ).toBe(GATEWAY_TAILNET_ORIGIN);
     for (const host of ["127.0.0.1", "0.0.0.0", "192.168.1.10", ""])
       expect(
