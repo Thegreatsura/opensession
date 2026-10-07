@@ -13,10 +13,10 @@
 import { randomBytes } from "crypto";
 import { audit } from "./audit";
 import { runnerCommandAwsEnv } from "./runner-command-aws";
+import { runnerTailnetOrigin } from "./runner-origin";
 import {
   authenticateRunner,
   getRunner,
-  isTailnetAddress,
   runnerAllowed,
   runnerOwnsWorkspace,
   touchRunner,
@@ -704,7 +704,7 @@ export function handleRunnerWsUpgrade(
   path: string,
 ): Response | undefined {
   if (path !== "/runner-ws") return undefined;
-  if (!isTailnetAddress(server.requestIP?.(req)?.address ?? ""))
+  if (!runnerTailnetOrigin(req, server))
     return new Response("forbidden", { status: 403 });
   const url = new URL(req.url);
   const id = url.searchParams.get("id") ?? "";
