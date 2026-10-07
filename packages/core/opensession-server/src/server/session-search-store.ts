@@ -65,10 +65,11 @@ export class SessionSearchStore {
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     }
     this.db = new Database(path);
-    this.db.exec("PRAGMA journal_mode = WAL;");
     // The offline transcript backfill writes from another process while the
     // worker keeps indexing finished turns; wait out its short transactions.
+    // Set before journal_mode so opening during such a write waits too.
     this.db.exec("PRAGMA busy_timeout = 10000;");
+    this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec(`
 			CREATE VIRTUAL TABLE IF NOT EXISTS records USING fts5(
 				question, summary, resolution, files,

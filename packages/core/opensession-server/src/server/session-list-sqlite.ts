@@ -71,11 +71,13 @@ export class SessionListStore {
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     }
     this.db = new Database(path);
-    if (path !== ":memory:") this.db.exec("PRAGMA journal_mode = WAL;");
     // Deploy overlap and maintenance readers can briefly own the WAL writer.
     // Wait for that bounded handoff instead of dropping the targeted session
     // update and leaving its sidebar row stale until a full index rebuild.
-    this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA synchronous = NORMAL;");
+    // Set before journal_mode so opening during that handoff waits too.
+    this.db.exec("PRAGMA busy_timeout = 5000;");
+    if (path !== ":memory:") this.db.exec("PRAGMA journal_mode = WAL;");
+    this.db.exec("PRAGMA synchronous = NORMAL;");
     this.db.exec(`
 			CREATE TABLE IF NOT EXISTS session_list_meta (
 				key TEXT PRIMARY KEY,

@@ -470,9 +470,12 @@ export class TranscriptStore {
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     }
     this.db = new Database(dbPath);
+    // Install the busy handler before any other statement. Opening a WAL
+    // database another connection is using (journal_mode, schema setup) must
+    // wait out that connection's lock, not fail at once with SQLITE_BUSY.
+    this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec("PRAGMA synchronous = NORMAL;");
-    this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS transcript_events (
         session_id TEXT NOT NULL,

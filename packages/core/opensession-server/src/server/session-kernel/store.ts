@@ -1132,6 +1132,11 @@ export class SessionKernelStore {
     }
     this.db = new Database(path);
     this.closeable = true;
+    // Install the busy handler before any other statement. Opening a WAL
+    // database another connection is using (journal_mode, schema reads, the
+    // writer claim) must wait out that connection's lock, not fail at once
+    // with SQLITE_BUSY.
+    this.db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs};`);
     this.db.exec("PRAGMA journal_mode = WAL;");
     // NORMAL, not FULL: with WAL, NORMAL still guarantees no corruption and
     // no torn transactions — an OS crash or power loss can only drop the most
@@ -1145,7 +1150,6 @@ export class SessionKernelStore {
     // p50 ~18 ms per append pair) and drove lane saturation at ~100
     // concurrent sessions. Approved trade (Jaap, 2026-08-26).
     this.db.exec("PRAGMA synchronous = NORMAL;");
-    this.db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs};`);
     this.db.exec(`
 			CREATE TABLE IF NOT EXISTS session_kernel_owner (
 				singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
