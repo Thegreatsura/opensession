@@ -166,6 +166,17 @@ interface Props {
   }) => React.ReactNode;
 }
 
+/** Pins a field's parent at its current height until the returned release
+ *  runs, so resetting the field to measure it cannot move anything around it. */
+function holdParentHeight(el: HTMLElement) {
+  const parent = el.parentElement;
+  if (!parent) return null;
+  parent.style.minHeight = `${parent.offsetHeight}px`;
+  return () => {
+    parent.style.minHeight = "";
+  };
+}
+
 /**
  * Shared session composer (Claude/Codex-style): rounded container with an
  * auto-growing textarea and a bottom toolbar carrying compact model/effort pills,
@@ -939,14 +950,24 @@ export function Composer({
   // skipped while a height is applied. Everything around it is written from
   // what was last applied, so a draft that isn't changing the field's height
   // stops re-writing it.
+  //
+  // The reset is a forced layout with the field one row tall. Left alone, that
+  // collapse reached the transcript: its scroller grew for the measure and the
+  // browser clamped its scroll position, so with a multi-line draft every
+  // keystroke dropped a transcript that was pinned to the latest message by
+  // the extra rows, and it jumped back up the next time the composer grew.
+  // Holding the field's wrapper at its current height keeps the measure inside
+  // the composer.
   const appliedHeight = useRef("");
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
+    const release = appliedHeight.current ? holdParentHeight(el) : null;
     if (appliedHeight.current) el.style.height = "";
     // min-/max-height clamp this, so tall drafts scroll internally at the cap.
     const height = displayText ? `${el.scrollHeight}px` : "";
     if (height) el.style.height = height;
+    release?.();
     appliedHeight.current = height;
     // Height (and thus clip state) just changed — re-evaluate both edges.
     updateScrollEdges(el);
