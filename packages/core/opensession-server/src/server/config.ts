@@ -45,6 +45,11 @@ export interface ServerSection {
   previewHost?: string;
   /** Caddy admin API endpoint. */
   caddyAdmin?: string;
+  /** A reverse proxy that overwrites X-Forwarded-For fronts every path to
+   * this server, so a loopback peer's last forwarded hop is the client.
+   * Read only for the Runner tailnet gate. Leave off for SSH forwards and
+   * raw tunnels, where the client chooses that header. */
+  trustForwardedFor?: boolean;
 }
 
 export interface PathsSection {
@@ -316,6 +321,7 @@ export interface ResolvedServer {
   webhookBaseUrl: string;
   previewHost: string;
   caddyAdmin: string;
+  trustForwardedFor: boolean;
 }
 
 export interface ResolvedIngress {
@@ -480,6 +486,7 @@ function parseConfig(text: string): OpenSessionConfig {
         publicBaseUrl: str(server.publicBaseUrl),
         previewHost: str(server.previewHost),
         caddyAdmin: str(server.caddyAdmin),
+        trustForwardedFor: bool(server.trustForwardedFor),
       });
     }
 
@@ -743,6 +750,9 @@ export function configuredServer(): ResolvedServer {
     // unrelated machine/tailnet hostname would make every browser portal 401.
     previewHost: process.env.PREVIEW_HOST || s.previewHost || publicHost,
     caddyAdmin: s.caddyAdmin || "http://localhost:2019",
+    trustForwardedFor:
+      process.env.OPENSESSION_TRUST_FORWARDED_FOR === "1" ||
+      s.trustForwardedFor === true,
   };
 }
 

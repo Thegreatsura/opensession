@@ -12,9 +12,10 @@ import { existsSync, readFileSync } from "fs";
 import { randomUUIDv7 } from "bun";
 import { statePath } from "./paths";
 import { writeJsonAtomic } from "./shared/atomic-write";
-import { isTailnetAddress, normalizeAddress } from "./shared/network-address";
+import { normalizeAddress } from "./shared/network-address";
+import { isRunnerTailnetOrigin } from "./runner-origin";
 
-export { isTailnetAddress, normalizeAddress } from "./shared/network-address";
+export { normalizeAddress } from "./shared/network-address";
 
 export type RunnerPlatform = "darwin" | "linux" | "win32";
 export type RunnerState = "online" | "busy" | "offline" | "maintenance";
@@ -459,7 +460,7 @@ export type RegisterRunnerInput = {
 export function registerRunner(
   input: RegisterRunnerInput,
 ): { ok: true; runner: Runner; token: string } | { ok: false; error: string } {
-  if (!isTailnetAddress(input.address))
+  if (!isRunnerTailnetOrigin(input.address))
     return { ok: false, error: "Runners must connect from the tailnet." };
   const pairing = redeemPairing(input.code);
   if (!pairing)

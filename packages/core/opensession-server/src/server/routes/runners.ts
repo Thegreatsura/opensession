@@ -5,7 +5,6 @@ import { disconnectRunner, isRunnerConnected } from "../runner-ws";
 import {
   createRunnerPairing,
   discardRunnerPairing,
-  isTailnetAddress,
   listRunnerPairings,
   listRunners,
   publicRunner,
@@ -25,21 +24,14 @@ import {
   configuredRunnerBootstrapTargets,
 } from "../runner-bootstrap";
 import { dropRunnerPortalsForRunner } from "../runner-portals";
+import { runnerTailnetOrigin, type PeerServer } from "../runner-origin";
 
-function peerAddress(ctx: RouteContext): string {
+/** The Runner's tailnet origin, from the one resolver `/runner-ws` uses. */
+function tailnetOrigin(ctx: RouteContext): string | undefined {
   const server = (globalThis as any).__opensessionServer as
-    | { requestIP?(req: Request): { address: string } | null }
+    | PeerServer
     | undefined;
-  const direct = server?.requestIP?.(ctx.req)?.address ?? "";
-  if (["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(direct)) {
-    const hops = ctx.req.headers
-      .get("x-forwarded-for")
-      ?.split(",")
-      .map((value) => value.trim())
-      .filter(Boolean);
-    if (hops?.length) return hops.at(-1)!;
-  }
-  return direct;
+  return runnerTailnetOrigin(ctx.req, server);
 }
 
 function publicView() {
@@ -158,7 +150,7 @@ export async function handleRunnersRoutes(
         typeof body.softwareVersion === "string"
           ? body.softwareVersion
           : undefined,
-      address: peerAddress(ctx),
+      address: tailnetOrigin(ctx) ?? "",
     });
     if (!result.ok)
       return Response.json({ error: result.error }, { status: 403 });
@@ -181,7 +173,7 @@ export async function handleRunnersRoutes(
     const id = req.headers.get("x-opensession-runner") ?? "";
     if (!authenticateRunner(id, token))
       return Response.json({ error: "Unauthorized" }, { status: 401 });
-    if (!isTailnetAddress(peerAddress(ctx)))
+    if (!tailnetOrigin(ctx))
       return Response.json({ error: "Not on the tailnet" }, { status: 403 });
     const body = (await req.json().catch(() => ({}))) as Record<
       string,

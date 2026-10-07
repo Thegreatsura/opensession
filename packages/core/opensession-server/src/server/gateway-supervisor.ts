@@ -43,6 +43,16 @@ export const GATEWAY_CONTROL_SOCKET = gatewayControlSocketPath();
 const PUBLIC_HOST = process.env.HOST || "127.0.0.1";
 const PUBLIC_PORT = Number(process.env.PORT || 3850);
 const BACKEND_HOST = "127.0.0.1";
+// The child sees every relayed client as loopback. Tell it where clients
+// actually connected when this supervisor binds the public listener itself;
+// the Runner tailnet gate trusts a tailnet listen address and nothing else.
+// An external ingress or an inherited socket may listen elsewhere, so the
+// child gets no claim at all then (runner-origin.ts).
+const RELAYED_PUBLIC_HOST =
+  process.env.OPENSESSION_EXTERNAL_INGRESS === "1" ||
+  inheritedGatewaySocketFd() !== undefined
+    ? ""
+    : PUBLIC_HOST;
 let nextBackendPort = Number(
   process.env.OPENSESSION_GATEWAY_BACKEND_PORT_BASE || 0,
 );
@@ -900,6 +910,7 @@ export function spawnGateway(
       OPENSESSION_GATEWAY_ROLE: role,
       PORT: String(PUBLIC_PORT),
       OPENSESSION_GATEWAY_BACKEND_HOST: BACKEND_HOST,
+      OPENSESSION_GATEWAY_PUBLIC_HOST: RELAYED_PUBLIC_HOST,
       OPENSESSION_GATEWAY_BACKEND_PORT: String(backendPort),
       OPENSESSION_RELEASE_GENERATION: generation,
       OPENSESSION_KERNEL_GENERATION: peerGenerations?.kernel ?? generation,

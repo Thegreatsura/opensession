@@ -89,7 +89,7 @@ const registered = runners.registerRunner({
   name: "isolation-approved-macos",
   platform: "darwin",
   arch: "arm64",
-  address: "127.0.0.1",
+  address: "100.64.0.10",
 });
 if (!registered.ok) throw new Error(registered.error);
 const runnerRoot = join(root, "runner-root");
