@@ -471,6 +471,12 @@ entry points fail closed before starting an agent run or steering a session:
   rostered actor or configured bot.
 - startup recovery revalidates persisted requesters, so a previously accepted
   public event cannot bypass the boundary after a restart.
+- trusting the actor does not make the content they point at trusted. Review
+  feedback handed to a fixing agent (auto-fix and the review handoff into a
+  session) keeps only comments from the roster, configured bots, and installed
+  GitHub App accounts. Mention and issue prompts label the rest of the thread,
+  and an issue description written by someone off the roster, as untrusted
+  data rather than instructions.
 
 GitHub webhook trust follows the identity roster. With GitHub web sign-in
 active, successful sign-ins automatically join that roster as ordinary members.
