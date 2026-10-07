@@ -285,6 +285,24 @@ describe("race-free transcript watch", () => {
     expect(state.frames).toHaveLength(1);
   });
 
+  test("a client that can't read compressed frames gets the snapshot uncompressed", async () => {
+    const state = setup();
+    const sid = `bks-apple-${crypto.randomUUID()}`;
+    state.store.appendTranscriptEvents(sid, [entry("a", "hello")]);
+    const handle = await startTranscriptWatch({
+      sessionId: sid,
+      store: state.store,
+      socket: Object.assign(state.socket, {
+        data: { compressFrames: false },
+      }),
+      subscribe: subscribeTranscript,
+      isCurrent: () => true,
+    });
+    expect(state.frames[0]).toMatchObject({ type: "transcript_init" });
+    expect(state.compression).toEqual([false]);
+    handle.unsubscribe();
+  });
+
   test("an assistant-heavy tool tail opens with substantial conversation context", async () => {
     // A turn's tools and intermediate assistant notes collapse into one fold.
     // The opening payload should carry enough earlier conversation that later

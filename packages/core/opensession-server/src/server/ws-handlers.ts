@@ -124,6 +124,7 @@ import { resumeSessionFeed } from "./session-feed";
 import type { SeqEntry } from "./transcript-store";
 import { importLegacyTranscript, transcript } from "./actor-transcript";
 import { startTranscriptWatch } from "./transcript-watch";
+import { type CompressibleSocket, sendCompressedFrame } from "./ws-compression";
 import { clampV2InitEntries } from "./transcript-wire";
 import {
   MAX_UPLOAD_BYTES,
@@ -332,15 +333,10 @@ function classifyV2Entries(entries: SeqEntry[]): SeqEntry[] {
 }
 
 function sendTranscriptFrame(
-  ws: {
-    send(payload: string, compress?: boolean): unknown;
-    data?: { compressFrames?: boolean };
-  },
+  ws: CompressibleSocket,
   frame: Record<string, unknown>,
 ): void {
-  // Apple networking clients reject Bun's short compressed frames; see
-  // ws-compression.ts.
-  ws.send(JSON.stringify(frame), ws.data?.compressFrames !== false);
+  sendCompressedFrame(ws, JSON.stringify(frame));
 }
 
 async function sendTranscriptIndex(

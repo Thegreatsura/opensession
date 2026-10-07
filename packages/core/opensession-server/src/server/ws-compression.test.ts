@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { inflateRawSync } from "node:zlib";
 import { connect } from "node:net";
-import { clientAcceptsCompressedFrames } from "./ws-compression";
+import {
+  clientAcceptsCompressedFrames,
+  sendCompressedFrame,
+} from "./ws-compression";
 
 describe("clientAcceptsCompressedFrames", () => {
   test("Apple networking clients get uncompressed frames", () => {
@@ -33,6 +36,17 @@ describe("clientAcceptsCompressedFrames", () => {
   });
 });
 
+test("sendCompressedFrame follows the socket's flag", () => {
+  const sent: boolean[] = [];
+  const send = (_payload: string, compress?: boolean) =>
+    sent.push(compress === true);
+  sendCompressedFrame({ send }, "{}");
+  sendCompressedFrame({ send, data: {} }, "{}");
+  sendCompressedFrame({ send, data: { compressFrames: true } }, "{}");
+  sendCompressedFrame({ send, data: { compressFrames: false } }, "{}");
+  expect(sent).toEqual([true, true, true, false]);
+});
+
 // The reason for the split above. If Bun stops ending short compressed
 // messages with BFINAL, Apple clients could have compression back.
 test("Bun ends a short compressed message with a BFINAL block", async () => {
@@ -45,7 +59,10 @@ test("Bun ends a short compressed message with a BFINAL block", async () => {
     websocket: {
       perMessageDeflate: { compress: "shared", decompress: "shared" },
       open(ws) {
-        ws.send(JSON.stringify({ type: "transcript_append", text: "hi" }), true);
+        ws.send(
+          JSON.stringify({ type: "transcript_append", text: "hi" }),
+          true,
+        );
       },
       message() {},
     },

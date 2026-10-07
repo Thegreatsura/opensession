@@ -18,6 +18,21 @@ export function clientAcceptsCompressedFrames(
   if (!userAgent) return true;
   if (/\bCFNetwork\//.test(userAgent)) return false;
   return !(
-    /\bAppleWebKit\//.test(userAgent) && !/\b(?:Chrome|Chromium)\//.test(userAgent)
+    /\bAppleWebKit\//.test(userAgent) &&
+    !/\b(?:Chrome|Chromium)\//.test(userAgent)
   );
+}
+
+/** A UI socket as far as frame compression is concerned. */
+export interface CompressibleSocket {
+  send(payload: string, compress?: boolean): unknown;
+  data?: { compressFrames?: boolean };
+}
+
+/** Send a large frame compressed unless this socket's client can't read it. */
+export function sendCompressedFrame(
+  socket: CompressibleSocket,
+  payload: string,
+): void {
+  socket.send(payload, socket.data?.compressFrames !== false);
 }
