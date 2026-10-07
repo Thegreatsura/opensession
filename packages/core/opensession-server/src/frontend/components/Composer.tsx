@@ -78,7 +78,6 @@ import {
   composerSendQueue,
   composerSendSteer,
   composerSendStop,
-  composerMentionSpacing,
   composerTextarea,
   composerTextareaPadding,
   composerTextareaPaddingMinimized,
@@ -977,12 +976,6 @@ export function Composer({
     ? composerHighlightHtml(displayText, people, sessionRanges)
     : "";
   const mentionRanges = composerMentionRanges(displayText, people);
-  // A mention pill's padding is bought out of the space beside it, so the draft
-  // pays a wider word space only while it holds one. Both the field and the
-  // mirror wear it, or the painted text slides off the caret behind it. Session
-  // pills use a narrower wash instead: a pasted link often sits inside a full
-  // sentence, where widening every space is visibly wrong.
-  const hasMention = mentionRanges.length > 0;
   useEffect(() => {
     // The textarea scrolls internally at max-height; keep the mirror locked to it.
     const el = textareaRef.current;
@@ -1543,7 +1536,6 @@ export function Composer({
                 composerTextarea,
                 composerTextareaPadding,
                 "pointer-events-none absolute inset-0 z-0 overflow-hidden text-fg break-words whitespace-pre-wrap select-none",
-                hasMention && composerMentionSpacing,
                 // A pill's wash reaches past its own box (base.css), so one at
                 // either end of a line would be cut off by this box. The
                 // padding pushes the clip edge out; the matching negative
@@ -1574,7 +1566,6 @@ export function Composer({
             className={cn(
               "composer-textarea",
               composerTextarea,
-              hasMention && composerMentionSpacing,
               minimized
                 ? composerTextareaPaddingMinimized
                 : composerTextareaPadding,

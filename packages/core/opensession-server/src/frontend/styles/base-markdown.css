@@ -169,22 +169,14 @@
    puts it behind the name, in front of the mirror.
 
    How far it reaches is arithmetic rather than taste. The only room beside a
-   mention is the space character next to it, and that one space has to cover
-   both the pill's own padding and the gap to the neighbouring word. A 14px
-   draft sets words 3.7px apart, which is not enough for either: a wash of any
-   real width sits ON the next word, which is what reads as the pill being cut
-   off. So the composer widens the space itself (`word-spacing`, on the field
-   as well as the mirror so the two still agree glyph for glyph; a margin on
-   this span alone would slide the painted text off the caret behind it), and
-   wears it only while a mention is in the draft, so an ordinary sentence keeps
-   the type's own spacing. See `composerMentionSpacing` in
-   lib/composer-classes.ts.
-
-   That sets a space at 7.2px, and the wash takes 5px of it on each side. What
-   is left, 2.2px, is the gap a neighbouring word sees. The two ends look even
-   at the same number even though they are not the same shape, because the
-   face at one end and the name's flat stem at the other are each 1px inside
-   their own edge of the box.
+   mention is the space character next to it, and a 14px draft sets words
+   3.7px apart. The composer does NOT widen that space: `word-spacing` would
+   have to go on the whole field (the textarea cannot style one space), and a
+   draft with a mention in it then read as broken word spacing everywhere. So
+   the wash keeps within the type's own space instead: 2.5px past the name's
+   flat stem on the right leaves the next word about 1.2px of clear air, and
+   2px on the left is enough because the face, set 1px past the box, already
+   reads as the pill's left edge.
 
    The mirror carries 6px of padding against a matching negative margin
    (Composer.tsx): its content origin is unchanged, so nothing moves, but
@@ -200,7 +192,7 @@
 .composer-hl .cmp-mention::before {
   content: "";
   position: absolute;
-  inset: -2px -5px;
+  inset: -2px -2.5px -2px -2px;
   z-index: -1;
   /* Squircle capsule, the shape the sent `person-chip` takes. */
   border-radius: 999px;
@@ -228,8 +220,8 @@
    its slot. The face hangs off THAT span rather than off the pill, so it
    stays fixed to the slot whatever the wash around it does, and the gap either
    side of it is the slot's own arithmetic: 13.8px at the composer's 14px type,
-   plus the 5px the wash reaches to its left, less a 0.8em face set 1px past
-   the box, leaves 4px of wash before the face and 3.6px between it and the
+   plus the 2px the wash reaches to its left, less a 0.8em face set 1px past
+   the box, leaves 1px of wash before the face and 3.6px between it and the
    first letter. The size is in `em` because the slot is: the phone composer
    sets 16px, where a fixed size would sit small in a wider gap. Absolute, so
    it takes no part in layout. */
@@ -267,8 +259,8 @@
    destination rather than an alert (see `.session-link[data-session-id]`).
    Accent on both would spend the one distinction the two pills exist to draw.
 
-   It reaches 4px rather than the mention's 5px, and that one pixel keeps it out
-   of the word-spacing trade. The projection reserves one thin display-only
+   It reaches 4px, more than the mention's 2.5px, because it does not have to
+   fit inside an ordinary space. The projection reserves one thin display-only
    space outside each end of the painted token, in both the field and mirror.
    That gives this link real margin without widening every ordinary space in the
    draft or moving the painted text away from the native caret.

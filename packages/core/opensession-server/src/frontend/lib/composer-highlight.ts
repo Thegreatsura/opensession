@@ -103,7 +103,7 @@ export function composerMentionRanges(
  * no characters to spare, so the projection reserves two of them. Figure
  * spaces, for two reasons: they are non-breaking, so a wrapped reference never
  * leaves its glyph stranded at the end of a line, and unlike an ordinary space
- * they are not word separators, so the composer's wider word spacing does not
+ * they are not word separators, so any word spacing on the field would not
  * stretch the slot out from under the glyph.
  */
 export const SESSION_GLYPH_SLOT = "\u2007\u2007";

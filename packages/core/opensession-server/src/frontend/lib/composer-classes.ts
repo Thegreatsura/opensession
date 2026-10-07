@@ -67,23 +67,6 @@ export const composerBoxMinimized =
  *  is what keeps them glyph-identical. */
 export const composerTextarea =
   "block max-h-[320px] min-h-0 w-full resize-none border-none bg-transparent text-body leading-[1.55] outline-none phone:max-h-[240px] phone:text-input-phone";
-/** The only room a mention pill can take is the space character beside it: its
- *  wash is painted rather than laid out, and 3.7px of natural space has to
- *  cover both the pill's own padding and the gap to the next word. Widening
- *  the space is the only way to give that chip a margin, and it goes on the
- *  field as well as the mirror, so the painted text stays under the caret it
- *  belongs to.
- *
- *  It is worn only while the draft actually holds a mention (Composer.tsx),
- *  because every space pays it, not just the two beside the pill. A sentence
- *  set this way on its own reads as broken word spacing, which is what a
- *  permanent 3.5px did. Scoped, the cost lands on the draft that wanted the
- *  chip and ordinary prose keeps the type's own spacing.
- *
- *  Session pills deliberately do not wear it. A pasted link often sits inside
- *  a full sentence, where widening every space is more distracting than the
- *  extra pixel of air buys the pill. */
-export const composerMentionSpacing = "[word-spacing:3.5px]";
 export const composerTextareaPadding = "px-0 pt-0.5 pb-1";
 /** In the resting pill the field is one row inside a 4px-inset box, so it
  *  carries the horizontal breathing room and no vertical padding at all. */
