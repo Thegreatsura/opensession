@@ -1,4 +1,5 @@
 import { avatarUrl, type Provider } from "../../lib/provider";
+import { reviewerVerdict } from "../../lib/review-lines";
 import type { PrFile, PrReviewer } from "../../lib/types";
 import { IconCheck, IconClock, IconFile, IconMessage, IconX } from "../icons";
 
@@ -49,29 +50,13 @@ export function ReviewerRow({
 export function reviewerStateMeta(state: PrReviewer["state"]) {
   switch (state) {
     case "APPROVED":
-      return {
-        label: "Approved",
-        tone: "green",
-        icon: <IconCheck size={16} />,
-      };
+      return { ...reviewerVerdict(state), icon: <IconCheck size={16} /> };
     case "CHANGES_REQUESTED":
-      return {
-        label: "Requested changes",
-        tone: "red",
-        icon: <IconX size={16} />,
-      };
+      return { ...reviewerVerdict(state), icon: <IconX size={16} /> };
     case "COMMENTED":
-      return {
-        label: "Commented",
-        tone: "muted",
-        icon: <IconMessage size={16} />,
-      };
+      return { ...reviewerVerdict(state), icon: <IconMessage size={16} /> };
     default:
-      return {
-        label: "Awaiting review",
-        tone: "yellow",
-        icon: <IconClock size={16} />,
-      };
+      return { ...reviewerVerdict(state), icon: <IconClock size={16} /> };
   }
 }
 
