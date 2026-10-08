@@ -468,6 +468,10 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   composer onto the card, where the arrows and Return pick (`AskKeyBridge`,
   `AskLetterShortcuts`). For questions without options, the command focuses
   the free-text answer field instead.
+  **Team Note** (⌘⇧N, rebindable as the web's `composer-note`) switches the
+  key window's composer between a prompt and a team note from anywhere in
+  that window and puts the caret in it; it keeps the draft, never sends, and
+  does nothing under a sheet or on key repeat (`ComposerNoteBridge`).
   Personal → **Keychain** (a pane of its own on macOS) mirrors the web's:
   requests only a credential's owner can answer (`canAnswer`; a grouped
   scripted run is one answer naming every credential, owner and call cap),

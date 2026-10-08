@@ -945,6 +945,28 @@ struct SessionsListView: View {
             )
         }
 
+        // Same next-turn post as the question row: the composer only answers
+        // once its window is key again with no sheet over it.
+        if selectedSession != nil {
+            items.append(
+                CommandPaletteItem(
+                    entry: CommandPaletteEntry(
+                        id: "command:composer-note",
+                        title: "Team note",
+                        subtitle: "Switch the composer between a prompt and a team note",
+                        keywords: ["note", "team", "comment", "composer"],
+                        shortcut: shortcuts.primaryBinding(for: .composerNote)?.glyphs ?? [],
+                        symbol: "note.text"
+                    ),
+                    run: {
+                        DispatchQueue.main.async {
+                            NotificationCenter.default.post(name: .os1ComposerNote, object: nil)
+                        }
+                    }
+                )
+            )
+        }
+
         items.append(
             CommandPaletteItem(
                 entry: CommandPaletteEntry(
