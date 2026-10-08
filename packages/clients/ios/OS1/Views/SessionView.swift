@@ -3644,6 +3644,13 @@ private struct SessionInputBar: View {
         } message: {
             Text("You can ask again or send a follow-up anytime.")
         }
+        // The account's "Team note" chord, from anywhere in this window:
+        // the same toggle as the + menu row, so the draft stays put, and the
+        // caret lands in the composer either way. Never sends.
+        .composerNoteCommand(blocked: sheet != nil || stopConfirm) {
+            noteMode.toggle()
+            inputFocused = true
+        }
         // A turn that finishes on its own while the question is up leaves
         // nothing to stop, so the question goes with it rather than stopping
         // whatever runs next.
