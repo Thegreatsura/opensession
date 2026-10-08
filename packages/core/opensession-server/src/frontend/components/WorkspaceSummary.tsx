@@ -38,17 +38,11 @@ import { sessionHasConnectedPr } from "../lib/session-prs";
 import { getCurrentUser } from "./UserPicker";
 import { PR_WEBHOOK_FALLBACK_POLL_MS } from "../lib/poll";
 import { PrStatusBar } from "./PrStatusBar";
-import { reviewerStateMeta } from "./pr/PrRows";
 import { StagingLink } from "./StagingLink";
 import { UserAvatar } from "./UserAvatar";
 import { WorkspaceSummaryCollaborators } from "./WorkspaceCollaborators";
-import {
-  personNameForGithubLogin,
-  personNameForKey,
-  usePeople,
-  useReviewTeams,
-} from "../lib/people";
-import { isBotAuthor } from "../lib/pr-comments";
+import { usePeople, useReviewTeams } from "../lib/people";
+import { type ReviewLine, reviewLines } from "../lib/review-lines";
 import { Popover } from "../ui/popover";
 import { Button } from "../ui/button";
 import { Menu } from "../ui/menu";
@@ -258,102 +252,17 @@ type SummaryChangeFile = {
   patch?: string;
 };
 
-type ReviewLine = {
-  key: string;
-  name: string;
-  login?: string;
-  state: string;
-  tone: string;
-  human: boolean;
-  /** This person was asked to review, here or on GitHub. The reviewer picker
-   *  hangs on this row; a row that merely commented is a fact, not a slot. */
-  requested: boolean;
-};
-
-function reviewLines(
-  pr: PrDetails | null,
-  request: UnifiedSession["reviewRequest"] | null | undefined,
-  prReviewRequested: string[] | undefined,
-): ReviewLine[] {
-  if (!pr) return [];
-
-  const lines: ReviewLine[] = [];
-  const seen = new Map<string, ReviewLine>();
-  const add = (line: ReviewLine) => {
-    const existing = seen.get(line.key);
-    if (existing) return existing;
-    seen.set(line.key, line);
-    lines.push(line);
-    return line;
-  };
-
-  // Whoever we asked, first: this is the row whose picker can change the
-  // current request while the connected pull request is still visible.
-  const requestedPeople = request?.recipients?.length
-    ? request.recipients
-    : [request?.to];
-  for (const key of requestedPeople) {
-    if (!key) continue;
-    const name = personNameForKey(key);
-    add({
-      key: name.toLowerCase(),
-      name,
-      state: request?.accepted ? "Signed off" : "Review asked",
-      tone: request?.accepted ? "text-green" : "text-dim",
-      human: true,
-      requested: true,
-    });
-  }
-  for (const key of prReviewRequested || []) {
-    if (!key) continue;
-    const name = personNameForKey(key);
-    add({
-      key: name.toLowerCase(),
-      name,
-      state: "Awaiting review",
-      tone: "text-dim",
-      human: true,
-      requested: true,
-    });
-  }
-
-  // Then the PR's own, folded onto the same person where they match. Only
-  // while it is open: once it lands the review is history, and the card is for
-  // what is still live.
-  if (pr?.state === "OPEN") {
-    const byLogin = new Map<string, PrReviewer>();
-    for (const reviewer of pr.reviewers || []) {
-      const previous = byLogin.get(reviewer.login);
-      if (!previous || previous.state === "PENDING")
-        byLogin.set(reviewer.login, reviewer);
-    }
-    for (const reviewer of byLogin.values()) {
-      const meta = reviewerStateMeta(reviewer.state);
-      const personName = reviewer.isTeam
-        ? null
-        : personNameForGithubLogin(reviewer.login);
-      const name = personName || reviewer.login;
-      const line = add({
-        key: name.toLowerCase(),
-        name,
-        login: reviewer.isTeam ? undefined : reviewer.login,
-        state: meta.label,
-        tone: meta.tone === "muted" ? "text-dim" : `text-${meta.tone}`,
-        human: !reviewer.isTeam && !isBotAuthor(reviewer.login),
-        requested: reviewer.state === "PENDING",
-      });
-      // Merged onto a request row: keep the request's name, take GitHub's
-      // verdict once there is one to take.
-      if (line.state !== meta.label && reviewer.state !== "PENDING") {
-        line.state = meta.label;
-        line.tone = meta.tone === "muted" ? "text-dim" : `text-${meta.tone}`;
-        line.login = line.login || reviewer.login;
-      }
-      line.human ||= !reviewer.isTeam && !isBotAuthor(reviewer.login);
-      line.requested ||= reviewer.state === "PENDING";
-    }
-  }
-  return lines;
+function ReviewerAvatar({ reviewer }: { reviewer: ReviewLine }) {
+  if (reviewer.team)
+    return <IconStack size={16} className="shrink-0 text-dim" />;
+  return (
+    <UserAvatar
+      name={reviewer.name}
+      login={reviewer.login}
+      size={16}
+      edge={false}
+    />
+  );
 }
 
 /** How many assets the card lists before it defers to the Assets tab. The card
@@ -759,7 +668,12 @@ export function WorkspaceSummaryBody({
   // re-render the card.
   const people = usePeople();
   const reviewTeams = useReviewTeams();
-  const reviewers = reviewLines(pr, selectedReview, prReviewRequested);
+  const reviewers = reviewLines(
+    pr,
+    selectedReview,
+    prReviewRequested,
+    reviewTeams,
+  );
   const osReview = pr?.osReview;
   const osReviewActive = Boolean(pr?.reviewActive || reviewStarting);
   const showOsReview = osReviewActive || Boolean(osReview);
@@ -1530,12 +1444,7 @@ export function WorkspaceSummaryBody({
             title={`${reviewer.name} · ${reviewer.state}`}
           >
             <span className={WS_SUMMARY_RAIL}>
-              <UserAvatar
-                name={reviewer.name}
-                login={reviewer.login}
-                size={16}
-                edge={false}
-              />
+              <ReviewerAvatar reviewer={reviewer} />
             </span>
             <span className={WS_SUMMARY_LABEL}>{reviewer.name}</span>
             <span className={cn(WS_SUMMARY_STATE, reviewer.tone)}>
@@ -1548,12 +1457,7 @@ export function WorkspaceSummaryBody({
           <Menu.Root>
             <Menu.Trigger className={WS_SUMMARY_ROW} disabled={reviewBusy}>
               <span className={WS_SUMMARY_RAIL}>
-                <UserAvatar
-                  name={pickerReviewer.name}
-                  login={pickerReviewer.login}
-                  size={16}
-                  edge={false}
-                />
+                <ReviewerAvatar reviewer={pickerReviewer} />
               </span>
               <span className={WS_SUMMARY_LABEL}>{pickerReviewer.name}</span>
               <span className={cn(WS_SUMMARY_STATE, pickerReviewer.tone)}>
@@ -1611,12 +1515,7 @@ export function WorkspaceSummaryBody({
             title={`${reviewer.name} · ${reviewer.state}`}
           >
             <span className={WS_SUMMARY_RAIL}>
-              <UserAvatar
-                name={reviewer.name}
-                login={reviewer.login}
-                size={16}
-                edge={false}
-              />
+              <ReviewerAvatar reviewer={reviewer} />
             </span>
             <span className={WS_SUMMARY_LABEL}>{reviewer.name}</span>
             <span className={cn(WS_SUMMARY_STATE, reviewer.tone)}>

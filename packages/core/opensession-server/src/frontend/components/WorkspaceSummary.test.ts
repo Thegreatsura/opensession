@@ -81,7 +81,6 @@ test("uncommitted work opens Changes without using the separate commit action", 
 });
 
 test("reviewers stay hidden until a pull request is connected", () => {
-  expect(summarySource).toContain("if (!pr) return []");
   expect(summarySource).toContain(
     "const hasConnectedPr = sessionHasConnectedPr(session)",
   );
@@ -99,7 +98,6 @@ test("an assigned reviewer can be changed or cleared from the summary", () => {
 });
 
 test("submitted review facts stay separate from the reviewer picker", () => {
-  expect(summarySource).toContain('requested: reviewer.state === "PENDING"');
   expect(summarySource).toContain("const pickerReviewer =");
   expect(summarySource).toContain("{passiveReviewers.map((reviewer) => (");
   expect(summarySource).toContain("{!pickerReviewer && (");
