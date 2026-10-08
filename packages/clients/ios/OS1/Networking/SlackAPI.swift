@@ -35,6 +35,48 @@ enum SlackAPI {
         let error: String?
     }
 
+    private struct UsersResponse: Decodable, Sendable {
+        let users: [SlackMentionUser]?
+    }
+
+    /// The roster from the last successful read, so a composer that opens
+    /// later decodes its mentions on the first frame.
+    static var cachedUsers: [SlackMentionUser] {
+        usersServer == ServerConfig.shared.baseURL?.absoluteString ? lastUsers : []
+    }
+    private static var lastUsers: [SlackMentionUser] = []
+    private static var usersServer: String?
+    private static var usersTask: Task<[SlackMentionUser], Never>?
+
+    /// The workspace people for the composer's "@" picker, read once per
+    /// launch. A failure answers empty and is retried by the next composer;
+    /// a server that predates the route reads as no one to mention.
+    static func users() async -> [SlackMentionUser] {
+        let server = ServerConfig.shared.baseURL?.absoluteString
+        if server != usersServer {
+            usersTask = nil
+            lastUsers = []
+            usersServer = server
+        }
+        if let usersTask { return await usersTask.value }
+        let task = Task<[SlackMentionUser], Never> {
+            guard let data = try? await request("/api/slack/users") else { return [] }
+            let decoded = try? await Task.detached(priority: .userInitiated) {
+                try JSONDecoder().decode(UsersResponse.self, from: data)
+            }.value
+            return decoded?.users ?? []
+        }
+        usersTask = task
+        let users = await task.value
+        guard usersServer == server else { return users }
+        if users.isEmpty {
+            usersTask = nil
+        } else {
+            lastUsers = users
+        }
+        return users
+    }
+
     /// Configured Slack destinations for deliberate, human-authored posts.
     static func channels(sessionId: String) async throws -> ChannelsResponse {
         let session = encodePath(sessionId)

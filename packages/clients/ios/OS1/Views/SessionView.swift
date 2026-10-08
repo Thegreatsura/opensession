@@ -975,6 +975,9 @@ struct SessionView: View {
                 if slackShare?.composerRequestId != nil { slackShare = nil }
                 return
             }
+            // The server echoes every draft save back. The open sheet already
+            // holds that text; rebuilding it would close it mid-edit.
+            if slackShare?.composerRequestId == request.id { return }
             slackShare = PrSlackShareRequest(
                 title: request.message,
                 url: URL(string: "https://slack.com")!,
@@ -3643,6 +3646,13 @@ private struct SessionInputBar: View {
                 .keyboardShortcut(.defaultAction)
         } message: {
             Text("You can ask again or send a follow-up anytime.")
+        }
+        // The account's "Team note" chord, from anywhere in this window:
+        // the same toggle as the + menu row, so the draft stays put, and the
+        // caret lands in the composer either way. Never sends.
+        .composerNoteCommand(blocked: sheet != nil || stopConfirm) {
+            noteMode.toggle()
+            inputFocused = true
         }
         // A turn that finishes on its own while the question is up leaves
         // nothing to stop, so the question goes with it rather than stopping

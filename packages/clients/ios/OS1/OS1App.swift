@@ -76,6 +76,14 @@ struct OS1App: App {
                     NotificationCenter.default.post(name: .os1AskFocus, object: nil)
                 }
                 .keyboardShortcut(shortcuts.keyboardShortcut(for: .askFocus))
+                // Switches the key window's composer between a prompt and a
+                // team note and puts the caret in it. Only that window's
+                // composer answers, and not under a sheet or on key repeat
+                // (see `composerNoteCommand`).
+                Button("Team Note") {
+                    NotificationCenter.default.post(name: .os1ComposerNote, object: nil)
+                }
+                .keyboardShortcut(shortcuts.keyboardShortcut(for: .composerNote))
             }
         }
         #endif

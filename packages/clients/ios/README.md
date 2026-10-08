@@ -84,6 +84,12 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   (the inbox's unread count) stay on the device. A banner only comes from a
   live `notification` socket frame the server marked as alerting, so reconnects
   and relaunches never replay one. Agent runs and questions do not notify.
+- **Add project** (`AddRepositoryView`, `RepoRegistration`) — the sidebar
+  filter panel's last row opens Clone repository, Local folder (a checkout
+  already on the server, by path) or New repository directly, the same flow
+  Settings → Repositories pushes. Every registration is confirmed, runs one at
+  a time, shows the server's own error inline, and refreshes the sidebar's
+  project bands when it lands.
 - **Feed** (iOS) — recent merged pull requests and commits in one page, with
   person and project filters.
 - **Tasks** (iOS) — the shared `/api/todos` list, with actions to add, complete,
@@ -376,7 +382,12 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   the person's existing grant lacks image access. Agent-requested Slack
   composers save edited copy, channel, and images while pending, including on
   dismiss or background. They settle into a sent or cancelled receipt; sent
-  receipts keep the channel and an **Open in Slack** link. A workspace row's
+  receipts keep the channel and an **Open in Slack** link. Typing `@` in any
+  of these sheets offers workspace people from `GET /api/slack/users`; the
+  field shows `@Name` while saves and sends carry Slack's `<@U…>` token
+  (`SlackMentionDraft` tracks each picked name's range, so duplicate names and
+  unknown ids survive edits), and a reopened draft reads back as names once
+  the roster lands. A workspace row's
   long-press menu also rolls the
   cached PR state into one next action: merge when ready, fix failed checks,
   resolve conflicts, address feedback, view running checks, or archive after it
@@ -466,6 +477,10 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   composer onto the card, where the arrows and Return pick (`AskKeyBridge`,
   `AskLetterShortcuts`). For questions without options, the command focuses
   the free-text answer field instead.
+  **Team Note** (⌘⇧N, rebindable as the web's `composer-note`) switches the
+  key window's composer between a prompt and a team note from anywhere in
+  that window and puts the caret in it; it keeps the draft, never sends, and
+  does nothing under a sheet or on key repeat (`ComposerNoteBridge`).
   Personal → **Keychain** (a pane of its own on macOS) mirrors the web's:
   requests only a credential's owner can answer (`canAnswer`; a grouped
   scripted run is one answer naming every credential, owner and call cap),
@@ -629,6 +644,7 @@ OS1/
     PrDetails.swift          PR panel payload
     SettingsModels.swift     Settings payloads (tools/personal/workspace)
     MemoryRepos.swift        Memory repository, history, remote payloads
+    RepoRegistration.swift   Add project sources, setup/repos bodies, one-at-a-time model
     WorkspaceRunner.swift    Instance Runner list + the shared status words
     SandboxOffering.swift    What run environments a new session may choose
     SandboxMove.swift        Which sessions may move into a Sandbox later, and
@@ -682,6 +698,7 @@ OS1/
     RunnersSettingsView.swift  Read-only list of the instance's Runners
     Native*SettingsViews.swift  Native Tools, Personal, Workspace panels
     MemoryRepoSettingsViews.swift  Memory repositories: remote, changes, files
+    AddRepositoryView.swift  Add project: clone, local server folder, new repository
     MacSettings.swift        macOS settings window
     Glass · ImageAttachments · UserAvatar · WebIcon  smaller shared views
     SVGImage.swift           SVG sniffing, allowlist sanitizer, displayable bytes

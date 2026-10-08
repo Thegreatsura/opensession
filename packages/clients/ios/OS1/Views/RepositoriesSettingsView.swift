@@ -16,10 +16,9 @@ import UIKit
 /// drive the same endpoints, so a tile changed on the phone is the tile the
 /// sidebar paints.
 ///
-/// Adding one lives here too, for the same reason: it is the half of the web
-/// setup page a phone can actually do, because nothing is typed. The server
-/// already knows every repo the instance's GitHub credential can see, so
-/// registering is picking a row (see `AddRepositoryView`).
+/// Adding one lives here too: clone a remote, register a checkout already on
+/// the server, or start a new repository (see `AddRepositoryView`, which the
+/// sidebar's workspace options open as well).
 struct RepositoriesSettingsView: View {
     @State private var repos: [OS1API.RepoInfo] = SettingsCache.value("repos") ?? []
     @State private var loading = false
@@ -66,17 +65,27 @@ struct RepositoriesSettingsView: View {
             }
 
             Section {
-                NavigationLink {
-                    AddRepositoryView(onAdded: load)
-                } label: {
-                    Label("Add repository", systemImage: "plus")
+                // The same three sources as the sidebar's workspace options →
+                // Add project, through the same flow.
+                ForEach(AddRepositorySource.allCases) { source in
+                    NavigationLink {
+                        AddRepositoryView(
+                            source: source,
+                            onAdded: load,
+                            closesAfterAdding: false
+                        )
+                    } label: {
+                        Label(source.title, systemImage: source.systemImage)
+                    }
                 }
+            } header: {
+                Text("Add repository")
             } footer: {
                 // Worth saying before the tap, not after: this is the one
                 // action on the phone that changes what the whole instance
                 // can work in, and no client can take it back.
                 Text(
-                    "Registering clones the repo onto the server, where sessions branch into worktrees of it. Nothing here removes one again."
+                    "Sessions branch into worktrees of a registered repo on the server. Nothing here removes one again."
                 )
             }
         }
@@ -93,183 +102,6 @@ struct RepositoriesSettingsView: View {
             repos = try await OS1API.repos()
             SettingsCache.save("repos", repos)
             error = nil
-        } catch {
-            self.error = error.localizedDescription
-        }
-    }
-}
-
-/// Settings → Repositories → Add repository: the repos this instance's GitHub
-/// credential can see, and a tap to register one.
-///
-/// This is the write half of the web's setup page (`AddRepoPicker` in
-/// SetupRepos.tsx) minus its manual `owner/name` field. The picker ports
-/// because the server already holds the list — choosing a row is the whole
-/// interaction, and a phone is as good a place to do that as a desk. The
-/// typed fallback does not: it appears only on an instance with no GitHub
-/// credential at all, and getting a repo path exactly right on a phone
-/// keyboard is the kind of thing that fails twice before it works.
-///
-/// A pick is confirmed because it is not a preference. The server clones the
-/// repo, which takes as long as the repo is large, and no client route
-/// unregisters one again (`/api/repos/:id/remove` is fenced to desktop
-/// profiles), so an accidental tap leaves a checkout on the instance for
-/// somebody to remove by hand.
-private struct AddRepositoryView: View {
-    let onAdded: () async -> Void
-
-    @State private var browse: OS1API.RepoBrowse?
-    @State private var loading = false
-    @State private var error: String?
-    @State private var query = ""
-    /// The repo being cloned right now. Also the "one at a time" latch: a
-    /// clone holds a server-side config lock, so a second pick would queue
-    /// behind it with no way to say so.
-    @State private var adding: String?
-    @State private var confirming: OS1API.BrowsableRepo?
-    @State private var added: Set<String> = []
-
-    var body: some View {
-        List {
-            if let error {
-                Section { Text(error).foregroundStyle(.red) }
-            }
-
-            if let browse {
-                if browse.source == nil {
-                    Section {
-                        Text("No GitHub credential on this instance, so there is no list to pick from.")
-                            .foregroundStyle(.secondary)
-                    } footer: {
-                        Text("Connect your GitHub account under Settings → Account, then come back.")
-                    }
-                } else {
-                    Section {
-                        let matches = RepoPicker.matching(browse.repos ?? [], query: query)
-                        if matches.isEmpty {
-                            Text(query.isEmpty ? "Nothing to add." : "No repositories match.")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(matches) { repo in
-                                row(repo)
-                            }
-                        }
-                    } footer: {
-                        Text(
-                            browse.source == "user"
-                                ? "Browsing as your connected GitHub account. Only repos it can reach are listed."
-                                : "Browsing as the workspace's GitHub account. Only repos it can reach are listed."
-                        )
-                    }
-                }
-            } else if loading {
-                Section { ProgressView("Loading repositories…") }
-            }
-        }
-        .insetGroupedListCompat()
-        .navigationTitle("Add repository")
-        .inlineTitleBarCompat()
-        .searchable(text: $query)
-        .task { await load() }
-        .confirmationDialog(
-            "Add \(confirming?.fullName ?? "")?",
-            isPresented: Binding(
-                get: { confirming != nil },
-                set: { if !$0 { confirming = nil } }
-            ),
-            titleVisibility: .visible,
-            presenting: confirming
-        ) { repo in
-            Button("Add") { Task { await add(repo) } }
-            Button("Cancel", role: .cancel) { confirming = nil }
-        } message: { _ in
-            Text("The server clones it, which can take a minute on a large repo.")
-        }
-    }
-
-    @ViewBuilder
-    private func row(_ repo: OS1API.BrowsableRepo) -> some View {
-        let registered = repo.registered == true || added.contains(repo.fullName)
-        Button {
-            confirming = repo
-        } label: {
-            HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(repo.fullName)
-                            .foregroundStyle(OS1VisualStyle.text)
-                            .lineLimit(1)
-                            .truncationMode(.head)
-                        if repo.isPrivate == true {
-                            // Explicit colours throughout this row, never
-                            // `.secondary`: inside a Button the hierarchical
-                            // styles resolve against the tint, so every
-                            // description and badge on a row you can still tap
-                            // came out accent teal, reading as a link. The
-                            // already-added rows looked right only because
-                            // `.disabled` was overriding the tint for them.
-                            Text("Private")
-                                .font(.caption2)
-                                .foregroundStyle(OS1VisualStyle.textDim)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(
-                                    Capsule().fill(OS1VisualStyle.raised)
-                                )
-                        }
-                    }
-                    if let description = repo.description, !description.isEmpty {
-                        Text(description)
-                            .font(.footnote)
-                            .foregroundStyle(OS1VisualStyle.textDim)
-                            .lineLimit(1)
-                    }
-                }
-                Spacer(minLength: 8)
-                if adding == repo.fullName {
-                    ProgressView()
-                } else if registered {
-                    Text("Added")
-                        .font(.footnote)
-                        .foregroundStyle(OS1VisualStyle.textDim)
-                } else {
-                    Image(systemName: "plus.circle")
-                        .foregroundStyle(OS1VisualStyle.iconTint)
-                }
-            }
-            .padding(.vertical, 2)
-        }
-        .disabled(registered || adding != nil)
-        .accessibilityLabel(
-            registered
-                ? "\(repo.fullName), already registered"
-                : "Add \(repo.fullName)"
-        )
-    }
-
-    private func load() async {
-        loading = true
-        defer { loading = false }
-        do {
-            browse = try await OS1API.browsableRepos()
-            error = nil
-        } catch {
-            self.error = error.localizedDescription
-        }
-    }
-
-    private func add(_ repo: OS1API.BrowsableRepo) async {
-        confirming = nil
-        guard adding == nil else { return }
-        adding = repo.fullName
-        defer { adding = nil }
-        do {
-            try await OS1API.registerRepo(fullName: repo.fullName)
-            added.insert(repo.fullName)
-            error = nil
-            // Repaints the screen behind this one, which is where the new
-            // repo's tile now belongs.
-            await onAdded()
         } catch {
             self.error = error.localizedDescription
         }

@@ -188,6 +188,10 @@ struct SessionsListView: View {
     @AppStorage(RepoCount.storageKey) private var knownRepoCount = RepoCount.unknown
     @AppStorage("os1.list.repo") private var repoFilter = "all"
     @State private var registeredRepoIDs: [String] = []
+    /// The source open in the Add project sheet.
+    @State private var addProjectSource: AddRepositorySource?
+    /// Picked from the filter panel, opened once the panel is gone.
+    @State private var pendingAddProject: AddRepositorySource?
     @AppStorage("os1.list.sort") private var sortByRaw = SidebarSortBy.updated.rawValue
     // Default to the signed-in person's own sessions, like the web sidebar —
     // the server also hosts hundreds of automation runs and teammates' sessions.
@@ -611,6 +615,11 @@ struct SessionsListView: View {
             .sheet(item: $commitReference) { reference in
                 CommitDetailView(reference: reference)
             }
+            .sheet(item: $addProjectSource) { source in
+                AddProjectSheet(source: source) {
+                    await reloadRegisteredRepos()
+                }
+            }
             #if os(iOS)
             .alert(
                 "Rename workspace",
@@ -939,6 +948,28 @@ struct SessionsListView: View {
                     run: {
                         DispatchQueue.main.async {
                             NotificationCenter.default.post(name: .os1AskFocus, object: nil)
+                        }
+                    }
+                )
+            )
+        }
+
+        // Same next-turn post as the question row: the composer only answers
+        // once its window is key again with no sheet over it.
+        if selectedSession != nil {
+            items.append(
+                CommandPaletteItem(
+                    entry: CommandPaletteEntry(
+                        id: "command:composer-note",
+                        title: "Team note",
+                        subtitle: "Switch the composer between a prompt and a team note",
+                        keywords: ["note", "team", "comment", "composer"],
+                        shortcut: shortcuts.primaryBinding(for: .composerNote)?.glyphs ?? [],
+                        symbol: "note.text"
+                    ),
+                    run: {
+                        DispatchQueue.main.async {
+                            NotificationCenter.default.post(name: .os1ComposerNote, object: nil)
                         }
                     }
                 )
@@ -1390,7 +1421,7 @@ struct SessionsListView: View {
                         Task { await viewModel.refresh() }
                     }
                 }
-                .sheet(isPresented: $showFilterPanel) {
+                .sheet(isPresented: $showFilterPanel, onDismiss: presentPendingAddProject) {
                     filterPanel
                 }
                 .sheet(isPresented: $showArchived) {
@@ -2358,6 +2389,7 @@ struct SessionsListView: View {
         #if os(macOS)
         button.popover(isPresented: $showFilterPanel, arrowEdge: .bottom) {
             filterPanel
+                .onDisappear(perform: presentPendingAddProject)
         }
         #else
         button
@@ -2398,8 +2430,31 @@ struct SessionsListView: View {
             showAutoCreated: $showAutoCreated,
             hideEmptyProjects: $hideEmptyProjects,
             repos: availableRepos,
-            currentUser: ServerConfig.shared.userName
+            currentUser: ServerConfig.shared.userName,
+            onAddProject: { source in
+                // A sheet cannot rise while the panel (a sheet on the phone, a
+                // popover on the Mac) is still going down: hold the pick until
+                // the panel is gone (`presentPendingAddProject`).
+                pendingAddProject = source
+                showFilterPanel = false
+            }
         )
+    }
+
+    private func presentPendingAddProject() {
+        guard let source = pendingAddProject else { return }
+        pendingAddProject = nil
+        addProjectSource = source
+    }
+
+    /// A project registered from the sidebar's Add project: reload the
+    /// registered set so its band appears now rather than on the next count
+    /// change.
+    @MainActor
+    private func reloadRegisteredRepos() async {
+        if let repos = try? await OS1API.repos() {
+            registeredRepoIDs = repos.map(\.id)
+        }
     }
 
     /// Whether anything is narrowing or hiding rows. The grouping and the sort

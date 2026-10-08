@@ -22,6 +22,9 @@ struct SessionsFilterPanel: View {
     /// Projects with a band in the list right now, in its own order.
     let repos: [String]
     let currentUser: String
+    /// Add project → one source. The panel closes and the list opens that
+    /// source's flow, as the web's workspace options do. Nil hides the row.
+    var onAddProject: ((AddRepositorySource) -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
 
@@ -62,7 +65,7 @@ struct SessionsFilterPanel: View {
         #else
         form
             .formStyle(.grouped)
-            .frame(width: 330, height: 460)
+            .frame(width: 330, height: 500)
         #endif
     }
 
@@ -125,6 +128,25 @@ struct SessionsFilterPanel: View {
             }
             // No Archived row here. The list ends on one, on both clients, and
             // a second door to the same screen is one more thing to read.
+
+            // Bringing a project in is the one action here rather than a view
+            // setting, so it sits last, in a section of its own.
+            if let onAddProject {
+                Section {
+                    Menu {
+                        ForEach(AddRepositorySource.allCases) { source in
+                            Button {
+                                onAddProject(source)
+                            } label: {
+                                Label(source.menuLabel, systemImage: source.systemImage)
+                            }
+                        }
+                    } label: {
+                        Label("Add project", systemImage: "folder.badge.plus")
+                    }
+                    .accessibilityHint("Clone a repository, register a folder on the server, or start a new one")
+                }
+            }
         }
     }
 
