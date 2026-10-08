@@ -9,6 +9,9 @@ enum AccountShortcutCommand: String, CaseIterable, Identifiable {
     /// The web registry's `ask-focus`: the letters answer a question from
     /// anywhere but a text field, and this is the way over from the composer.
     case askFocus = "ask-focus"
+    /// The web registry's `composer-note`: switches the focused session's
+    /// composer between a prompt and a team note, then puts the caret in it.
+    case composerNote = "composer-note"
 
     var id: String { rawValue }
 
@@ -18,6 +21,7 @@ enum AccountShortcutCommand: String, CaseIterable, Identifiable {
         case .newSession: "New session"
         case .newSessionInWorkspace: "New session in this workspace"
         case .askFocus: "Answer the question"
+        case .composerNote: "Team note"
         }
     }
 
@@ -27,6 +31,7 @@ enum AccountShortcutCommand: String, CaseIterable, Identifiable {
         case .newSession: "Start a session in any repository"
         case .newSessionInWorkspace: "Start another session in the open workspace"
         case .askFocus: "Jump to the question the assistant is waiting on"
+        case .composerNote: "Switch the composer between a prompt and a team note"
         }
     }
 
@@ -38,6 +43,8 @@ enum AccountShortcutCommand: String, CaseIterable, Identifiable {
         case .newSession: AccountShortcutChord(rawValue: "mod+n")!
         case .newSessionInWorkspace: AccountShortcutChord(rawValue: "mod+alt+n")!
         case .askFocus: AccountShortcutChord(rawValue: "mod+i")!
+        // Not plain Command-N, which stays New Session.
+        case .composerNote: AccountShortcutChord(rawValue: "mod+shift+n")!
         }
     }
 }
