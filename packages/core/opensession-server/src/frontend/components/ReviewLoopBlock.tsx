@@ -150,7 +150,7 @@ function LoopDisclosure({
         aria-expanded={open}
         aria-label={label}
         onClick={onToggle}
-        className="-mx-2 flex w-[calc(100%+16px)] min-w-0 cursor-pointer items-baseline gap-2 rounded-control border-0 bg-transparent px-3 py-1 text-left font-sans text-item-title leading-5 text-dim transition-colors hover:bg-hover/40 hover:text-fg phone:min-h-10"
+        className="-mx-2 flex w-[calc(100%+16px)] min-w-0 cursor-pointer items-baseline gap-2 rounded-control border-0 bg-transparent py-1 pl-1 pr-3 text-left font-sans text-item-title leading-5 text-dim transition-colors hover:bg-hover/40 hover:text-fg phone:min-h-10 phone:items-center"
       >
         <span
           className={cn(
