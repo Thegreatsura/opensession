@@ -975,6 +975,9 @@ struct SessionView: View {
                 if slackShare?.composerRequestId != nil { slackShare = nil }
                 return
             }
+            // The server echoes every draft save back. The open sheet already
+            // holds that text; rebuilding it would close it mid-edit.
+            if slackShare?.composerRequestId == request.id { return }
             slackShare = PrSlackShareRequest(
                 title: request.message,
                 url: URL(string: "https://slack.com")!,
