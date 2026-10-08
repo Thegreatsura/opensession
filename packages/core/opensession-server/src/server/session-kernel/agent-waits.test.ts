@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  __resetPrChecksWakesForTest,
   agentWaitWakePrompt,
   cancelAgentWait,
   getAgentWait,
@@ -37,6 +38,7 @@ let previousStore: SessionKernelStore | undefined;
 beforeEach(() => {
   store = new SessionKernelStore(":memory:");
   previousStore = __setSessionKernelStoreForTest(store);
+  __resetPrChecksWakesForTest();
 });
 
 afterEach(() => {
@@ -403,6 +405,162 @@ describe("PR check settlement", () => {
     expect(
       (scheduled.at(-1) as PrChecksAgentWait).candidateSince,
     ).toBeUndefined();
+  });
+
+  test("a check waiting on a person never wakes early and is reported once", async () => {
+    const gate = {
+      name: "approval gate",
+      workflowName: "",
+      status: "COMPLETED",
+      conclusion: "ACTION_REQUIRED",
+    };
+    expect(prCheckSettlement(details([passing, gate]))).toMatchObject({
+      settled: true,
+      failed: 0,
+      needsPerson: 1,
+      needsPersonNames: ["approval gate"],
+      passed: 1,
+      other: 0,
+    });
+
+    let now = 10_000;
+    let current = details([gate, running]);
+    const scheduled: PrChecksAgentWait[] = [];
+    const delivered: string[] = [];
+    const deps = handlerDeps({
+      now: () => now,
+      getPrDetails: async () => current,
+      schedule: (wait) => scheduled.push(wait as PrChecksAgentWait),
+      deliver: async (_wait, message) => {
+        delivered.push(message);
+      },
+    });
+    const wait = (id: string, createdAt: number): PrChecksAgentWait => ({
+      version: 1,
+      id,
+      sessionId: "s1",
+      kind: "pr_checks",
+      user: "Jaap",
+      prompt: "Continue.",
+      repo: "example",
+      branch: "feature",
+      createdAt,
+      deadlineAt: createdAt + 600_000,
+      pollSeconds: 30,
+      settleSeconds: 45,
+    });
+
+    // The gate alone does not wake the wait while the build still runs.
+    expect(await handleAgentWait(wait("w1", 0), deps)).toBe("rescheduled");
+    expect(scheduled.at(-1)!.candidateSince).toBeUndefined();
+
+    current = details([gate, passing]);
+    now = 40_000;
+    expect(await handleAgentWait(scheduled.at(-1)!, deps)).toBe("rescheduled");
+    now = 90_000;
+    expect(await handleAgentWait(scheduled.at(-1)!, deps)).toBe("delivered");
+    expect(delivered).toEqual([
+      "PR example#42 checks settled. 2 checks settled: 1 passed, 0 failed. 1 waiting on a person, not a fix: approval gate.",
+    ]);
+
+    // The agent re-arms: the same checks do not wake it a second time.
+    now = 120_000;
+    expect(await handleAgentWait(wait("w2", 100_000), deps)).toBe(
+      "rescheduled",
+    );
+    now = 200_000;
+    expect(await handleAgentWait(scheduled.at(-1)!, deps)).toBe("rescheduled");
+    expect(scheduled.at(-1)!.unchangedSince).toBe(120_000);
+    expect(scheduled.at(-1)!.candidateSince).toBeUndefined();
+
+    // Timing out says nothing changed.
+    now = 700_000;
+    expect(await handleAgentWait(scheduled.at(-1)!, deps)).toBe("delivered");
+    expect(delivered.at(-1)).toContain("have not changed");
+
+    // An approval changes the checks, so a new wait wakes on it.
+    current = details([{ ...gate, conclusion: "SUCCESS" }, passing]);
+    now = 800_000;
+    expect(await handleAgentWait(wait("w3", 800_000), deps)).toBe(
+      "rescheduled",
+    );
+    now = 850_000;
+    expect(await handleAgentWait(scheduled.at(-1)!, deps)).toBe("delivered");
+    expect(delivered.at(-1)).toBe(
+      "PR example#42 checks settled. 2 checks settled: 2 passed, 0 failed.",
+    );
+  });
+
+  test("a known failure waits for the rest, a new one wakes early again", async () => {
+    let now = 0;
+    let current = details([failing, running]);
+    const scheduled: PrChecksAgentWait[] = [];
+    const delivered: string[] = [];
+    const deps = handlerDeps({
+      now: () => now,
+      getPrDetails: async () => current,
+      schedule: (wait) => scheduled.push(wait as PrChecksAgentWait),
+      deliver: async (_wait, message) => {
+        delivered.push(message);
+      },
+    });
+    const wait = (id: string, createdAt: number): PrChecksAgentWait => ({
+      version: 1,
+      id,
+      sessionId: "s1",
+      kind: "pr_checks",
+      user: "Jaap",
+      prompt: "Continue.",
+      repo: "example",
+      branch: "feature",
+      createdAt,
+      deadlineAt: createdAt + 600_000,
+      pollSeconds: 30,
+      settleSeconds: 45,
+    });
+    await handleAgentWait(wait("w1", 0), deps);
+    now = 50_000;
+    expect(await handleAgentWait(scheduled.at(-1)!, deps)).toBe("delivered");
+    expect(delivered).toHaveLength(1);
+
+    // Same failure, build still running: no second early wake.
+    now = 60_000;
+    await handleAgentWait(wait("w2", 60_000), deps);
+    now = 120_000;
+    expect(await handleAgentWait(scheduled.at(-1)!, deps)).toBe("rescheduled");
+    expect(scheduled.at(-1)!.candidateSince).toBeUndefined();
+    expect(delivered).toHaveLength(1);
+
+    // Everything finishing still wakes it with the full picture.
+    current = details([failing, passing]);
+    now = 150_000;
+    await handleAgentWait(scheduled.at(-1)!, deps);
+    now = 200_000;
+    expect(await handleAgentWait(scheduled.at(-1)!, deps)).toBe("delivered");
+    expect(delivered.at(-1)).toBe(
+      "PR example#42 checks settled. 2 checks settled: 1 passed, 1 failed.",
+    );
+
+    // A failed delivery is retried rather than going quiet.
+    __resetPrChecksWakesForTest();
+    current = details([failing, running]);
+    let fail = true;
+    const flaky = handlerDeps({
+      now: () => now,
+      getPrDetails: async () => current,
+      schedule: (wait) => scheduled.push(wait as PrChecksAgentWait),
+      deliver: async (_wait, message) => {
+        if (fail) throw new Error("busy");
+        delivered.push(message);
+      },
+    });
+    now = 300_000;
+    await handleAgentWait(wait("w3", 300_000), flaky);
+    now = 350_000;
+    const due = scheduled.at(-1)!;
+    await expect(handleAgentWait(due, flaky)).rejects.toThrow("busy");
+    fail = false;
+    expect(await handleAgentWait(due, flaky)).toBe("delivered");
   });
 
   test("wakes on PR closure and on timeout after transient failures", async () => {
@@ -982,9 +1140,10 @@ describe("PR wait cheap check read", () => {
     expect(
       rollupStillRunning(counts({ IN_PROGRESS: 2, FAILURE: 1 }).contexts),
     ).toBe(false);
+    // A check waiting on a person is not a failure the full read must name.
     expect(
       rollupStillRunning(counts({ QUEUED: 1, ACTION_REQUIRED: 1 }).contexts),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       rollupStillRunning(counts({ QUEUED: 1 }, { ERROR: 1 }).contexts),
     ).toBe(false);

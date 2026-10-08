@@ -3,6 +3,7 @@ import type { TranscriptIndexEntry } from "@tellahq/opensession-protocol/session
 import {
   buildTranscriptRanges,
   mergeTranscriptIndexEntries,
+  transcriptIndexEntryFromPayload,
 } from "./transcript-index";
 
 const row = (
@@ -61,6 +62,47 @@ describe("buildTranscriptRanges", () => {
       reviewPrNumber: 42,
       reviewRounds: 1,
     });
+  });
+
+  test("a check-back starts its own range for client-side folding", () => {
+    const ranges = buildTranscriptRanges([
+      row(1, "user"),
+      row(2, "assistant"),
+      row(3, "check_back", { contentLength: 0 }),
+      row(4, "tool_use"),
+      row(5, "assistant"),
+    ]);
+    expect(ranges.map((range) => range.headRole)).toEqual([
+      "user",
+      "check_back",
+    ]);
+  });
+
+  test("live appends index wait boundaries and scheduled check-backs", () => {
+    const base = {
+      id: "x",
+      content: "",
+      timestamp: "2026-10-08T10:00:00Z",
+      seq: 1,
+      changeSeq: 1,
+    };
+    expect(
+      transcriptIndexEntryFromPayload({
+        ...base,
+        type: "user",
+        turnBoundary: true,
+      })?.role,
+    ).toBe("check_back");
+    expect(
+      transcriptIndexEntryFromPayload({
+        ...base,
+        type: "user",
+        notice: { kind: "scheduled-prompt", title: "Scheduled check-back" },
+      })?.role,
+    ).toBe("check_back");
+    expect(
+      transcriptIndexEntryFromPayload({ ...base, type: "user" })?.role,
+    ).toBe("user");
   });
 });
 

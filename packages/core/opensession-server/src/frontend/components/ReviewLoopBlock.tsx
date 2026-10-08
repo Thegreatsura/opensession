@@ -48,21 +48,108 @@ export function ReviewLoopBlock({
     .join(", ");
 
   return (
+    <LoopDisclosure
+      title="Review loop"
+      label={label}
+      detail={visibleDetail}
+      aside={prNumber ? `PR #${prNumber}` : undefined}
+      live={live}
+      liveLabel="Review in progress"
+      open={open}
+      onToggle={() =>
+        setOpen((value) => {
+          const next = !value;
+          onOpenChange?.(next);
+          return next;
+        })
+      }
+    >
+      {children}
+      {result && !live && result.status !== "pending" && (
+        <ReviewLoopResultRow result={result} rounds={rounds} />
+      )}
+    </LoopDisclosure>
+  );
+}
+
+/**
+ * Turns the agent started itself, with no person in between: a background
+ * wait waking it (usually to look at CI again) or its own scheduled
+ * check-back. Folded like a review loop; the last turn's answer stays outside.
+ */
+export function CheckBackBlock({
+  rounds,
+  live,
+  children,
+  defaultOpen = false,
+  onOpenChange,
+}: {
+  rounds: number;
+  live: boolean;
+  children: React.ReactNode;
+  /** Preview/test hook; the transcript never passes it, so sessions stay folded. */
+  defaultOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const detail = live ? "Working" : checkBackCount(rounds);
+  return (
+    <LoopDisclosure
+      title="Checked back"
+      label={`Checked back, ${detail}`}
+      detail={detail}
+      live={live}
+      liveLabel="Check-back in progress"
+      open={open}
+      onToggle={() =>
+        setOpen((value) => {
+          const next = !value;
+          onOpenChange?.(next);
+          return next;
+        })
+      }
+    >
+      {children}
+    </LoopDisclosure>
+  );
+}
+
+function checkBackCount(rounds: number): string {
+  return rounds === 1 ? "once" : `${rounds} times`;
+}
+
+/** The folded row both loops share: chevron, title, quiet detail, spinner. */
+function LoopDisclosure({
+  title,
+  label,
+  detail,
+  aside,
+  live,
+  liveLabel,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  label: string;
+  detail: string;
+  aside?: string;
+  live: boolean;
+  liveLabel: string;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
     <section
       className="mx-auto mb-3 w-full max-w-[var(--session-col)]"
-      aria-label="Review loop"
+      aria-label={title}
     >
       <button
         type="button"
         aria-expanded={open}
         aria-label={label}
-        onClick={() =>
-          setOpen((value) => {
-            const next = !value;
-            onOpenChange?.(next);
-            return next;
-          })
-        }
+        onClick={onToggle}
         className="-mx-2 flex w-[calc(100%+16px)] min-w-0 cursor-pointer items-baseline gap-2 rounded-control border-0 bg-transparent px-3 py-1 text-left font-sans text-item-title leading-5 text-dim transition-colors hover:bg-hover/40 hover:text-fg phone:min-h-10"
       >
         <span
@@ -73,29 +160,24 @@ export function ReviewLoopBlock({
         >
           <IconChevronDown size={20} className="block" />
         </span>
-        <span className="shrink-0 font-medium">Review loop</span>
+        <span className="shrink-0 font-medium">{title}</span>
         <span className="min-w-0 truncate text-label leading-4 text-faint">
-          {visibleDetail}
+          {detail}
         </span>
-        {prNumber && (
+        {aside && (
           <span className="hidden shrink-0 text-label leading-4 text-faint desktop:block">
-            PR #{prNumber}
+            {aside}
           </span>
         )}
         {live && (
           <span
             className="ml-auto size-[11px] flex-none self-center animate-spin rounded-full border border-b-line-strong border-l-line-strong border-r-line-strong border-t-dim"
-            aria-label="Review in progress"
+            aria-label={liveLabel}
           />
         )}
       </button>
       {open && (
-        <div className="mt-0.5 pl-2 [&>*:last-child]:mb-0">
-          {children}
-          {result && !live && result.status !== "pending" && (
-            <ReviewLoopResultRow result={result} rounds={rounds} />
-          )}
-        </div>
+        <div className="mt-0.5 pl-2 [&>*:last-child]:mb-0">{children}</div>
       )}
     </section>
   );

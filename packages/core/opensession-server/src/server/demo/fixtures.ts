@@ -17,6 +17,7 @@
 import {
   transcriptLineAssistantText,
   transcriptLineCompactionSummary,
+  transcriptLineContextInjection,
   transcriptLineRecap,
   transcriptLineRunnerNotice,
   transcriptLineToolResult,
@@ -942,6 +943,112 @@ export function demoSessions(opts: {
           "**PR #131 is ready to merge.** Review passed after two fix rounds and CI is green (14 checks).\n\n**What changed:** `upload()` takes an `onProgress` callback. The count resets at the start of every retry attempt so the bar never runs backwards, and events are throttled to one per 100 ms with the final size always delivered.\n\n**Where to look:** https://github.com/acme/acme-todo/pull/131. Nothing is left for you to decide; merge when convenient.",
           "demo-review-a7",
           iso(t0 + 50 * min + 50_000),
+          MODEL_FABLE,
+        ),
+      ],
+    });
+  }
+
+  // 10. Waiting on CI after a push: the agent's own pr_checks waits woke it
+  //     twice to say "still waiting", then a scheduled check-back found CI
+  //     done. The transcript folds those self-started turns into one
+  //     "Checked back" row and keeps only the last report visible.
+  {
+    const t0 = now - 70 * min;
+    const wake = (n: number, at: number, trigger: string) =>
+      transcriptLineContextInjection(
+        `A durable background wait registered by the assistant has completed. This is system context, not a new user message.\n\nTrigger: ${trigger}\n\nContinue with: Inspect the PR checks.`,
+        { source: "background-wait", turnId: `demo-ci-turn-${n}` },
+        `demo-ci-w${n}`,
+        iso(at),
+      );
+    sessions.push({
+      id: "bks-demo-ci",
+      engineSessionId: "ses_demo10",
+      file: base("bks-demo-ci", "ses_demo10", 70, 20, {
+        title: "Merge main into upload retries",
+        branch: "demo/upload-retries",
+        worktreeDir: repoDir,
+        usage: usage(1.12, 28_400, 3_960, 6, iso(now - 20 * min)),
+      }),
+      lines: [
+        transcriptLineUser(
+          "Merge the latest main into this branch and get CI green.",
+          "demo-ci-u1",
+          iso(t0),
+        ),
+        ...tool(
+          "ci",
+          1,
+          "Bash",
+          {
+            command:
+              "git merge origin/main && bun test && git push origin HEAD:demo/upload-retries",
+          },
+          "Merge made by the 'ort' strategy.\n42 pass\n0 fail",
+          t0 + 60_000,
+        ),
+        transcriptLineAssistantText(
+          "Merged `main` and pushed. Tests pass locally; I'll be woken when CI on PR #133 finishes.",
+          "demo-ci-a1",
+          iso(t0 + 90_000),
+          MODEL_FABLE,
+        ),
+        wake(
+          1,
+          t0 + 6 * min,
+          "PR acme/acme-todo#133 has failing checks: approval gate.",
+        ),
+        ...tool(
+          "ci",
+          2,
+          "Bash",
+          { command: "gh pr checks 133 --repo acme/acme-todo" },
+          "approval gate\taction_required\nunit tests\tpending\nbuild\tpending",
+          t0 + 6 * min + 20_000,
+        ),
+        transcriptLineAssistantText(
+          "The failing approval gate only needs a person to approve; nothing is broken. Unit tests and the build are still running.",
+          "demo-ci-a2",
+          iso(t0 + 6 * min + 40_000),
+          MODEL_FABLE,
+        ),
+        wake(
+          2,
+          t0 + 8 * min,
+          "PR acme/acme-todo#133 has failing checks: approval gate.",
+        ),
+        ...tool(
+          "ci",
+          3,
+          "Bash",
+          { command: "gh pr checks 133 --repo acme/acme-todo" },
+          "approval gate\taction_required\nunit tests\tpending\nbuild\tpass",
+          t0 + 8 * min + 20_000,
+        ),
+        transcriptLineAssistantText(
+          "Still only the approval gate. Unit tests are running; I'll check back in 30 minutes.",
+          "demo-ci-a3",
+          iso(t0 + 8 * min + 40_000),
+          MODEL_FABLE,
+        ),
+        transcriptLineUser(
+          "[Open Session (scheduled)] <!--os:scheduled-prompt:sched-demo-ci-->\nCheck back on PR #133 and report the final CI result.",
+          "demo-ci-u2",
+          iso(t0 + 40 * min),
+        ),
+        ...tool(
+          "ci",
+          4,
+          "Bash",
+          { command: "gh pr checks 133 --repo acme/acme-todo" },
+          "approval gate\taction_required\nunit tests\tpass\nbuild\tpass",
+          t0 + 40 * min + 20_000,
+        ),
+        transcriptLineAssistantText(
+          "**CI on PR #133 is green.** Unit tests and the build passed. The only open check is the approval gate, which needs someone to approve the PR; there is nothing left to fix.",
+          "demo-ci-a4",
+          iso(t0 + 40 * min + 50_000),
           MODEL_FABLE,
         ),
       ],

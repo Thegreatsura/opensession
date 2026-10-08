@@ -196,6 +196,9 @@ export type TranscriptIndexRole =
   | "user"
   | "notice"
   | "review_handoff"
+  /** A turn the agent's own wait or scheduled check-back started, with no
+   *  person in between. Clients fold runs of these like review loops. */
+  | "check_back"
   | "system"
   | "assistant"
   | "tool_use"

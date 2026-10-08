@@ -39,7 +39,7 @@ import {
 } from "../lib/transcript-state";
 import { collectWrittenAssets } from "../lib/open-asset";
 import { classifyEntry } from "@tellahq/opensession-protocol/notices";
-import { ReviewLoopBlock } from "./ReviewLoopBlock";
+import { CheckBackBlock, ReviewLoopBlock } from "./ReviewLoopBlock";
 import type { ReviewLoopResult } from "../lib/review-loop";
 import type { ReviewSettledOutcome } from "@tellahq/opensession-protocol/notices";
 import {
@@ -73,8 +73,12 @@ type RenderBlock =
   | { kind: "note"; note: CommentThread }
   | {
       kind: "review-loop";
+      /** A review loop, or turns the agent's own waits and scheduled
+       *  check-backs started with no person in between. */
+      variant: "review" | "check-back";
       blocks: RenderBlock[];
       prNumber: number | null;
+      /** Review rounds, or check-back turns. */
       rounds: number;
       /** Present once the loop's settle notice has landed inside it. */
       settled: ReviewSettledOutcome | null;
@@ -143,6 +147,7 @@ interface Props {
 
 type ReviewBlockRole =
   | { kind: "handoff"; prNumber: number | null }
+  | { kind: "check-back" }
   | { kind: "settled"; outcome: ReviewSettledOutcome }
   | { kind: "user-message" }
   | { kind: "other" };
@@ -153,7 +158,11 @@ type ReviewBlockRole =
  * cannot distinguish a person's request from status plumbing. */
 function reviewBlockRole(block: RenderBlock): ReviewBlockRole {
   if (block.kind !== "entry") return { kind: "other" };
+  // A background wait's content-free boundary, or a scheduled check-back:
+  // the agent started this turn itself.
+  if (block.entry.turnBoundary) return { kind: "check-back" };
   const entry = classifyEntry(block.entry);
+  if (entry.notice?.kind === "scheduled-prompt") return { kind: "check-back" };
   if (entry.notice?.kind === "review-handoff") {
     const match = entry.notice.title.match(/PR #(\d+)/);
     return { kind: "handoff", prNumber: match ? Number(match[1]) : null };
@@ -231,10 +240,83 @@ function groupReviewLoops(blocks: RenderBlock[]): RenderBlock[] {
     }
     grouped.push({
       kind: "review-loop",
+      variant: "review",
       blocks: loop,
       prNumber,
       rounds,
       settled,
+    });
+  }
+  return grouped;
+}
+
+/** Whether the check-backs open at `from` go on: another one starts before
+ * any human message, review loop, note or walkthrough. */
+function checkBacksContinue(blocks: RenderBlock[], from: number): boolean {
+  for (let j = from; j < blocks.length; j++) {
+    const block = blocks[j]!;
+    if (
+      block.kind === "note" ||
+      block.kind === "walkthrough" ||
+      block.kind === "review-loop"
+    )
+      return false;
+    const role = reviewBlockRole(block).kind;
+    if (role === "user-message") return false;
+    if (role === "check-back") return true;
+  }
+  return false;
+}
+
+/** Turns the agent started itself (a background wait waking it, or its own
+ * scheduled check-back) fold into one quiet row, like a review loop: waiting
+ * on CI often means several "still running" turns in a row. The last turn's
+ * final answer stays outside as the report; earlier answers fold in once a
+ * later check-back proves them interim. Runs after review grouping, so a
+ * check-back inside a review loop stays there. */
+function groupCheckBacks(blocks: RenderBlock[]): RenderBlock[] {
+  const grouped: RenderBlock[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const first = blocks[i]!;
+    if (reviewBlockRole(first).kind !== "check-back") {
+      grouped.push(first);
+      continue;
+    }
+    const loop: RenderBlock[] = [first];
+    let rounds = 1;
+    while (i + 1 < blocks.length) {
+      const next = blocks[i + 1]!;
+      if (
+        next.kind === "note" ||
+        next.kind === "walkthrough" ||
+        next.kind === "review-loop"
+      )
+        break;
+      const role = reviewBlockRole(next).kind;
+      if (role === "user-message") break;
+      if (
+        next.kind === "entry" &&
+        next.entry.type === "assistant" &&
+        !checkBacksContinue(blocks, i + 2)
+      )
+        break;
+      i++;
+      loop.push(next);
+      if (role === "check-back") rounds++;
+    }
+    // A lone wait boundary has nothing to fold: it is structural only.
+    if (loop.length === 1) {
+      if (first.kind === "entry" && !first.entry.turnBoundary)
+        grouped.push(first);
+      continue;
+    }
+    grouped.push({
+      kind: "review-loop",
+      variant: "check-back",
+      blocks: loop,
+      prNumber: null,
+      rounds,
+      settled: null,
     });
   }
   return grouped;
@@ -303,7 +385,7 @@ function renderBlockKey(
   if (block.kind === "footer") return `${block.entry.id}:footer`;
   if (block.kind === "review-loop") {
     const first = renderBlockEntries(block)[0];
-    return `review-loop:${first?.id ?? index}`;
+    return `${block.variant === "review" ? "review-loop" : "check-back"}:${first?.id ?? index}`;
   }
   return transcriptEntryMountKey(block.entry);
 }
@@ -497,9 +579,10 @@ const LoadedTranscriptBlocks = function LoadedTranscriptBlocks({
       turn.push(entry);
     } else {
       flushTurn();
-      // Hidden system-triggered turns exist only to keep the completed output
-      // before them out of later work. They are structural, never a blank row.
-      if (!entry.turnBoundary) blocks.push({ kind: "entry", entry });
+      // Hidden system-triggered turns keep the completed output before them
+      // out of later work and start a check-back fold. They are structural,
+      // never a blank row: groupCheckBacks absorbs or drops every one.
+      blocks.push({ kind: "entry", entry });
     }
   }
   flushTurn(true);
@@ -534,14 +617,14 @@ const LoadedTranscriptBlocks = function LoadedTranscriptBlocks({
       at++;
     }
   }
-  const groupedBlocks = groupReviewLoops(blocks);
+  const groupedBlocks = groupCheckBacks(groupReviewLoops(blocks));
   const liveTurnBoundary = groupedBlocks.findLastIndex(
     (block) =>
       block.kind === "entry" &&
       (block.entry.type === "user" || block.entry.type === "system"),
   );
   const lastReviewLoop = groupedBlocks.findLastIndex(
-    (block) => block.kind === "review-loop",
+    (block) => block.kind === "review-loop" && block.variant === "review",
   );
   // A later human turn makes the old verdict stale in spirit even before GitHub
   // has observed a new push. Operational notices and recaps do not: they are
@@ -568,6 +651,72 @@ const LoadedTranscriptBlocks = function LoadedTranscriptBlocks({
               (candidate) => reviewBlockRole(candidate).kind === "user-message",
             ),
         );
+        // A check-back fold is running only while it is the live tail: its
+        // own final answer and footer may follow, nothing else.
+        const checkBackIsTail = groupedBlocks
+          .slice(i + 1)
+          .every(
+            (candidate) =>
+              candidate.kind === "footer" ||
+              (candidate.kind === "entry" &&
+                candidate.entry.type === "assistant"),
+          );
+        const loopChildren = block.blocks.map((inner, innerIndex) => {
+          const innerKey = renderBlockKey(inner, innerIndex, turnMountScope);
+          return (
+            <React.Fragment key={innerKey}>
+              {inner.kind === "turn" ? (
+                <ReviewTurnSteps
+                  items={inner.items}
+                  toolResults={toolResults}
+                  live={Boolean(
+                    isLive && innerIndex === block.blocks.length - 1,
+                  )}
+                  owner={owner}
+                  sessionId={sessionId}
+                  onOpenSubagent={onOpenSubagent}
+                />
+              ) : inner.kind === "footer" ? (
+                <TurnFooter
+                  className={TURN_FOOTER_LIFT}
+                  entry={inner.entry}
+                  durationMs={inner.durationMs}
+                  files={inner.files}
+                  assets={inner.assets}
+                  onFork={onFork}
+                />
+              ) : inner.kind === "entry" &&
+                !inner.entry.turnBoundary &&
+                reviewBlockRole(inner).kind !== "handoff" ? (
+                <MessageBubble
+                  entry={inner.entry}
+                  toolResult={
+                    inner.entry.toolUseId
+                      ? toolResults.get(inner.entry.toolUseId)
+                      : undefined
+                  }
+                  enter={
+                    optimisticEntryIds.has(inner.entry.id) ||
+                    Boolean(
+                      isLive &&
+                      innerIndex === block.blocks.length - 1 &&
+                      inner.entry.type !== "user",
+                    )
+                  }
+                  reasoning={inner.reasoning}
+                  pendingDelivery={pendingDeliveryEntryIds.has(inner.entry.id)}
+                  owner={owner}
+                  sessionId={sessionId}
+                  onEdit={
+                    optimisticEntryIds.has(inner.entry.id)
+                      ? undefined
+                      : onEditMessage
+                  }
+                />
+              ) : null}
+            </React.Fragment>
+          );
+        });
         return {
           key,
           anchorId: renderBlockAnchor(block, key),
@@ -575,83 +724,33 @@ const LoadedTranscriptBlocks = function LoadedTranscriptBlocks({
           arrivalAliases: transcriptArrivalAliases(entriesInBlock),
           measureVersion: transcriptMeasureVersion(entriesInBlock),
           estimateSize: renderBlockEstimate(block),
-          content: (
-            <ReviewLoopBlock
-              prNumber={block.prNumber}
-              rounds={block.rounds}
-              settled={block.settled}
-              live={isLive}
-              result={
-                showReviewResult && i === lastReviewLoop && !isLive
-                  ? reviewResult
-                  : undefined
-              }
-              defaultOpen={reviewLoopsOpen}
-              onOpenChange={onReviewLoopOpenChange}
-            >
-              {block.blocks.map((inner, innerIndex) => {
-                const innerKey = renderBlockKey(
-                  inner,
-                  innerIndex,
-                  turnMountScope,
-                );
-                return (
-                  <React.Fragment key={innerKey}>
-                    {inner.kind === "turn" ? (
-                      <ReviewTurnSteps
-                        items={inner.items}
-                        toolResults={toolResults}
-                        live={Boolean(
-                          isLive && innerIndex === block.blocks.length - 1,
-                        )}
-                        owner={owner}
-                        sessionId={sessionId}
-                        onOpenSubagent={onOpenSubagent}
-                      />
-                    ) : inner.kind === "footer" ? (
-                      <TurnFooter
-                        className={TURN_FOOTER_LIFT}
-                        entry={inner.entry}
-                        durationMs={inner.durationMs}
-                        files={inner.files}
-                        assets={inner.assets}
-                        onFork={onFork}
-                      />
-                    ) : inner.kind === "entry" &&
-                      reviewBlockRole(inner).kind !== "handoff" ? (
-                      <MessageBubble
-                        entry={inner.entry}
-                        toolResult={
-                          inner.entry.toolUseId
-                            ? toolResults.get(inner.entry.toolUseId)
-                            : undefined
-                        }
-                        enter={
-                          optimisticEntryIds.has(inner.entry.id) ||
-                          Boolean(
-                            isLive &&
-                            innerIndex === block.blocks.length - 1 &&
-                            inner.entry.type !== "user",
-                          )
-                        }
-                        reasoning={inner.reasoning}
-                        pendingDelivery={pendingDeliveryEntryIds.has(
-                          inner.entry.id,
-                        )}
-                        owner={owner}
-                        sessionId={sessionId}
-                        onEdit={
-                          optimisticEntryIds.has(inner.entry.id)
-                            ? undefined
-                            : onEditMessage
-                        }
-                      />
-                    ) : null}
-                  </React.Fragment>
-                );
-              })}
-            </ReviewLoopBlock>
-          ),
+          content:
+            block.variant === "review" ? (
+              <ReviewLoopBlock
+                prNumber={block.prNumber}
+                rounds={block.rounds}
+                settled={block.settled}
+                live={isLive}
+                result={
+                  showReviewResult && i === lastReviewLoop && !isLive
+                    ? reviewResult
+                    : undefined
+                }
+                defaultOpen={reviewLoopsOpen}
+                onOpenChange={onReviewLoopOpenChange}
+              >
+                {loopChildren}
+              </ReviewLoopBlock>
+            ) : (
+              <CheckBackBlock
+                rounds={block.rounds}
+                live={isLive && checkBackIsTail}
+                defaultOpen={reviewLoopsOpen}
+                onOpenChange={onReviewLoopOpenChange}
+              >
+                {loopChildren}
+              </CheckBackBlock>
+            ),
         };
       }
 
@@ -1137,7 +1236,13 @@ function groupIndexedReviewLoops(
   const grouped: IndexedTimelineItem[] = [];
   for (let index = 0; index < atoms.length; index++) {
     const atom = atoms[index]!;
-    if (atom.kind !== "range" || atom.range.headRole !== "review_handoff") {
+    // Review handoffs and the agent's own check-backs both open one group up
+    // to the next human message; the nested renderer folds each kind.
+    if (
+      atom.kind !== "range" ||
+      (atom.range.headRole !== "review_handoff" &&
+        atom.range.headRole !== "check_back")
+    ) {
       grouped.push(atom);
       continue;
     }

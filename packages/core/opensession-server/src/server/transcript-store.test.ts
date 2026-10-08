@@ -682,7 +682,7 @@ describe("transcript outline and random-access ranges", () => {
     const outline = store.readTranscriptIndex(sid);
     expect(outline.entries.map((row) => row.role)).toEqual([
       "hidden",
-      "user",
+      "check_back",
       "user",
       "tool_use",
       "tool_result",
@@ -776,6 +776,40 @@ describe("transcript outline and random-access ranges", () => {
       role: "user",
     });
     expect(yielded).toBe(true);
+  });
+
+  test("indexes check-backs, including rows stored before the role existed", async () => {
+    const sid = "bks-outline-check-back";
+    await store.appendTranscriptEvents(sid, [
+      entry("human", "Ship it", { type: "user" }),
+      entry("answer", "Waiting on CI."),
+      entry("wait", "private wait context", {
+        type: "system",
+        noticeKind: "context-injection",
+        contextInjection: { source: "background-wait", turnId: "t" },
+      }),
+      entry(
+        "scheduled",
+        "[Open Session (scheduled)] <!--os:scheduled-prompt:sched-1-->\nCheck CI.",
+        { type: "user" },
+      ),
+    ]);
+    const roles = () =>
+      store.readTranscriptIndex(sid).entries.map((row) => row.role);
+    expect(roles()).toEqual(["user", "assistant", "check_back", "check_back"]);
+
+    // Rows projected before check_back existed are corrected on read.
+    const raw = new Database(dbPath);
+    raw.run(
+      "UPDATE transcript_outline SET render_role = 'user' WHERE session_id = ? AND uuid = 'wait'",
+      [sid],
+    );
+    raw.run(
+      "UPDATE transcript_outline SET render_role = 'notice' WHERE session_id = ? AND uuid = 'scheduled'",
+      [sid],
+    );
+    raw.close();
+    expect(roles()).toEqual(["user", "assistant", "check_back", "check_back"]);
   });
 
   test("backfill preserves oversized row roles and original lengths", async () => {

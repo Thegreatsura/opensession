@@ -879,7 +879,7 @@ export function createSessionsMcpServer(
       // ---------------------------------------------------------------------
       tool(
         "wait_for",
-        "End this turn cleanly and wake this same session later without sleeping in a tool call. Register the wait, then write the human a normal status/final message and STOP the turn. A timer wakes after the requested delay. A pr_checks wait polls durably outside the model turn and starts a new turn as soon as a check fails or once the whole check set stays settled; it also wakes on PR close/merge or timeout. Use it for CI instead of polling gh pr checks, gh run watch, or a sleep loop. A session_turn wait wakes when ANOTHER session's turn ends (it goes idle, stops on a question for a human, fails, or is cancelled); the wake-up carries that session's final state and last assistant message, so use it after send_to_session instead of guessing a delay. An already idle target wakes you right away. One wait may be active per session, and a new one replaces it. Never call sleep after this tool succeeds.",
+        "End this turn cleanly and wake this same session later without sleeping in a tool call. Register the wait, then write the human a normal status/final message and STOP the turn. A timer wakes after the requested delay. A pr_checks wait polls durably outside the model turn and starts a new turn as soon as a check fails or once the whole check set stays settled; it also wakes on PR close/merge or timeout. A check waiting on a person (an approval gate) never wakes it early, and a new pr_checks wait does not re-report checks an earlier wake already reported: it waits until they change (new head, new failure, rerun, approval). Use it for CI instead of polling gh pr checks, gh run watch, or a sleep loop. A session_turn wait wakes when ANOTHER session's turn ends (it goes idle, stops on a question for a human, fails, or is cancelled); the wake-up carries that session's final state and last assistant message, so use it after send_to_session instead of guessing a delay. An already idle target wakes you right away. One wait may be active per session, and a new one replaces it. Never call sleep after this tool succeeds.",
         {
           kind: z
             .enum(["timer", "pr_checks", "session_turn"])
@@ -988,7 +988,7 @@ export function createSessionsMcpServer(
           return text(
             `Background wait \`${result.wait.id}\` registered for ${when}. ` +
               `${result.replaced ? "It replaced the previous wait. " : ""}` +
-              "Now write the human a concise status message and end this turn. Do not poll or sleep; this session will be triggered automatically.",
+              "Now write the human a concise status message and end this turn. If this turn only re-armed a wait after a wake that changed nothing, one short line is enough. Do not poll or sleep; this session will be triggered automatically.",
           );
         },
       ),

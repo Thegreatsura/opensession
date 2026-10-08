@@ -870,8 +870,10 @@ describe("TranscriptBlocks turn work and tool call preferences", () => {
 
     expect(html).toContain("Implemented and committed. Deployment is running.");
     expect(html).toContain("Deployment verified.");
-    expect(html.match(/>Worked<\/span>/g)).toHaveLength(2);
-    expect(html).not.toContain("wait-boundary");
+    // The woken turn's work folds into the check-back row.
+    expect(html.match(/>Worked<\/span>/g)).toHaveLength(1);
+    expect(html).toContain('aria-label="Checked back, once"');
+    expect(html).not.toContain('data-eid="wait-boundary"');
     setTurnPrefs(null);
   });
 
@@ -1355,6 +1357,106 @@ describe("TranscriptBlocks featured media outlives the fold", () => {
     expect(html).toContain("bun run capture");
     expect(html.match(/src="\/media\?path=featured\.png"/g)).toHaveLength(1);
     setTurnPrefs(null);
+  });
+});
+
+describe("TranscriptBlocks check-backs", () => {
+  const at = (second: number) =>
+    `2026-10-08T10:00:${String(second).padStart(2, "0")}Z`;
+  const wake = (id: string, second: number): TranscriptEntry => ({
+    id,
+    type: "user",
+    content: "",
+    timestamp: at(second),
+    turnBoundary: true,
+  });
+  const tool = (id: string, second: number): TranscriptEntry => ({
+    id,
+    type: "tool_use",
+    toolUseId: `${id}-call`,
+    toolName: "bash",
+    toolInput: { command: "gh pr checks" },
+    content: "Using bash",
+    timestamp: at(second),
+  });
+  const say = (
+    id: string,
+    content: string,
+    second: number,
+  ): TranscriptEntry => ({
+    id,
+    type: "assistant",
+    content,
+    timestamp: at(second),
+  });
+
+  test("folds consecutive self-started turns and keeps only the last report", () => {
+    const html = renderToStaticMarkup(
+      <TranscriptBlocks
+        entries={[
+          {
+            id: "ask",
+            type: "user",
+            content: "Merge main",
+            timestamp: at(0),
+          },
+          tool("push", 1),
+          say("pushed", "Pushed; waiting on CI.", 2),
+          wake("wake-1", 10),
+          tool("look-1", 11),
+          say("still-1", "Still waiting on the approval gate.", 12),
+          wake("wake-2", 20),
+          tool("look-2", 21),
+          say("still-2", "Still waiting, nothing broken.", 22),
+          {
+            id: "scheduled",
+            type: "user",
+            content:
+              "[Open Session (scheduled)] <!--os:scheduled-prompt:sched-1-->\nCheck CI again.",
+            timestamp: at(30),
+          },
+          tool("look-3", 31),
+          say("done", "CI finished: 52 passed.", 32),
+        ]}
+      />,
+    );
+    expect(html).toContain("Pushed; waiting on CI.");
+    expect(html).toContain('aria-label="Checked back, 3 times"');
+    expect(html).not.toContain("Still waiting on the approval gate.");
+    expect(html).not.toContain("Still waiting, nothing broken.");
+    expect(html).toContain("CI finished: 52 passed.");
+  });
+
+  test("a human message ends the fold and stays visible", () => {
+    const html = renderToStaticMarkup(
+      <TranscriptBlocks
+        reviewLoopsOpen
+        entries={[
+          { id: "ask", type: "user", content: "Ship it", timestamp: at(0) },
+          say("first", "Waiting on CI.", 1),
+          wake("wake-1", 10),
+          tool("look-1", 11),
+          say("report", "CI is green.", 12),
+          {
+            id: "next",
+            type: "user",
+            content: "Now merge it",
+            timestamp: at(20),
+          },
+          wake("wake-2", 30),
+          tool("merge", 31),
+          say("late", "Merged.", 32),
+          wake("wake-3", 40),
+          say("bare", "Nothing new.", 41),
+        ]}
+      />,
+    );
+    // The second fold takes in the later wake, so its last answer reports.
+    expect(html.match(/aria-label="Checked back, /g)).toHaveLength(2);
+    expect(html).toContain("Nothing new.");
+    expect(html).toContain("CI is green.");
+    expect(html).toContain("Now merge it");
+    expect(html).toContain("Merged.");
   });
 });
 

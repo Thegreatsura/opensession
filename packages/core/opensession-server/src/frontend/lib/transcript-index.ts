@@ -29,6 +29,7 @@ const isBoundary = (role: TranscriptIndexRole) =>
   role === "user" ||
   role === "notice" ||
   role === "review_handoff" ||
+  role === "check_back" ||
   role === "system";
 
 /** Project a complete content-free outline into stable conversation ranges. */
@@ -90,6 +91,7 @@ export function buildTranscriptRanges(
 function boundaryEstimate(entry: TranscriptIndexEntry): number {
   if (entry.role === "user") return messageEstimate(entry.contentLength, 88);
   if (entry.role === "review_handoff") return 40;
+  if (entry.role === "check_back") return 24;
   if (entry.role === "notice" || entry.role === "system") return 48;
   return 0;
 }
@@ -176,6 +178,7 @@ export function transcriptIndexEntryFromPayload(entry: {
   seq?: number;
   changeSeq?: number;
   contentLength?: number;
+  turnBoundary?: boolean;
   notice?: { kind?: string; title?: string };
 }): TranscriptIndexEntry | null {
   if (entry.seq === undefined || entry.changeSeq === undefined) return null;
@@ -185,6 +188,11 @@ export function transcriptIndexEntryFromPayload(entry: {
     role = "review_handoff";
     const match = entry.notice.title?.match(/PR #(\d+)/);
     if (match) reviewPrNumber = Number(match[1]);
+  } else if (
+    entry.notice?.kind === "scheduled-prompt" ||
+    (entry.type === "user" && entry.turnBoundary)
+  ) {
+    role = "check_back";
   } else if (
     entry.notice?.kind === "session-notice" ||
     entry.notice?.kind === "worker-report"

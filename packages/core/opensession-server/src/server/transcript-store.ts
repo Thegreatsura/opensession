@@ -1244,9 +1244,11 @@ export class TranscriptStore {
     if (request.op === "count") return this.countEvents(request.sessionId);
     if (request.op === "summary") {
       const row = this.db
-        .query(`
+        .query(
+          `
         SELECT last_ts, next_seq FROM transcript_sessions WHERE session_id = ?
-      `)
+      `,
+        )
         .get(request.sessionId) as {
         last_ts: number | null;
         next_seq: number;
@@ -1272,11 +1274,13 @@ export class TranscriptStore {
   ): TranscriptMutationResult<unknown> | undefined {
     const digest = this.actorRequestDigest(request);
     const receipt = this.db
-      .query(`
+      .query(
+        `
       SELECT session_id, append_id, request_digest, fence_json, result_json, created_at
       FROM transcript_append_receipts
       WHERE session_id = ? AND append_id = ?
-    `)
+    `,
+      )
       .get(
         request.sessionId,
         request.requestId,
@@ -1511,11 +1515,13 @@ export class TranscriptStore {
     includeAcked = false,
   ): TranscriptWake | null {
     const row = this.db
-      .query(`
+      .query(
+        `
       SELECT cursor, acked_cursor, first_change_seq, last_change_seq, reset_epoch,
         acked_reset_epoch
       FROM session_kernel_transcript_wakes WHERE session_id = ?
-    `)
+    `,
+      )
       .get(sessionId) as {
       cursor: number;
       acked_cursor: number;
@@ -1852,7 +1858,8 @@ export class TranscriptStore {
     maxBytes = 12 * 1024 * 1024,
   ): TranscriptHydratedPage {
     const rows = this.db
-      .query(`
+      .query(
+        `
       SELECT event.seq, event.change_seq,
         COALESCE(blob.data, event.data) AS data
       FROM transcript_events event
@@ -1862,7 +1869,8 @@ export class TranscriptStore {
        AND blob.uuid = event.uuid
       WHERE event.session_id = ? AND event.seq > ?
       ORDER BY event.seq LIMIT ?
-    `)
+    `,
+      )
       .all(sessionId, sinceSeq, limit + 1) as Array<{
       seq: number;
       change_seq: number;
@@ -1913,9 +1921,11 @@ export class TranscriptStore {
         `SELECT o.uuid, o.seq, o.change_seq, o.ts, o.render_role, o.content_length, o.review_pr_number,
                 CASE WHEN json_valid(e.data) THEN json_extract(e.data, '$.notice.kind') END AS notice_kind,
                 CASE WHEN json_valid(e.data) THEN json_extract(e.data, '$.type') END AS entry_type,
-                CASE WHEN json_valid(e.data) THEN substr(json_extract(e.data, '$.content'), 1, 1024) END AS notice_prefix
+                CASE WHEN json_valid(e.data) THEN substr(json_extract(e.data, '$.content'), 1, 1024) END AS notice_prefix,
+                CASE WHEN json_valid(e.data) THEN json_extract(e.data, '$.contextInjection.source') END AS context_source
          FROM transcript_outline o
-         LEFT JOIN transcript_events e ON o.render_role = 'notice'
+         LEFT JOIN transcript_events e ON (o.render_role = 'notice'
+             OR (o.render_role = 'user' AND o.content_length = 0))
            AND e.session_id = o.session_id AND e.seq = o.seq
          WHERE o.session_id = ? AND o.seq > ?
          ORDER BY o.seq LIMIT ?`,
@@ -1931,6 +1941,7 @@ export class TranscriptStore {
       notice_kind: string | null;
       entry_type: TranscriptEntry["type"] | null;
       notice_prefix: string | null;
+      context_source: string | null;
     }>;
     const entries = rows.map((row) => ({
       id: row.uuid,
@@ -1939,19 +1950,7 @@ export class TranscriptStore {
       timestampMs: row.ts,
       // Correct legacy notice roles within this bounded page. Only prefixes
       // of candidate rows are read; no other actors or bodies on the wire.
-      role:
-        row.render_role === "notice" &&
-        (row.notice_kind === "session-notice" ||
-          row.notice_kind === "worker-report" ||
-          (!row.notice_kind &&
-            transcriptOutlineProjection({
-              id: row.uuid,
-              type: row.entry_type ?? "user",
-              content: row.notice_prefix ?? "",
-              timestamp: "",
-            }).role === "agent_message"))
-          ? ("agent_message" as const)
-          : row.render_role,
+      role: legacyOutlineRole(row),
       contentLength: row.content_length,
       ...(row.review_pr_number != null
         ? { reviewPrNumber: row.review_pr_number }
@@ -3232,19 +3231,54 @@ function destinationResult(
 
 // ── Outline projection ─────────────────────────────────────────────────────
 
+/** Correct roles stored before the projection learned them, within one
+ * bounded index page: notices that are agent messages, and the turns a
+ * background wait or scheduled check-back started. */
+function legacyOutlineRole(row: {
+  uuid: string;
+  render_role: TranscriptIndexRole;
+  notice_kind: string | null;
+  entry_type: TranscriptEntry["type"] | null;
+  notice_prefix: string | null;
+  context_source: string | null;
+}): TranscriptIndexRole {
+  if (row.render_role === "user")
+    return row.context_source === "background-wait"
+      ? "check_back"
+      : row.render_role;
+  if (row.render_role !== "notice") return row.render_role;
+  if (
+    row.notice_kind === "session-notice" ||
+    row.notice_kind === "worker-report"
+  )
+    return "agent_message";
+  if (row.notice_kind === "scheduled-prompt") return "check_back";
+  if (row.notice_kind) return row.render_role;
+  const role = transcriptOutlineProjection({
+    id: row.uuid,
+    type: row.entry_type ?? "user",
+    content: row.notice_prefix ?? "",
+    timestamp: "",
+  }).role;
+  return role === "agent_message" || role === "check_back"
+    ? role
+    : row.render_role;
+}
+
 function transcriptOutlineProjection(entry: TranscriptEntry): {
   role: TranscriptIndexRole;
   contentLength: number;
   reviewPrNumber?: number;
 } {
   // A background wait is model-only context, but it starts a distinct turn.
-  // Index it as a content-free user boundary so hydrated ranges cannot merge
-  // the completed status before the wait into the later continuation.
+  // Index it as a content-free check-back boundary so hydrated ranges cannot
+  // merge the completed status before the wait into the later continuation,
+  // and clients can fold the agent's self-started turns.
   if (
     entry.noticeKind === "context-injection" &&
     entry.contextInjection?.source === "background-wait"
   ) {
-    return { role: "user", contentLength: 0 };
+    return { role: "check_back", contentLength: 0 };
   }
   if (dropContextInjections([entry]).length === 0) {
     return { role: "hidden", contentLength: 0 };
@@ -3256,6 +3290,8 @@ function transcriptOutlineProjection(entry: TranscriptEntry): {
     role = "review_handoff";
     const match = classified.notice.title.match(/PR #(\d+)/);
     if (match) reviewPrNumber = Number(match[1]);
+  } else if (classified.notice?.kind === "scheduled-prompt") {
+    role = "check_back";
   } else if (
     classified.notice?.kind === "session-notice" ||
     classified.notice?.kind === "worker-report"

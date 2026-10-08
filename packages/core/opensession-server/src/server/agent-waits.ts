@@ -69,6 +69,9 @@ const DEFAULT_PR_TIMEOUT_SECONDS = 2 * 60 * 60;
 /** While checks plainly run, the full PR read still happens this often: the
  * cheap count read cannot see everything the full read dedupes or names. */
 const PR_FULL_READ_EVERY_MS = 5 * 60_000;
+/** How often a wait re-reads checks that still match what an earlier wake
+ * already reported. */
+const PR_UNCHANGED_POLL_MS = 2 * 60_000;
 const DEFAULT_SESSION_TURN_POLL_SECONDS = 30;
 const DEFAULT_SESSION_TURN_TIMEOUT_SECONDS = 2 * 60 * 60;
 /** Tail of the target's last assistant message carried in the wake-up. */
@@ -106,6 +109,9 @@ export interface PrChecksAgentWait {
   number?: number;
   /** When the last full read succeeded. */
   fullReadAt?: number;
+  /** Set while the checks still look exactly as an earlier wake of this
+   * session reported them, so the timeout can say nothing changed. */
+  unchangedSince?: number;
 }
 
 /** How a watched session's turn ended, as reported in the wake-up. */
@@ -711,9 +717,14 @@ export interface PrCheckSettlement {
    *  restart the settlement window of an already known failure. */
   failedSignature: string;
   failedNames: string[];
+  /** Checks that finished asking for a person (ACTION_REQUIRED), such as an
+   * approval gate. Not a failure: nothing in the code is broken, and an
+   * agent cannot clear them, so they never wake a wait early. */
+  needsPersonNames: string[];
   total: number;
   pending: number;
   failed: number;
+  needsPerson: number;
   passed: number;
   other: number;
 }
@@ -730,9 +741,13 @@ function checkPending(check: PrDetails["checks"][number]): boolean {
 }
 
 function checkFailed(check: PrDetails["checks"][number]): boolean {
-  return ["FAILURE", "TIMED_OUT", "ERROR", "ACTION_REQUIRED"].includes(
+  return ["FAILURE", "TIMED_OUT", "ERROR"].includes(
     (check.conclusion || "").toUpperCase(),
   );
+}
+
+function checkNeedsPerson(check: PrDetails["checks"][number]): boolean {
+  return (check.conclusion || "").toUpperCase() === "ACTION_REQUIRED";
 }
 
 export function prCheckSettlement(details: PrDetails): PrCheckSettlement {
@@ -745,11 +760,14 @@ export function prCheckSettlement(details: PrDetails): PrCheckSettlement {
   let failed = 0;
   let passed = 0;
   const failedNames: string[] = [];
+  const needsPersonNames: string[] = [];
   for (const check of checks) {
     if (checkPending(check)) pending += 1;
     else if (checkFailed(check)) {
       failed += 1;
       failedNames.push(check.name);
+    } else if (checkNeedsPerson(check)) {
+      needsPersonNames.push(check.name);
     } else if ((check.conclusion || "").toUpperCase() === "SUCCESS")
       passed += 1;
   }
@@ -771,11 +789,16 @@ export function prCheckSettlement(details: PrDetails): PrCheckSettlement {
     signature,
     failedSignature,
     failedNames,
+    needsPersonNames,
     total: checks.length,
     pending,
     failed,
+    needsPerson: needsPersonNames.length,
     passed,
-    other: Math.max(0, checks.length - pending - failed - passed),
+    other: Math.max(
+      0,
+      checks.length - pending - failed - needsPersonNames.length - passed,
+    ),
   };
 }
 
@@ -788,6 +811,7 @@ export interface PrWaitRollup {
 
 // Count states as the full read classifies them (checkPending/checkFailed):
 // a state in neither set is settled and does not wake the wait on its own.
+// ACTION_REQUIRED waits on a person, not a fix, so it is in neither.
 const ROLLUP_PENDING = new Set([
   "QUEUED",
   "IN_PROGRESS",
@@ -796,12 +820,7 @@ const ROLLUP_PENDING = new Set([
   "REQUESTED",
   "EXPECTED",
 ]);
-const ROLLUP_FAILED = new Set([
-  "FAILURE",
-  "TIMED_OUT",
-  "ERROR",
-  "ACTION_REQUIRED",
-]);
+const ROLLUP_FAILED = new Set(["FAILURE", "TIMED_OUT", "ERROR"]);
 
 /** Whether per-state counts alone show checks still running with nothing
  * failed, the one case where the full read would only reschedule. */
@@ -849,7 +868,10 @@ export function agentWaitWakePrompt(wait: AgentWait, message: string): string {
   return wrapContext(
     `A durable background wait registered by the assistant has completed. ` +
       `This is system context, not a new user message.\n\n` +
-      `Trigger: ${message}\n\nContinue with: ${wait.prompt}`,
+      `Trigger: ${message}\n\nContinue with: ${wait.prompt}\n\n` +
+      `If this leaves nothing you can act on (checks still running, or ` +
+      `waiting on a person), do not restate earlier status: reply in one ` +
+      `short line, re-arm a wait only if you still need one, and end the turn.`,
     "background-wait",
   );
 }
@@ -1002,6 +1024,61 @@ export function recentPrChecksWake(
 
 export function __resetPrChecksWakesForTest(): void {
   prChecksWakes.clear();
+  prChecksReports.clear();
+}
+
+/**
+ * What each session's last pr_checks wake reported, by settlement signature.
+ * An agent that is woken, finds nothing to do (a check waiting on a human
+ * approval, say), and registers a fresh wait would otherwise be woken again
+ * at once by the same unchanged checks, one status message per wait. A new
+ * wait instead keeps polling until the checks differ from what was already
+ * reported: a new head, a new failure, a rerun, or an approval. In memory for
+ * the same reason as prChecksWakes: a lost record costs one repeated wake.
+ */
+interface PrChecksReport {
+  repo: string;
+  branch: string;
+  signature: string;
+  at: number;
+}
+const PR_CHECKS_REPORT_TTL_MS = 24 * 60 * 60_000;
+const prChecksReports = new Map<string, PrChecksReport>();
+
+function notePrChecksReport(
+  wait: PrChecksAgentWait,
+  signature: string,
+  at: number,
+): void {
+  for (const [id, report] of prChecksReports)
+    if (at - report.at > PR_CHECKS_REPORT_TTL_MS) prChecksReports.delete(id);
+  prChecksReports.set(wait.sessionId, {
+    repo: wait.repo,
+    branch: wait.branch,
+    signature,
+    at,
+  });
+}
+
+function alreadyReported(
+  wait: PrChecksAgentWait,
+  signature: string,
+  now: number,
+): boolean {
+  const report = prChecksReports.get(wait.sessionId);
+  return (
+    !!report &&
+    now - report.at <= PR_CHECKS_REPORT_TTL_MS &&
+    report.repo === wait.repo &&
+    report.branch === wait.branch &&
+    report.signature === signature
+  );
+}
+
+function needsPersonSuffix(state: PrCheckSettlement): string {
+  return state.needsPerson
+    ? ` ${state.needsPerson} waiting on a person, not a fix: ${state.needsPersonNames.join(", ")}.`
+    : "";
 }
 
 async function checksStillRunning(
@@ -1043,7 +1120,9 @@ export async function handleAgentWait(
     const detail = wait.lastError ? ` Last check: ${wait.lastError}` : "";
     await deps.deliver(
       wait,
-      `Background wait timed out before PR checks settled.${detail}`,
+      wait.unchangedSince != null
+        ? `Background wait timed out: PR checks have not changed since the last wake reported them.${detail}`
+        : `Background wait timed out before PR checks settled.${detail}`,
     );
     return "delivered";
   }
@@ -1057,6 +1136,7 @@ export async function handleAgentWait(
       candidateSince: undefined,
       candidateSignature: undefined,
       lastError: undefined,
+      unchangedSince: undefined,
     };
     deps.schedule(next, nextPrPoll(next, now));
     return "rescheduled";
@@ -1092,18 +1172,43 @@ export async function handleAgentWait(
   // A failed check is final for this head, so it wakes the agent without
   // waiting for the slower checks: fixing can start while they still run.
   // The settlement window still applies, keyed on the failed set alone.
-  if (!state.settled && state.failed === 0) {
+  const signature = state.settled ? state.signature : state.failedSignature;
+  // Still running with no failure, or with only failures an earlier wake
+  // already reported: keep waiting for every check to finish.
+  const knownFailure =
+    !state.settled && state.failed > 0 && alreadyReported(wait, signature, now);
+  if (!state.settled && (state.failed === 0 || knownFailure)) {
     const next: PrChecksAgentWait = {
       ...wait,
       candidateSince: undefined,
       candidateSignature: undefined,
       lastError: undefined,
+      unchangedSince: undefined,
     };
     deps.schedule(next, nextPrPoll(next, now));
     return "rescheduled";
   }
+  // Settled exactly as an earlier wake reported: wait for anything to change.
+  if (alreadyReported(wait, signature, now)) {
+    const next: PrChecksAgentWait = {
+      ...wait,
+      candidateSince: undefined,
+      candidateSignature: undefined,
+      lastError: undefined,
+      unchangedSince: wait.unchangedSince ?? now,
+    };
+    // Settled checks change rarely (an approval, a rerun, a push), so this
+    // look is slower than the running-checks poll.
+    deps.schedule(
+      next,
+      Math.min(
+        next.deadlineAt,
+        now + Math.max(next.pollSeconds * 1000, PR_UNCHANGED_POLL_MS),
+      ),
+    );
+    return "rescheduled";
+  }
 
-  const signature = state.failed ? state.failedSignature : state.signature;
   const sameCandidate = wait.candidateSignature === signature;
   const candidateSince = sameCandidate ? wait.candidateSince : now;
   if (
@@ -1115,6 +1220,7 @@ export async function handleAgentWait(
       candidateSince,
       candidateSignature: signature,
       lastError: undefined,
+      unchangedSince: undefined,
     };
     deps.schedule(next, nextPrPoll(next, now));
     return "rescheduled";
@@ -1126,8 +1232,12 @@ export async function handleAgentWait(
       wait,
       `PR ${wait.repo}#${details.number} has failing checks: ` +
         `${state.failedNames.join(", ")}. ${state.failed} failed, ` +
-        `${state.passed} passed, ${state.pending} still running.`,
+        `${state.passed} passed, ${state.pending} still running.` +
+        needsPersonSuffix(state),
     );
+    // Only after delivery: a failed delivery retries and must not find its
+    // own report and go quiet.
+    notePrChecksReport(wait, signature, now);
     return "delivered";
   }
 
@@ -1135,11 +1245,13 @@ export async function handleAgentWait(
     state.total === 0
       ? "No checks were registered during the settlement window."
       : `${state.total} checks settled: ${state.passed} passed, ${state.failed} failed` +
-        (state.other ? `, ${state.other} skipped or neutral.` : ".");
+        (state.other ? `, ${state.other} skipped or neutral.` : ".") +
+        needsPersonSuffix(state);
   await deps.deliver(
     wait,
     `PR ${wait.repo}#${details.number} checks settled. ${result}`,
   );
+  notePrChecksReport(wait, signature, now);
   return "delivered";
 }
 
