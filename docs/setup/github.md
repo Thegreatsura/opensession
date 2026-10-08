@@ -546,15 +546,15 @@ code-owner review:
 
 ```jsonc
 {
-  "approvalGate": true, // or { "checkName": "OS approval gate", "maxRisk": "low" }
+  "approvalGate": true, // or { "checkName": "OS approval gate", "maxRisk": "low", "requireApprovalOnHead": true }
 }
 ```
 
 CODEOWNERS decides which changes need a human. The gate reads it from the
 default branch in GitHub's lookup order (`.github/`, the root, `docs/`), as
 GitHub does, and applies the same rule as "Require review from Code Owners":
-every changed file with an owner needs an approval of the current head from
-one of that file's owners, either the user or a member of the owning team.
+every changed file with an owner needs an approval from one of that file's
+owners, either the user or a member of the owning team.
 Narrow CODEOWNERS to the paths that always need a person. A catch-all `*`
 rule sends every PR to its owners.
 
@@ -564,7 +564,7 @@ The check passes when the owned files are covered and either:
   no blocking findings, the PR touches no owned file, and it is not from a
   fork; or
 - someone with write access, other than the author and not a bot, has
-  approved the current head.
+  approved.
 
 Merge risk is shown in the check but does not decide unless the repository
 sets `maxRisk` (`low`, `medium` or `high`): then the automatic path also
@@ -574,8 +574,13 @@ not pass. A human approval is unaffected by `maxRisk`.
 A change request from such a reviewer blocks until they approve or it is
 dismissed. Until the head has been reviewed the check shows as in progress.
 Otherwise it completes as `action_required` with the reason in its title,
-which the CI-failure notice ignores. Approvals of an older commit do not
-count. `.os-review.json` and any file named `CODEOWNERS`, wherever it sits,
+which the CI-failure notice ignores.
+
+Human approvals survive later pushes by default, like a ruleset without
+"Dismiss stale pull request approvals when new commits are pushed": the
+reviewer approved the change, not each later commit. Set
+`"requireApprovalOnHead": true` to count only approvals of the current head.
+The OS review path always needs a review of the current head. `.os-review.json` and any file named `CODEOWNERS`, wherever it sits,
 always need a human: the first can change the review's scores and the review
 reads it from the PR head; the second decides who must approve. The gate's
 own settings come from the default branch through the API, never from the PR

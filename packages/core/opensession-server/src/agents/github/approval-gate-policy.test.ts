@@ -220,13 +220,43 @@ describe("approval gate policy", () => {
     );
   });
 
-  test("approvals count only on the head, from approvers other than the author", () => {
+  test("approvals of an older commit count unless the repo requires the head", () => {
     const low = review({ confidence: 3 });
+    const files = ["infra/main.tf"];
+    // Default: an approval survives later pushes, for owners too.
+    expect(
+      outcome(input({ lastReview: low, reviews: [approve("bob", OLD)] })),
+    ).toBe("success");
+    expect(outcome(input({ files, reviews: [approve("carol", OLD)] }))).toBe(
+      "success",
+    );
+    // requireApprovalOnHead: only approvals of the current head count.
     const stale = evaluateApprovalGate(
-      input({ lastReview: low, reviews: [approve("bob", OLD)] }),
+      input({
+        requireApprovalOnHead: true,
+        lastReview: low,
+        reviews: [approve("bob", OLD)],
+      }),
     );
     expect(stale).toMatchObject({ conclusion: "action_required" });
     expect(stale.summary).toContain("older commit");
+    expect(
+      outcome(
+        input({
+          requireApprovalOnHead: true,
+          files,
+          reviews: [approve("carol", OLD)],
+        }),
+      ),
+    ).toBe("action_required");
+    // The OS review path still needs a review of the head.
+    expect(outcome(input({ lastReview: review({ sha: OLD }) }))).toBe(
+      "in_progress",
+    );
+  });
+
+  test("approvals count only from approvers other than the author", () => {
+    const low = review({ confidence: 3 });
     // Not in the approver set (no write access, or a bot).
     expect(
       outcome(input({ lastReview: low, reviews: [approve("mallory")] })),
@@ -327,6 +357,12 @@ describe("approval gate config", () => {
     expect(normalizeApprovalGateConfig({ maxRisk: "low" })).toEqual({
       checkName: "OS approval gate",
       maxRisk: "low",
+    });
+    expect(
+      normalizeApprovalGateConfig({ requireApprovalOnHead: true }),
+    ).toEqual({
+      checkName: "OS approval gate",
+      requireApprovalOnHead: true,
     });
     expect(normalizeApprovalGateConfig({ maxRisk: "extreme" })).toEqual({
       checkName: "OS approval gate",

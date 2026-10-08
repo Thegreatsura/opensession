@@ -5,12 +5,12 @@
  * while keeping code-owner review:
  *
  *   - CODEOWNERS (from the default branch) names the human-review paths.
- *     Every changed file with an owner needs an approval of the CURRENT head
- *     from one of that file's owners, the same rule as GitHub's "require
- *     review from Code Owners", so the two never disagree.
+ *     Every changed file with an owner needs an approval from one of that
+ *     file's owners, the same rule as GitHub's "require review from Code
+ *     Owners", so the two never disagree.
  *   - A PR that touches no owned file passes when the OS review of the
  *     current head is approve, quality 5/5, with no blocking
- *     findings, or when someone with write access approves the current head.
+ *     findings, or when someone with write access approves.
  *   - A PR from a fork, or one touching the review policy or CODEOWNERS
  *     itself, never passes on the model review alone.
  *   - No review of this head yet → in progress (blocks like a running check).
@@ -26,6 +26,12 @@
  * `"approvalGate": true` or `"approvalGate": { "checkName": "...",
  * "maxRisk": "low" }`. `maxRisk` additionally caps the review's merge risk
  * on the automatic path; without it, risk is shown but does not decide.
+ *
+ * Human approvals survive later pushes by default, like a ruleset without
+ * "dismiss stale reviews on push": the reviewer approved the change, not
+ * each commit after it. `"requireApprovalOnHead": true` counts only
+ * approvals of the current head. The OS review path always needs a review
+ * of the current head.
  */
 import type { LastReviewState } from "./state";
 
@@ -48,6 +54,8 @@ export interface ApprovalGateConfig {
   checkName: string;
   /** Highest merge risk the automatic path accepts. Absent = risk ignored. */
   maxRisk?: GateRisk;
+  /** Count only human approvals of the current head. Default false. */
+  requireApprovalOnHead?: boolean;
 }
 
 /** Parse the `approvalGate` key of `.os-review.json`. Null = gate off. */
@@ -63,7 +71,13 @@ export function normalizeApprovalGateConfig(
       ? o.checkName.trim().slice(0, 100)
       : DEFAULT_GATE_CHECK_NAME;
   const maxRisk = GATE_RISKS.find((r) => r === o.maxRisk);
-  return { checkName: name, ...(maxRisk ? { maxRisk } : {}) };
+  return {
+    checkName: name,
+    ...(maxRisk ? { maxRisk } : {}),
+    ...(o.requireApprovalOnHead === true
+      ? { requireApprovalOnHead: true }
+      : {}),
+  };
 }
 
 // ── CODEOWNERS ───────────────────────────────────────────────────────────────
@@ -173,11 +187,13 @@ export interface GateInput {
   /** Default-branch CODEOWNERS rules (empty when the repo has none). */
   codeowners: CodeownersRule[];
   /** Lowercased login → the lowercased owner tokens (`@login`, `@org/team`)
-   *  that login satisfies. Only approvers of the head need an entry. */
+   *  that login satisfies. Only counted approvers need an entry. */
   ownerTokens: ReadonlyMap<string, ReadonlySet<string>>;
   /** Highest merge risk the automatic path accepts; absent = ignored. A
    *  review without a risk score never clears a cap. */
   maxRisk?: GateRisk;
+  /** Count only approvals of the current head (default: any commit). */
+  requireApprovalOnHead?: boolean;
   /** Matches a path against one glob; injected so the policy stays pure. */
   matchGlob: (glob: string, path: string) => boolean;
 }
@@ -221,11 +237,15 @@ function reviewLabel(r: LastReviewState): string {
   return `${verdict} · ${quality} · ${risk}`;
 }
 
-const HOW =
-  "Passes when every changed file with a code owner has an approval of the current head from one of its owners and either the OS review of the current head clears the automatic path (approve and 5/5, plus the repository's risk cap if it sets one), or someone with write access approves the current head. Files with code owners, the review policy, and PRs from forks always need a human.";
+function how(onHead: boolean): string {
+  const approval = onHead ? "an approval of the current head" : "an approval";
+  return `Passes when every changed file with a code owner has ${approval} from one of its owners and either the OS review of the current head clears the automatic path (approve and 5/5, plus the repository's risk cap if it sets one), or someone with write access gives ${approval}. Files with code owners, the review policy, and PRs from forks always need a human.`;
+}
 
 export function evaluateApprovalGate(input: GateInput): GateResult {
   const head = input.headSha;
+  const onHead = !!input.requireApprovalOnHead;
+  const HOW = how(onHead);
   const author = input.author.toLowerCase();
   const counted = [...latestDecisiveReviews(input.reviews).entries()].filter(
     ([login]) => login !== author && input.approvers.has(login),
@@ -239,7 +259,7 @@ export function evaluateApprovalGate(input: GateInput): GateResult {
       status: "completed",
       conclusion: "action_required",
       title: `Changes requested by ${blockers.join(", ")}`,
-      summary: `A human review requests changes. It stops blocking once that reviewer approves the current head or the review is dismissed.\n\n${HOW}`,
+      summary: `A human review requests changes. It stops blocking once that reviewer approves or the review is dismissed.\n\n${HOW}`,
     };
   }
 
@@ -253,11 +273,13 @@ export function evaluateApprovalGate(input: GateInput): GateResult {
   }
 
   const approvedHead = counted
-    .filter(([, r]) => r.state === "APPROVED" && r.commitId === head)
+    .filter(
+      ([, r]) => r.state === "APPROVED" && (!onHead || r.commitId === head),
+    )
     .map(([login, r]) => ({ login, display: r.login }));
-  const staleApproval = counted.some(
-    ([, r]) => r.state === "APPROVED" && r.commitId !== head,
-  );
+  const staleApproval =
+    onHead &&
+    counted.some(([, r]) => r.state === "APPROVED" && r.commitId !== head);
   const reapprove = staleApproval
     ? "\n\nAn earlier approval was for an older commit; approvals count only on the current head."
     : "";
@@ -284,7 +306,7 @@ export function evaluateApprovalGate(input: GateInput): GateResult {
       title: owned.length
         ? `Approved by code owner ${who}`
         : `Approved by ${who}`,
-      summary: `${owned.length ? "Code owners of every owned file" : "A human with write access"} approved \`${short(head)}\`.\n\n${HOW}`,
+      summary: `${owned.length ? "Code owners of every owned file" : "A human with write access"} approved ${onHead ? `\`${short(head)}\`` : "this PR"}.\n\n${HOW}`,
     };
   }
 
@@ -294,7 +316,7 @@ export function evaluateApprovalGate(input: GateInput): GateResult {
       status: "completed",
       conclusion: "action_required",
       title: `Needs a code owner approval from ${owners.slice(0, 3).join(", ")}${owners.length > 3 ? ` and ${owners.length - 3} more` : ""}`,
-      summary: `${list(unapproved.map((f) => f.path))} ${unapproved.length === 1 ? "has a code owner" : "have code owners"} in CODEOWNERS, so the OS review cannot clear this PR. An owner (${owners.join(", ")}) must approve the current head.${reapprove}\n\n${HOW}`,
+      summary: `${list(unapproved.map((f) => f.path))} ${unapproved.length === 1 ? "has a code owner" : "have code owners"} in CODEOWNERS, so the OS review cannot clear this PR. An owner (${owners.join(", ")}) must approve${onHead ? " the current head" : ""}.${reapprove}\n\n${HOW}`,
     };
   }
 

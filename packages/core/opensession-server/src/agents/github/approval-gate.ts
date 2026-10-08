@@ -291,7 +291,8 @@ async function refreshOnce(prNumber: number, ghRepo: string): Promise<void> {
   const ownerTokens = new Map<string, Set<string>>();
   for (const r of gateReviews) {
     const login = r.login.toLowerCase();
-    if (r.state !== "APPROVED" || r.commitId !== headSha) continue;
+    if (r.state !== "APPROVED") continue;
+    if (config.requireApprovalOnHead && r.commitId !== headSha) continue;
     if (!approvers.has(login) || ownerTokens.has(login)) continue;
     const tokens = new Set([`@${login}`]);
     for (const team of teams) if (await inTeam(team, r.login)) tokens.add(team);
@@ -310,6 +311,7 @@ async function refreshOnce(prNumber: number, ghRepo: string): Promise<void> {
     codeowners,
     ownerTokens,
     ...(config.maxRisk ? { maxRisk: config.maxRisk } : {}),
+    ...(config.requireApprovalOnHead ? { requireApprovalOnHead: true } : {}),
     matchGlob,
   });
   await postCheck(ghRepo, prNumber, headSha, p.html_url || "", config, result);
