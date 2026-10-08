@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   handoffActive,
   handoffDecision,
+  pickHandoffOwner,
   reviewSatisfied,
 } from "./handoff-gates";
 
@@ -76,5 +77,31 @@ describe("handoff active window", () => {
         3_600_000,
       ),
     ).toBe(false);
+  });
+});
+
+describe("handoff owner", () => {
+  const live = (s: { id: string; archived?: boolean }) => !s.archived;
+
+  test("the PR footer's session wins over branch owners", () => {
+    expect(
+      pickHandoffOwner({ id: "footer" }, live, [{ id: "branch" }])?.id,
+    ).toBe("footer");
+  });
+
+  test("the footer's session is enough when no session has the branch", () => {
+    expect(pickHandoffOwner({ id: "footer" }, live, [])?.id).toBe("footer");
+  });
+
+  test("an archived footer session falls back to the branch owner", () => {
+    expect(
+      pickHandoffOwner({ id: "footer", archived: true }, live, [
+        { id: "branch" },
+      ])?.id,
+    ).toBe("branch");
+  });
+
+  test("no footer and no branch owner means no owner", () => {
+    expect(pickHandoffOwner(undefined, live, [])).toBeUndefined();
   });
 });

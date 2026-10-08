@@ -1,8 +1,8 @@
 /**
  * Review → owning-session handoff. When an automatic PR review finishes
  * unsatisfied (blocking findings, or open findings at low confidence), the
- * findings are delivered straight into the live Open Session session working on
- * that PR's branch — the agent that wrote the code fixes it with full context,
+ * findings are delivered straight into the live Open Session session that owns
+ * the PR (named in its attribution footer, else working on its branch) — the agent that wrote the code fixes it with full context,
  * no `os-auto-fix` label needed. Its push re-triggers the normal review cycle,
  * closing the loop.
  *
@@ -18,6 +18,7 @@ import {
   getConfigAsync,
 } from "../../server/config";
 import { audit } from "../../server/audit";
+import { getPrsByRepo } from "../../server/pr-cache";
 import { tryGetSessionControl } from "../../server/session-control";
 import {
   editIssueComment,
@@ -34,8 +35,10 @@ import { matchSessions, workspaceIdForRepo } from "./session-notify";
 import {
   handoffActive,
   handoffDecision,
+  pickHandoffOwner,
   reviewSatisfied,
 } from "./handoff-gates";
+import { canOwnPrWork } from "./pr-conflict";
 import {
   buildHandoffMessage,
   buildReviewSettledMessage,
@@ -115,7 +118,16 @@ export async function maybeHandoffFindings(
     const owners = (
       await matchSessions(workspaceId, pr.headRef, { order: "activity" })
     ).filter((s) => !s.id.startsWith("bks-ghpr-"));
-    const target = owners[0];
+    // The session named in the PR footer comes first, as for CI-failure and
+    // conflict notices: it may have opened the PR without attaching the repo.
+    const cached = getPrsByRepo().get(workspaceId)?.get(pr.headRef);
+    const sessionRef =
+      cached?.number === pr.number ? cached.sessionRef : undefined;
+    const target = pickHandoffOwner(
+      sessionRef ? control.getSession(sessionRef) : undefined,
+      canOwnPrWork,
+      owners,
+    );
     if (!target) {
       // No live owning session — the os-auto-fix label remains the path, but
       // say so on the PR instead of silently stopping (each review posts a

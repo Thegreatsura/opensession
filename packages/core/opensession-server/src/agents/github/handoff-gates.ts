@@ -65,3 +65,18 @@ export function handoffActive(
   const at = Date.parse(prior.deliveredAt);
   return Number.isFinite(at) && nowMs - at < ttlMs;
 }
+
+/**
+ * Which session a review handoff goes to. The session named in the PR body's
+ * attribution footer wins while it can take the work, matching the CI-failure
+ * and conflict notices: a session can open a PR in a repo it never attached,
+ * so the branch lookup alone misses it. Otherwise the best branch owner.
+ */
+export function pickHandoffOwner<S>(
+  referenced: S | undefined,
+  canOwn: (session: S) => boolean,
+  branchOwners: readonly S[],
+): S | undefined {
+  if (referenced && canOwn(referenced)) return referenced;
+  return branchOwners[0];
+}
