@@ -147,7 +147,9 @@ describe("approval gate policy", () => {
       "success",
     );
     expect(
-      outcome(input({ reviews: [changes, { ...changes, state: "DISMISSED" }] })),
+      outcome(
+        input({ reviews: [changes, { ...changes, state: "DISMISSED" }] }),
+      ),
     ).toBe("success");
   });
 

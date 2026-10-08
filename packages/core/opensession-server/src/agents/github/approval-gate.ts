@@ -71,7 +71,10 @@ export async function loadApprovalGateConfig(
   return config;
 }
 
-async function pagedList<T>(path: string, maxPages: number): Promise<T[] | null> {
+async function pagedList<T>(
+  path: string,
+  maxPages: number,
+): Promise<T[] | null> {
   const out: T[] = [];
   for (let page = 1; page <= maxPages; page++) {
     const sep = path.includes("?") ? "&" : "?";

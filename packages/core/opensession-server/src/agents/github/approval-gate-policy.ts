@@ -44,7 +44,8 @@ export interface ApprovalGateConfig {
 export function normalizeApprovalGateConfig(
   raw: unknown,
 ): ApprovalGateConfig | null {
-  if (raw === true) return { checkName: DEFAULT_GATE_CHECK_NAME, humanPaths: [] };
+  if (raw === true)
+    return { checkName: DEFAULT_GATE_CHECK_NAME, humanPaths: [] };
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const o = raw as Record<string, unknown>;
   if (o.enabled === false) return null;
