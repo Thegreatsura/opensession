@@ -270,31 +270,3 @@ html.wco .app-body.sidebar-collapsed .viewer-header,
 html.wco .app-body.sidebar-collapsed .detail-topbar-title {
   padding-left: calc(env(titlebar-area-x, 78px) + 148px);
 }
-/* Electron does not reliably subtract a no-drag region when it belongs to an
-   overlapping sibling of the draggable header. The collapsed controls float
-   above that header, so make the underlying row non-draggable in this state;
-   otherwise it intercepts sidebar/back/forward clicks before they reach DOM. */
-html:is(.wco, .desktop-shell) .app-body.sidebar-collapsed .wco-chrome {
-  -webkit-app-region: no-drag;
-  app-region: no-drag;
-}
-/* The collapsed pane's floating controls occupy the traffic-light inset and
-   the next 104px. Its header stays no-drag because Electron does not reliably
-   subtract those overlapping siblings. This empty slot directly after the
-   controls restores a safe native grip without covering titlebar actions. */
-.wco-collapsed-drag-handle {
-  display: none;
-}
-html:is(.wco, .desktop-shell)
-  .app-body.sidebar-collapsed
-  .wco-collapsed-drag-handle {
-  position: absolute;
-  top: calc((var(--desktop-header-h) - 34px) / 2);
-  left: calc(env(titlebar-area-x, 78px) + 112px);
-  z-index: 20;
-  display: block;
-  width: 36px;
-  height: 34px;
-  -webkit-app-region: drag;
-  app-region: drag;
-}

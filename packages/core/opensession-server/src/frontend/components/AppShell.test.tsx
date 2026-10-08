@@ -44,6 +44,7 @@ describe("AppShell", () => {
     const tree = AppShell({
       paneRef,
       rightPanelRef,
+      collapsedControls: <button data-testid="reopen" />,
       children: <section data-testid="pane-child" />,
     });
     if (!React.isValidElement<ElementProps>(tree)) {
@@ -65,13 +66,13 @@ describe("AppShell", () => {
 
     const paneChildren = elementChildren(main.props.children);
     expect(paneChildren).toHaveLength(4);
-    const [titleBar, dragHandle, child, keptFrames] = paneChildren;
+    const [child, reopen, titleBar, keptFrames] = paneChildren;
+    expect(child.props["data-testid"]).toBe("pane-child");
+    // Floating controls follow the draggable header in document order, so
+    // Electron applies their no-drag regions after the header's drag region.
+    expect(reopen.props["data-testid"]).toBe("reopen");
     expect(titleBar.type).toBe(TitleBarStub);
     expect(titleBar.props.pane).toBe(true);
-    expect(dragHandle.type).toBe("div");
-    expect(dragHandle.props.className).toBe("wco-collapsed-drag-handle");
-    expect(dragHandle.props["aria-hidden"]).toBe("true");
-    expect(child.props["data-testid"]).toBe("pane-child");
     // Last, so kept Browser and Portal pages paint over their slots.
     expect(keptFrames.type).toBe(KeptFrameLayerStub);
   });

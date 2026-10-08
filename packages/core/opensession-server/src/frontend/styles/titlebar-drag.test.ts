@@ -42,9 +42,11 @@ test("Electron titlebar drag regions do not depend on WCO visibility", async () 
   expect(userPicker).toContain(
     "[html.desktop-shell_&]:[-webkit-app-region:drag]",
   );
-  expect(appShell).toContain('className="wco-collapsed-drag-handle"');
-  expect(css).toMatch(
-    /\.app-body\.sidebar-collapsed\s+\.wco-collapsed-drag-handle/,
+  // The header stays draggable with the sidebar collapsed; the floating
+  // controls carve themselves out by following it in document order.
+  expect(css).not.toMatch(/\.sidebar-collapsed\s+\.wco-chrome\s*\{/);
+  expect(appShell.indexOf("{children}")).toBeLessThan(
+    appShell.indexOf("<TitleBar pane />"),
   );
   expect(firstMile).toContain(
     'className="wco-chrome relative z-20 flex h-11 shrink-0 items-start justify-center"',

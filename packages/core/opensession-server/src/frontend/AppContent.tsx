@@ -1394,32 +1394,34 @@ export function AppContent({
                 <AppShell
                   paneRef={captureDetailPane}
                   rightPanelRef={setRightPanelEl}
-                >
-                  {/* Floating re-open control, shown only while the desktop sidebar
-						    is collapsed (CSS-gated). Mirrors the brand-row toggle so the
-						    sidebar can always be brought back. */}
-                  <Tooltip
-                    label="Show sidebar"
-                    side="right"
-                    shortcut={["⌘", "B"]}
-                  >
-                    {/* `sidebar-reopen` stays as a hook: base.css exempts it from the
-							    desktop shell's drag region and re-anchors it past the
-							    traffic lights. `top` matches the open row's center,
-							    accounting for its 1px bottom divider; `left` is the same 8px
-							    anchor the open sidebar's brand row uses. */}
-                    <button
-                      className={cn(
-                        SIDEBAR_CHROME_BTN,
-                        "sidebar-reopen absolute top-[calc((var(--desktop-header-h)-35px)/2)] left-2 z-20 hidden size-[34px] p-0",
-                        sidebarCollapsed && "desktop:inline-flex",
-                      )}
-                      onClick={toggleSidebarCollapsed}
-                      aria-label="Show sidebar"
+                  collapsedControls={
+                    // Floating re-open control, shown only while the desktop
+                    // sidebar is collapsed (CSS-gated). Mirrors the brand-row
+                    // toggle so the sidebar can always be brought back.
+                    <Tooltip
+                      label="Show sidebar"
+                      side="right"
+                      shortcut={["⌘", "B"]}
                     >
-                      {panelIcon}
-                    </button>
-                  </Tooltip>
+                      {/* `sidebar-reopen` stays as a hook: base.css exempts it from the
+    							    desktop shell's drag region and re-anchors it past the
+    							    traffic lights. `top` matches the open row's center,
+    							    accounting for its 1px bottom divider; `left` is the same 8px
+    							    anchor the open sidebar's brand row uses. */}
+                      <button
+                        className={cn(
+                          SIDEBAR_CHROME_BTN,
+                          "sidebar-reopen absolute top-[calc((var(--desktop-header-h)-35px)/2)] left-2 z-20 hidden size-[34px] p-0",
+                          sidebarCollapsed && "desktop:inline-flex",
+                        )}
+                        onClick={toggleSidebarCollapsed}
+                        aria-label="Show sidebar"
+                      >
+                        {panelIcon}
+                      </button>
+                    </Tooltip>
+                  }
+                >
                   {/* Session/workspace identity sits above the shared tab strip. */}
                   <TopBar
                     className={cn(

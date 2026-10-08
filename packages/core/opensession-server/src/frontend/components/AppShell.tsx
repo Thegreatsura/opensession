@@ -11,24 +11,27 @@ import { TitleBar } from "./TitleBar";
 export function AppShell({
   paneRef,
   rightPanelRef,
+  collapsedControls,
   children,
 }: {
   paneRef: (node: HTMLElement | null) => void;
   rightPanelRef: (node: HTMLDivElement | null) => void;
+  /** Floating controls shown while the sidebar is collapsed. */
+  collapsedControls?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className={WORKSPACE_SHELL}>
       <main className={DETAIL_PANE} ref={paneRef}>
+        {children}
+        {/* Collapsed-sidebar controls float over the draggable header. Electron
+            applies drag and no-drag regions in document order, so they must
+            come after the header for their no-drag carve-out to win. */}
+        {collapsedControls}
         {/* WCO back/forward fallback: the primary cluster lives in the
             sidebar's top chrome row, which vanishes when the sidebar is
-            collapsed — this floating copy shows only then (CSS-gated). */}
+            collapsed. This floating copy shows only then (CSS-gated). */}
         <TitleBar pane />
-        {/* The overlapping collapsed controls require the pane's header to
-            opt out of native dragging. Keep one empty grip beside them so the
-            window can still move without stealing any control's clicks. */}
-        <div className="wco-collapsed-drag-handle" aria-hidden="true" />
-        {children}
         {/* Browser and Portal pages that survive switching tabs and
             sessions. Last, so it paints over the slots it fills. */}
         <KeptFrameLayer />
