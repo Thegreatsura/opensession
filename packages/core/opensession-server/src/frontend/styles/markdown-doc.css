@@ -1,0 +1,181 @@
+/* ─────────────────────────────────────────────────────────────
+   Markdown documents: a `.md` file opened on its own.
+
+   `.markdown` is tuned for chat: dense, label-sized, edge to edge in a turn.
+   A file is read like a page, so `.markdown-doc` layers a document scale on
+   top: a centred reading measure, a real heading ramp, open rhythm between
+   blocks, quiet list markers, and task lists that show one checkbox instead
+   of a bullet and a native box. Only properties chat sets differently are
+   overridden here, so theme colours for code and links still come from
+   base-markdown.css and base-theme.css.
+   ───────────────────────────────────────────────────────────── */
+.markdown.markdown-doc {
+  max-width: 680px;
+  margin-inline: auto;
+  font-size: var(--type-body);
+  line-height: 1.7;
+  font-weight: 400;
+  color: var(--text);
+  text-wrap: pretty;
+}
+
+.markdown.markdown-doc p {
+  margin: 0 0 16px;
+}
+
+.markdown.markdown-doc :is(h1, h2, h3, h4) {
+  color: var(--text);
+  font-weight: 600;
+  text-wrap: balance;
+}
+.markdown.markdown-doc h1 {
+  margin: 0 0 12px;
+  font-size: calc(var(--type-page-title) + 6px);
+  line-height: 1.2;
+  letter-spacing: -0.028em;
+}
+.markdown.markdown-doc h2 {
+  margin: 40px 0 10px;
+  font-size: var(--type-section-title);
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+}
+.markdown.markdown-doc h3 {
+  margin: 28px 0 6px;
+  font-size: calc(var(--type-body) + 1px);
+  line-height: 1.4;
+  letter-spacing: -0.012em;
+}
+.markdown.markdown-doc h4 {
+  margin: 24px 0 4px;
+  font-size: var(--type-body);
+  color: var(--text-dim);
+}
+/* The lead paragraph under the title reads as a subtitle. */
+.markdown.markdown-doc > h1 + p {
+  margin-bottom: 8px;
+  font-size: calc(var(--type-body) + 1px);
+  color: var(--text-dim);
+}
+.markdown.markdown-doc > :first-child {
+  margin-top: 0;
+}
+.markdown.markdown-doc :is(h1, h2, h3, h4) + :is(h1, h2, h3, h4) {
+  margin-top: 12px;
+}
+
+.markdown.markdown-doc :is(ul, ol) {
+  margin: 0 0 16px;
+  padding-left: 22px;
+}
+.markdown.markdown-doc li {
+  margin: 4px 0;
+  padding-left: 4px;
+}
+.markdown.markdown-doc li > :is(ul, ol) {
+  margin: 4px 0 0;
+}
+.markdown.markdown-doc li::marker {
+  color: var(--text-faint);
+}
+.markdown.markdown-doc ol > li::marker {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.93em;
+}
+
+/* Task lists: the checkbox is the marker. */
+.markdown.markdown-doc li:has(> input[type="checkbox"]) {
+  list-style: none;
+  margin-left: -22px;
+  padding-left: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.markdown.markdown-doc li > input[type="checkbox"] {
+  appearance: none;
+  flex: none;
+  position: relative;
+  top: 3px;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1.5px solid var(--border-strong);
+  border-radius: calc(5px * var(--rf));
+  corner-shape: var(--cs);
+  background: transparent;
+}
+.markdown.markdown-doc li > input[type="checkbox"]:checked {
+  border-color: var(--text);
+  background: var(--text);
+}
+.markdown.markdown-doc li > input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.2l2.6 2.6L12 5.4' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    center / 12px no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.2l2.6 2.6L12 5.4' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    center / 12px no-repeat;
+}
+.markdown.markdown-doc li:has(> input[type="checkbox"]:checked) {
+  color: var(--text-faint);
+  text-decoration: line-through;
+  text-decoration-color: var(--border-strong);
+}
+
+.markdown.markdown-doc blockquote {
+  margin: 4px 0 16px;
+  padding: 2px 0 2px 16px;
+  border-left-width: 2px;
+  color: var(--text-dim);
+}
+.markdown.markdown-doc blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown.markdown-doc pre {
+  margin: 4px 0 20px;
+  padding: 14px 16px;
+  border-radius: calc(12px * var(--rf));
+  font-size: 0.86em;
+  line-height: 1.65;
+}
+.markdown.markdown-doc .md-code-wrap > pre {
+  padding-right: var(--code-pad-right);
+}
+
+/* Tables hug their content inside a hairline frame, and still scroll
+   sideways on a phone. */
+.markdown.markdown-doc table {
+  width: max-content;
+  max-width: 100%;
+  margin: 4px 0 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: calc(10px * var(--rf));
+  corner-shape: var(--cs);
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: calc(var(--type-body) - 1px);
+}
+.markdown.markdown-doc th {
+  padding: 8px 20px 8px 14px;
+  background: var(--hover);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--type-label);
+  color: var(--text-dim);
+  letter-spacing: 0;
+}
+.markdown.markdown-doc td {
+  padding: 9px 20px 9px 14px;
+}
+
+.markdown.markdown-doc hr {
+  margin: 36px 0;
+}
+
+.markdown.markdown-doc img {
+  max-height: none;
+  border-radius: calc(10px * var(--rf));
+}

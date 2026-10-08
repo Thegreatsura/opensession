@@ -768,10 +768,12 @@ export function AssetPreview({
         ) : text === null ? (
           <div className="p-4 text-label text-faint">Loading…</div>
         ) : (
-          <MarkdownBody
-            className="markdown px-4 py-3 text-label"
-            html={renderMarkdown(text)}
-          />
+          <div className="min-h-full bg-raised px-6 py-10 sm:px-12 sm:py-14">
+            <MarkdownBody
+              className="markdown markdown-doc"
+              html={renderMarkdown(text)}
+            />
+          </div>
         )
       ) : kind === "text" ? (
         textFailed ? (
