@@ -4,6 +4,7 @@ import {
   prepareAndSteerQueuedPrompt,
   type QueuedSteerDeps,
 } from "./queued-steer";
+import { withSessionMutationLock } from "./session-mutation-lock";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -264,4 +265,39 @@ test("an accepted steer records who sent it, a refused one does not", async () =
     ["session-1", "Grace Hopper"],
     ["session-1", "Grace Hopper"],
   ]);
+});
+
+test("a steer inside the session mutation lock does not wait on its own prompter write", async () => {
+  const target = { token: "run-1", runId: "run-1", generation: 1 };
+  const order: string[] = [];
+  const deps: QueuedSteerDeps = {
+    target: () => target,
+    prepare: async () => ({ id: "item-1", content: "x", user: "Grace" }),
+    steer: () => true,
+    accept: async () => true,
+    reject: async () => true,
+    // The production write (recordSessionPrompter) takes this same lock.
+    steeredBy: (sessionId) =>
+      withSessionMutationLock(sessionId, () => {
+        order.push("prompter recorded");
+      }),
+  };
+  const input = { sessionId: "session-lock", itemId: "item-1", text: "x" };
+  for (const run of [
+    () => prepareAndSteerQueuedPrompt(input, deps),
+    () => prepareAndInterruptQueuedPrompt(input, deps),
+  ]) {
+    order.length = 0;
+    const outcome = await Promise.race([
+      withSessionMutationLock(input.sessionId, async () => {
+        const result = await run();
+        order.push("command finished");
+        return result;
+      }),
+      Bun.sleep(1_000).then(() => "deadlocked"),
+    ]);
+    expect(outcome).not.toBe("deadlocked");
+    await withSessionMutationLock(input.sessionId, () => {});
+    expect(order).toEqual(["command finished", "prompter recorded"]);
+  }
 });

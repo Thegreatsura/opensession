@@ -57,9 +57,24 @@ export type QueuedSteerDeps = {
     images: ImageInput[] | undefined,
   ): Promise<void>;
   /** A person's steer makes them the session's last prompter, so what the
-   *  running turn creates next is theirs (`sessionCreationOwner`). */
+   *  running turn creates next is theirs (`sessionCreationOwner`). Started,
+   *  never awaited: steers run inside the websocket command's session
+   *  mutation lock, and this write takes that same lock. */
   steeredBy?(sessionId: string, user: string | undefined): Promise<void>;
 };
+
+/** Record the steering person once the caller's session mutation lock is
+ * free. Awaiting the write here deadlocked the session: the queued-steer
+ * websocket command holds that lock, so the write waited on its own caller,
+ * and every later write for the session, including the turn's terminal
+ * settlement, queued behind it forever. */
+function recordSteerer(
+  deps: QueuedSteerDeps,
+  sessionId: string,
+  user: string | undefined,
+): void {
+  void deps.steeredBy?.(sessionId, user)?.catch(() => {});
+}
 
 const queuedSteerDeps: QueuedSteerDeps = {
   target(sessionId) {
@@ -158,7 +173,7 @@ export async function prepareAndSteerQueuedPrompt(
   }
   if (!(await deps.accept(input.sessionId, input.itemId, before)))
     throw new Error("Pending steer changed before runner acceptance");
-  await deps.steeredBy?.(input.sessionId, prepared.user);
+  recordSteerer(deps, input.sessionId, prepared.user);
   return "steered";
 }
 
@@ -226,6 +241,6 @@ export async function prepareAndInterruptQueuedPrompt(
   }
   if (!(await deps.accept(input.sessionId, input.itemId, before)))
     throw new Error("Pending interrupt steer changed before runner acceptance");
-  await deps.steeredBy?.(input.sessionId, prepared.user);
+  recordSteerer(deps, input.sessionId, prepared.user);
   return "interrupted";
 }
