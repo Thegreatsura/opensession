@@ -13,7 +13,8 @@
  *     "mergeRisk": true,                                // diff-only merge-risk (recoverability) score
  *     "monitoringPlan": { "instructions": "..." },      // "How we'll know" plan (true, or with repo guidance)
  *     "rules": [ { "name", "when", "then" } ],          // custom scoring rules (review-rules.ts)
- *     "groups": [ { "name", "rules": [ ... ] } ]         // rules reported together under one name
+ *     "groups": [ { "name", "rules": [ ... ] } ],        // rules reported together under one name
+ *     "approvalGate": { "humanPaths": [ ... ] }           // required-check gate (approval-gate.ts; read from the default branch)
  *   }
  *
  * Auto-review gating (skipKeywords) reads the repo's MAIN checkout copy (the

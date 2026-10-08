@@ -77,11 +77,14 @@ export async function githubRequest<T = any>(
   method: string,
   path: string,
   body?: unknown,
+  /** `checks` mints the approval gate's checks-only token instead of the
+   *  write set, so a missing `checks: write` grant fails only that call. */
+  opts: { checks?: boolean } = {},
 ): Promise<GithubResult<T>> {
   // A /repos/{owner}/{name} path mints against that owner's installation.
   const repo = githubRepoFromApiPath(path);
   const credential = await githubInstallationCredential({
-    write: true,
+    ...(opts.checks ? { checks: true } : { write: true }),
     ...(repo ? { repo } : {}),
   });
   if (!credential)

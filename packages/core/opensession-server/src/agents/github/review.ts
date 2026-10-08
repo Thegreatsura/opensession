@@ -108,6 +108,7 @@ import {
 } from "./review-context";
 import { learnedRulesSection } from "./learned-rules";
 import { repoForFullName } from "./constants";
+import { refreshApprovalGate } from "./approval-gate";
 import {
   admitPublicReview,
   isExternalPullRequest,
@@ -1085,6 +1086,8 @@ export async function runReview(
         },
         pr.ghRepo,
       );
+      // The verdict just recorded is what the approval gate reads.
+      void refreshApprovalGate(pr.number, pr.ghRepo || defaultRepo().ghRepo);
       if (plan && !isEmptyPlan(plan)) {
         const { model: _model, ...stored } = plan;
         updatePrState(

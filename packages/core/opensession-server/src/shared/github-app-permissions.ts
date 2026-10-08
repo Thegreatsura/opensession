@@ -32,7 +32,9 @@ export const GITHUB_APP_GRANT_PERMISSIONS: Record<string, string> = {
   // App created before this change keeps minting until its owner accepts
   // the upgrade.
   actions: "write",
-  checks: "read", // CI check runs
+  // Read CI check runs; write only the approval gate's own check
+  // (agents/github/approval-gate.ts), minted on its own token below.
+  checks: "write",
   statuses: "read", // commit statuses, the other half of the status rollup
   contents: "write", // clone; pushes only while git transport rides App tokens
   pull_requests: "write", // reviews, comments, open/merge
@@ -73,6 +75,14 @@ export const GITHUB_APP_WRITE_PERMISSIONS: Record<string, string> = {
   pull_requests: "write",
   issues: "write",
   contents: "write",
+  metadata: "read",
+};
+
+/** The approval gate's check-run token. Its own mint, so an installation that
+ *  has not yet accepted `checks: write` loses only the gate check (which then
+ *  never appears and so blocks where it is required), not every other write. */
+export const GITHUB_APP_CHECKS_PERMISSIONS: Record<string, string> = {
+  checks: "write",
   metadata: "read",
 };
 

@@ -6,6 +6,7 @@
 
 import { describe, test, expect } from "bun:test";
 import {
+  GITHUB_APP_CHECKS_PERMISSIONS,
   GITHUB_APP_CODE_PERMISSIONS,
   GITHUB_APP_GRANT_PERMISSIONS,
   GITHUB_APP_READ_PERMISSIONS,
@@ -54,9 +55,9 @@ describe("github app permission sets", () => {
   });
 
   test("the grant includes the scopes the two capabilities depend on", () => {
-    // checks:read is required for check runs;
+    // checks: read for CI check runs, write for the approval gate's check;
     // issues+pull_requests+contents:write are the agent's write path.
-    expect(GITHUB_APP_GRANT_PERMISSIONS.checks).toBe("read");
+    expect(GITHUB_APP_GRANT_PERMISSIONS.checks).toBe("write");
     expect(GITHUB_APP_GRANT_PERMISSIONS.issues).toBe("write");
     expect(GITHUB_APP_GRANT_PERMISSIONS.pull_requests).toBe("write");
     expect(GITHUB_APP_GRANT_PERMISSIONS.contents).toBe("write");
@@ -80,6 +81,22 @@ describe("github app permission sets", () => {
     expect(GITHUB_APP_READ_PERMISSIONS.actions).toBe("read");
     expect(GITHUB_APP_CODE_PERMISSIONS.actions).toBe("read");
     expect(GITHUB_APP_WRITE_PERMISSIONS.actions).toBeUndefined();
+  });
+
+  test("only the approval gate's own mint asks for checks:write", () => {
+    // An installation that has not accepted checks:write must keep every
+    // other mint working; only the gate check goes missing.
+    expect(uncoveredScopes(GITHUB_APP_CHECKS_PERMISSIONS)).toEqual([]);
+    expect(GITHUB_APP_CHECKS_PERMISSIONS).toEqual({
+      checks: "write",
+      metadata: "read",
+    });
+    for (const set of [
+      GITHUB_APP_READ_PERMISSIONS,
+      GITHUB_APP_WRITE_PERMISSIONS,
+      GITHUB_APP_CODE_PERMISSIONS,
+    ])
+      expect(set.checks).not.toBe("write");
   });
 
   test("the write mint carries no read-only scope whose absence would 422 it", () => {

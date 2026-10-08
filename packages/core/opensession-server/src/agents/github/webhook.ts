@@ -51,6 +51,8 @@ import { DesiredReviewScheduler } from "./desired-review";
 import { loadReviewOptions, titleHasSkipKeyword } from "./review-options";
 import { DEFAULT_REVIEW_PROMPT } from "./prompts";
 import { automaticReviewEventAllowed } from "./public-review";
+import { refreshApprovalGate } from "./approval-gate";
+import { githubAppIdentity } from "../../server/github-auth";
 
 let onSessionInvalidate: (() => void) | undefined;
 export function setGithubSessionInvalidate(cb: () => void): void {
@@ -68,6 +70,13 @@ export function setGithubPullRequestReviewHandler(
 export function firePullRequestReview(payload: any): void {
   onPullRequestReview?.(payload);
 }
+
+const GATE_ACTIONS = new Set([
+  "opened",
+  "reopened",
+  "synchronize",
+  "ready_for_review",
+]);
 
 const REVIEW_ACTIONS = new Set([
   "opened",
@@ -201,6 +210,19 @@ export async function handleGithubPrEvent(
     // trusted logins. Untrusted ones drop silently: these arrive by the
     // thousand.
     if (event === "check_run" || event === "status") {
+      // Re-run on the approval gate's own check: GitHub sends it only to the
+      // App that created the check, and only a user with write access can ask.
+      if (
+        event === "check_run" &&
+        payload?.action === "rerequested" &&
+        payload?.check_run?.app?.slug === githubAppIdentity().slug
+      ) {
+        const gateRepo = ghRepo || defaultRepo().ghRepo;
+        for (const attached of payload.check_run.pull_requests || [])
+          if (typeof attached?.number === "number")
+            void refreshApprovalGate(attached.number, gateRepo);
+        return;
+      }
       const senderIsApp = payload?.sender?.type === "Bot";
       if (eventRepo && (senderIsApp || senderIsBot || senderIsTrusted))
         await routeCiEvent(event, payload, eventRepo);
@@ -227,6 +249,15 @@ export async function handleGithubPrEvent(
       return;
     }
 
+    // A formal review submitted, edited or dismissed can open or close the
+    // approval gate. Nothing else here acts on formal reviews.
+    if (event === "pull_request_review") {
+      const number = payload?.pull_request?.number;
+      if (typeof number === "number")
+        void refreshApprovalGate(number, ghRepo || defaultRepo().ghRepo);
+      return;
+    }
+
     if (event !== "pull_request") return;
 
     const pr = payload.pull_request as PrPayload;
@@ -239,6 +270,14 @@ export async function handleGithubPrEvent(
     const headRepoName = String(pr.head?.repo?.full_name || "").toLowerCase();
     const externalFork =
       !!headRepoName && !!baseRepoName && headRepoName !== baseRepoName;
+
+    // A new head or base changes what the approval gate judges. Every PR gets
+    // the check, whoever pushed: an untrusted push simply waits for a human.
+    if (
+      GATE_ACTIONS.has(action) ||
+      (action === "edited" && payload?.changes?.base)
+    )
+      void refreshApprovalGate(pr.number, ghRepo || defaultRepo().ghRepo);
 
     // ── Label actions ── (ignore labels we applied to ourselves)
     if (action === "labeled") {

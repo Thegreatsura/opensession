@@ -27,6 +27,7 @@ import { configuredIntegration } from "./config";
 import { githubGitCredentialEnv } from "./github-git-credential";
 import { writeFileAtomic } from "./shared/atomic-write";
 import {
+  GITHUB_APP_CHECKS_PERMISSIONS as CHECKS_PERMISSIONS,
   GITHUB_APP_CODE_PERMISSIONS as CODE_PERMISSIONS,
   GITHUB_APP_READ_PERMISSIONS as READ_PERMISSIONS,
   GITHUB_APP_WRITE_PERMISSIONS as WRITE_PERMISSIONS,
@@ -279,6 +280,20 @@ export interface GithubInstallationCredential {
   rateLimitKey: string;
 }
 
+/** Which permission set a service mint asks for. `checks` exists only for the
+ *  approval gate's check runs; see GITHUB_APP_CHECKS_PERMISSIONS. */
+type MintScope = "read" | "write" | "checks";
+
+function mintScope(opts: { write?: boolean; checks?: boolean }): MintScope {
+  return opts.checks ? "checks" : opts.write ? "write" : "read";
+}
+
+const MINT_PERMISSIONS: Record<MintScope, Record<string, string>> = {
+  read: READ_PERMISSIONS,
+  write: WRITE_PERMISSIONS,
+  checks: CHECKS_PERMISSIONS,
+};
+
 export async function githubAppInstallationToken(
   opts: { write?: boolean; owner?: string } = {},
 ): Promise<string | null> {
@@ -287,6 +302,7 @@ export async function githubAppInstallationToken(
 
 async function installationCredential(opts: {
   write?: boolean;
+  checks?: boolean;
   owner?: string;
 }): Promise<GithubInstallationCredential | null> {
   const { clientId } = githubUserAuthSettings();
@@ -307,14 +323,15 @@ async function installationCredential(opts: {
   try {
     const installation = await selectInstallation(opts.owner, headers);
     const rateLimitKey = `installation:${clientId}:${installation.id}`;
-    const cacheKey = `${clientId}:${installation.id}:${opts.write ? "write" : "read"}`;
+    const scope = mintScope(opts);
+    const cacheKey = `${clientId}:${installation.id}:${scope}`;
     const cached = tokenCache().get(cacheKey);
     if (cached && cached.expiresAt - Date.now() > 5 * 60_000) {
       noteHealth(true);
       return { token: cached.token, rateLimitKey };
     }
     const tok = await mintInstallationToken(installation.id, headers, {
-      permissions: opts.write ? WRITE_PERMISSIONS : READ_PERMISSIONS,
+      permissions: MINT_PERMISSIONS[scope],
     });
     tokenCache().set(cacheKey, {
       token: tok.token,
@@ -397,7 +414,13 @@ export async function githubToken(
 
 /** Return the token together with the identity selected for its mint. */
 export async function githubInstallationCredential(
-  opts: { write?: boolean; repo?: string; owner?: string } = {},
+  opts: {
+    write?: boolean;
+    /** Mint the approval gate's checks-only set instead of read/write. */
+    checks?: boolean;
+    repo?: string;
+    owner?: string;
+  } = {},
 ): Promise<GithubInstallationCredential | null> {
   if (!githubConfiguredCredential()) return null;
   const owner =
@@ -405,6 +428,7 @@ export async function githubInstallationCredential(
   if (opts.repo !== undefined && !owner) return null;
   return installationCredential({
     ...(opts.write ? { write: true } : {}),
+    ...(opts.checks ? { checks: true } : {}),
     ...(owner ? { owner } : {}),
   });
 }

@@ -58,7 +58,7 @@ canonical permission set used when tokens are minted:
 | Scope                  | Access         | Why                                     |
 | ---------------------- | -------------- | --------------------------------------- |
 | Actions                | Read           | failing workflow logs for trusted fixes |
-| Checks                 | Read           | check runs                              |
+| Checks                 | Read and write | check runs; the approval gate's check   |
 | Commit statuses        | Read           | status rollups                          |
 | Contents               | Read and write | clone and push                          |
 | Deployments            | Read           | preview deployment state                |
@@ -536,6 +536,45 @@ path; label-forced and manual reviews still run. Rules that read the model's
 result cannot skip. Public-fork PRs use the base checkout's file, so a
 contributor cannot score their own PR. Every applied or skipping rule is
 recorded in the audit log (`review_rules_applied`, `review_skipped_by_rule`).
+
+### Approval gate
+
+`approvalGate` turns on a check run named **OS approval gate**, posted by the
+App on every open PR. Require it in the default-branch ruleset, with the App
+as its source, to replace a blanket "one approving review" rule:
+
+```jsonc
+{
+  "approvalGate": {
+    "checkName": "OS approval gate", // optional
+    "humanPaths": [".github/**", "infra/**", "**/migrations/**"],
+  },
+}
+```
+
+The check passes when either:
+
+- the OS review of the PR's current head is `approve`, quality 5/5, merge
+  risk low, with no blocking findings, the PR touches no `humanPaths` glob,
+  and it is not from a fork; or
+- someone with write access, other than the author and not a bot, has
+  approved the current head, and no such reviewer's latest review requests
+  changes.
+
+Until the head has been reviewed it shows as in progress. Otherwise it
+completes as `action_required` with the reason in its title, which the
+CI-failure notice ignores. Approvals of an older commit do not count.
+`.os-review.json` is always a human-review path, because its rules can
+change the review's scores. The gate reads its own settings from the default
+branch through the API, never from the PR head or a local checkout. The check
+refreshes when a PR is opened, pushed or retargeted, when a formal review is
+submitted or dismissed, when an OS review finishes, and from its **Re-run**
+button. Each post is recorded in the audit log (`approval_gate_posted`).
+
+The check needs the App's **Checks: read and write** permission. It is minted
+on its own token, so an installation that has not accepted the upgrade keeps
+every other feature working; only the gate check is missing, and a ruleset
+that requires it keeps blocking.
 
 ## Automation PR credentials and review requests
 

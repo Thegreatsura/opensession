@@ -121,6 +121,7 @@ export async function handleGithubWebhook(req: Request): Promise<Response> {
       event === "issues" ||
       event === "issue_comment" ||
       event === "pull_request_review_comment" ||
+      event === "pull_request_review" ||
       event === "workflow_run" ||
       event === "check_run" ||
       event === "status"
