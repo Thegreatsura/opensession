@@ -19,6 +19,11 @@ import {
 } from "./MessageBubble";
 import { SuggestedTaskCard } from "./SuggestedTaskCard";
 import {
+  markSuggestedTaskStarted,
+  suggestedTaskKey,
+  useStartedSuggestedTasks,
+} from "../lib/started-suggested-tasks";
+import {
   suggestedTaskOf,
   type SuggestedTask,
 } from "@tellahq/opensession-protocol/tool-presentation";
@@ -400,11 +405,7 @@ export const TurnBlock = function TurnBlock({
       {/* A proposal addressed to the reader: the agent suggests, the person
           starts it. See suggestedTurnTasks. */}
       {suggested.length > 0 && (
-        <div className="mt-1 space-y-2 pl-[7px] pr-1">
-          {suggested.map(({ id, task }) => (
-            <SuggestedTaskCard key={id} task={task} />
-          ))}
-        </div>
+        <SuggestedTasks suggested={suggested} sessionId={sessionId} />
       )}
     </div>
   );
@@ -898,6 +899,38 @@ function suggestedTurnTasks(
     if (task) out.push({ id: entry.id, task });
   }
   return out;
+}
+
+/** The turn's suggestions, minus any already started from this browser:
+ *  starting one closes its card. Its own component so only a turn that
+ *  proposed something subscribes to the started list. */
+function SuggestedTasks({
+  suggested,
+  sessionId,
+}: {
+  suggested: Array<{ id: string; task: SuggestedTask }>;
+  sessionId?: string;
+}) {
+  const started = useStartedSuggestedTasks();
+  const open = suggested.filter(
+    ({ id }) => !sessionId || !started.has(suggestedTaskKey(sessionId, id)),
+  );
+  if (open.length === 0) return null;
+  return (
+    <div className="mt-1 space-y-2 pl-[7px] pr-1">
+      {open.map(({ id, task }) => (
+        <SuggestedTaskCard
+          key={id}
+          task={task}
+          onStarted={
+            sessionId
+              ? () => markSuggestedTaskStarted(suggestedTaskKey(sessionId, id))
+              : undefined
+          }
+        />
+      ))}
+    </div>
+  );
 }
 
 function turnBlockPropsEqual(prev: Props, next: Props): boolean {

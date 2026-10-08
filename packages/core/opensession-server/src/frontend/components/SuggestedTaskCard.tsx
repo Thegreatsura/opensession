@@ -28,9 +28,17 @@ import { getCurrentUser } from "./UserPicker";
  * The pencil is an anchor to the same `/new?prompt=` link the tool result
  * carries, so cmd-click, middle-click and copy-link keep their meaning; a
  * plain click opens the composer in place. Start is a real button: it does
- * not navigate anywhere a link could describe.
+ * not navigate anywhere a link could describe. Once it has created the
+ * session, `onStarted` lets the owner close the card for good.
  */
-export function SuggestedTaskCard({ task }: { task: SuggestedTask }) {
+export function SuggestedTaskCard({
+  task,
+  onStarted,
+}: {
+  task: SuggestedTask;
+  /** The new session exists; the owner closes the card. */
+  onStarted?: () => void;
+}) {
   // Null outside the app shell (a card in a test).
   const navigation = use(NavigationContext);
   const [starting, setStarting] = useState(false);
@@ -55,7 +63,9 @@ export function SuggestedTaskCard({ task }: { task: SuggestedTask }) {
         user: getCurrentUser(),
         requestId: requestIdRef.current,
       });
+      onStarted?.();
       navigation.openSession(id);
+      return;
     } catch (error) {
       toast(error instanceof Error ? error.message : String(error));
     }

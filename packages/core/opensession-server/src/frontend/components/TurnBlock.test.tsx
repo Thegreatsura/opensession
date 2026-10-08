@@ -329,4 +329,34 @@ describe("suggested task", () => {
     // The fold is closed by default; the card is outside it, not behind it.
     expect(html).toContain('aria-expanded="false"');
   });
+
+  test("closes once started from this browser", async () => {
+    const { TurnBlock } = await import("./TurnBlock");
+    const { STARTED_SUGGESTED_TASKS_KEY } =
+      await import("../lib/started-suggested-tasks");
+    const items = [
+      toolUse("s", "opensession-sessions_suggest_task", {
+        title: "Fix the flag",
+        instructions: "Fix it.",
+      }),
+    ];
+    const render = (sessionId: string) =>
+      renderToStaticMarkup(
+        React.createElement(TurnBlock, {
+          items,
+          toolResults: new Map(),
+          live: false,
+          sessionId,
+        }),
+      );
+    const getItem = localStorage.getItem;
+    localStorage.getItem = (key: string) =>
+      key === STARTED_SUGGESTED_TASKS_KEY ? `os-a:${items[0].id}` : null;
+    try {
+      expect(render("os-a")).not.toContain("Suggested task");
+      expect(render("os-b")).toContain("Suggested task");
+    } finally {
+      localStorage.getItem = getItem;
+    }
+  });
 });
