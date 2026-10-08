@@ -12,6 +12,9 @@ enum AccountShortcutCommand: String, CaseIterable, Identifiable {
     /// The web registry's `composer-note`: switches the focused session's
     /// composer between a prompt and a team note, then puts the caret in it.
     case composerNote = "composer-note"
+    /// The web registry's `session-reopen`: restores the workspace or tab
+    /// archived last.
+    case reopenArchived = "session-reopen"
 
     var id: String { rawValue }
 
@@ -22,6 +25,7 @@ enum AccountShortcutCommand: String, CaseIterable, Identifiable {
         case .newSessionInWorkspace: "New session in this workspace"
         case .askFocus: "Answer the question"
         case .composerNote: "Team note"
+        case .reopenArchived: "Reopen archived"
         }
     }
 
@@ -32,6 +36,7 @@ enum AccountShortcutCommand: String, CaseIterable, Identifiable {
         case .newSessionInWorkspace: "Start another session in the open workspace"
         case .askFocus: "Jump to the question the assistant is waiting on"
         case .composerNote: "Switch the composer between a prompt and a team note"
+        case .reopenArchived: "Bring back the workspace you just archived"
         }
     }
 
@@ -45,6 +50,8 @@ enum AccountShortcutCommand: String, CaseIterable, Identifiable {
         case .askFocus: AccountShortcutChord(rawValue: "mod+i")!
         // Not plain Command-N, which stays New Session.
         case .composerNote: AccountShortcutChord(rawValue: "mod+shift+n")!
+        // The web's other default, Command-Z, is text undo on the Mac.
+        case .reopenArchived: AccountShortcutChord(rawValue: "mod+shift+t")!
         }
     }
 }

@@ -44,6 +44,17 @@ final class AccountShortcutsTests: XCTestCase {
         XCTAssertEqual(shortcuts.primaryBinding(for: .newSession)?.rawValue, "mod+n")
     }
 
+    func testReopenArchivedSkipsTheWebsTextUndoDefault() {
+        XCTAssertEqual(
+            AccountShortcuts(rawValue: "{}").primaryBinding(for: .reopenArchived)?.rawValue,
+            "mod+shift+t"
+        )
+        // The web registry's defaults, if ever written as an override: Command-Z
+        // stays text undo on the Mac, so the native binding is the alias.
+        let web = AccountShortcuts(rawValue: #"{"session-reopen":["mod+z","mod+shift+t"]}"#)
+        XCTAssertEqual(web.primaryBinding(for: .reopenArchived)?.rawValue, "mod+shift+t")
+    }
+
     func testSettingPrimaryKeepsExistingAliases() {
         var shortcuts = AccountShortcuts(rawValue: #"{"command-menu":["mod+k","ctrl+k"]}"#)
         let replacement = AccountShortcutChord(rawValue: "mod+shift+p")!

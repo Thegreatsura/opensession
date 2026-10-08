@@ -559,6 +559,21 @@ struct SessionsListView: View {
             ) { _ in
                 showPalette.toggle()
             }
+            // File > Reopen Archived: bring back the workspace (or tab) this
+            // window archived last and open it. A held chord reopens one.
+            .onReceive(
+                NotificationCenter.default.publisher(for: .os1ReopenArchived)
+            ) { _ in
+                if let event = NSApp.currentEvent, event.type == .keyDown, event.isARepeat {
+                    return
+                }
+                guard let restored = viewModel.reopenLastArchived() else {
+                    NSSound.beep()
+                    return
+                }
+                openedArchivedSession = nil
+                selectedSessionID = restored.id
+            }
             #endif
             .onChange(of: viewModel.hasLoaded) {
                 autoOpenFromEnvironment()
@@ -2585,7 +2600,7 @@ struct SessionsListView: View {
                 },
                 onCloseTab: { closed in
                     sessionPageCache.remove(sessionId: closed.id)
-                    viewModel.archive(closed)
+                    viewModel.archive(group: [closed])
                 },
                 onRestoreTab: { archived in
                     await restoreArchived(archived)
@@ -3385,12 +3400,12 @@ struct SessionsListView: View {
             // Mac hover button / Delete key / context menu: collapse the row
             // instead of blinking it out.
             withAnimation(.snappy(duration: 0.28)) {
-                workspace.sessions.forEach(viewModel.archive)
+                viewModel.archive(group: workspace.sessions)
             }
         } else {
             // Swipe path: the List's destructive-role delete animation owns
             // the removal; wrapping the mutation would fight it.
-            workspace.sessions.forEach(viewModel.archive)
+            viewModel.archive(group: workspace.sessions)
         }
     }
 

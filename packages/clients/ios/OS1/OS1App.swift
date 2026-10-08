@@ -10,6 +10,9 @@ extension Notification.Name {
     static let os1NewSessionInWorkspace = Notification.Name("os1.newSessionInWorkspace")
     /// View > Command Palette. Toggles like the web command does.
     static let os1CommandPalette = Notification.Name("os1.commandPalette")
+    /// File > Reopen Archived: restore the last workspace or tab archived in
+    /// the window.
+    static let os1ReopenArchived = Notification.Name("os1.reopenArchived")
 }
 #endif
 
@@ -59,6 +62,11 @@ struct OS1App: App {
                     )
                 }
                 .keyboardShortcut(shortcuts.keyboardShortcut(for: .newSessionInWorkspace))
+                Divider()
+                Button("Reopen Archived") {
+                    NotificationCenter.default.post(name: .os1ReopenArchived, object: nil)
+                }
+                .keyboardShortcut(shortcuts.keyboardShortcut(for: .reopenArchived))
             }
             CommandGroup(after: .sidebar) {
                 Button("Command Palette…") {

@@ -765,6 +765,50 @@ final class SessionsListViewModel {
         }
     }
 
+    /// Recent archive actions, newest last: one entry per archived workspace
+    /// or closed tab. An undo affordance, not a history, so it only covers
+    /// what this window archived since launch.
+    @ObservationIgnored private var archiveUndo: [[Session]] = []
+
+    /// Archive several sessions as one action (a workspace, a Catch Up card),
+    /// so Reopen Archived brings them back together.
+    func archive(group: [Session]) {
+        guard !group.isEmpty else { return }
+        rememberArchived(group)
+        group.forEach(archive)
+    }
+
+    func rememberArchived(_ group: [Session]) {
+        let ids = Set(group.map(\.id))
+        // An id lives in one entry only: archiving it again moves it to the
+        // top instead of leaving a stale entry underneath.
+        archiveUndo = Array(
+            (archiveUndo
+                .map { $0.filter { !ids.contains($0.id) } }
+                .filter { !$0.isEmpty }
+                + [group])
+                .suffix(10)
+        )
+    }
+
+    /// Reopen Archived (⌘⇧T): restore the newest archive action that is still
+    /// archived and return the session to open. An entry restored elsewhere,
+    /// or whose archive failed and rolled back, is back in the live list and
+    /// falls through to the one below it. Nothing is dropped from the stack:
+    /// a restore puts the sessions back in the live list, which skips them,
+    /// and a failed restore rolls them out again so the action stays
+    /// retryable.
+    func reopenLastArchived() -> Session? {
+        let live = Set(sessions.map(\.id))
+        for entry in archiveUndo.reversed() {
+            let restorable = entry.filter { !live.contains($0.id) }
+            guard !restorable.isEmpty else { continue }
+            restorable.forEach(unarchive)
+            return restorable.first
+        }
+        return nil
+    }
+
     func retryArchive() {
         guard let archiveFailure else { return }
         archive(archiveFailure)
