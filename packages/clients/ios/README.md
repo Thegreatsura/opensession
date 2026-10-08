@@ -346,14 +346,17 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   later loads no longer include are listed as removed, and resolved review
   threads (`GET /api/pr-review-threads`) show per file and can be hidden.
   `OS1_PR_REVIEW_FRESHNESS_FIXTURE=pushed|stale|worktree` (DEBUG) renders
-  those states for screenshots.
+  those states for screenshots. With `OS1_OPEN_PR=1`, `OS1_OPEN_PR_REVIEW=1`
+  opens the Review sheet and `OS1_OPEN_PR_FINISH_REVIEW=1` the pending-review
+  sheet with one fixture note (DEBUG).
 - **PR panel** — sessions with a pull request expose a row in the title-opened
   workspace sheet and the overflow menu; it opens a panel with state, review
   decision, conflicts, every check with its status, and reviewers, via
   `GET /api/sessions/:id/pr`. While the PR is open it also carries the web
   panel's actions, on the same routes: **Review** (approve / request changes /
   comment with a summary, plus the "squash and merge after approving"
-  shortcut, `POST …/pr-review`), **Merge** (squash, merge commit or rebase,
+  shortcut, `POST …/pr-review`; ⌘↩ submits it, and the code page's pending
+  review sheet, from the summary too, through `ReviewSubmitGate`), **Merge** (squash, merge commit or rebase,
   behind a confirmation that names what it would land on top of — conflicts,
   failing checks, a draft, requested changes — then held for a five-second
   undo window with a countdown before `POST …/pr-merge` goes out; closing the
