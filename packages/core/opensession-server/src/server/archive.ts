@@ -85,9 +85,33 @@ export function isArchivedId(id: string): boolean {
 }
 
 /**
+ * Clear the parked composer draft of workspaces whose last live session was
+ * just archived. A draft row is how a sessionless workspace shows in the
+ * sidebar, so a draft left behind (for example one parked from a new-session
+ * palette scoped to the workspace) would bring the archived workspace straight
+ * back as a draft row.
+ */
+async function clearEmptiedWorkspaceDrafts(
+  workspaceIds: string[],
+): Promise<void> {
+  if (!workspaceIds.length) return;
+  try {
+    const { getWorkspace, updateWorkspace } = await import("./workspaces");
+    for (const id of workspaceIds) {
+      if ((await getWorkspace(id))?.draft)
+        await updateWorkspace(id, { draft: null });
+    }
+  } catch (error) {
+    // Archiving remains committed; the draft can still be deleted by hand.
+    console.error("[archive] clearing workspace draft failed:", error);
+  }
+}
+
+/**
  * Drop every pin made stale by archiving `justArchived`: the sessions' own ids
  * and alias ids, plus each `workspace:<id>` pin whose workspace now has no live
- * session left. Pass the full current session list so the "last live session" test
+ * session left. Such a workspace also loses its parked draft, so it leaves the
+ * sidebar instead of returning as a draft row. Pass the full current session list so the "last live session" test
  * can see siblings — call this AFTER the archive registry is written so the
  * just-archived sessions read back as archived. Centralizes what the manual,
  * idle-sweep, and Plain-ticket archive paths all need; `setArchived` still handles the
@@ -107,11 +131,12 @@ export async function unpinArchivedSessions(
   }
   // A workspace pin is stale only once none of its sessions are live anymore —
   // else archiving one session would yank a still-active workspace off Pinned.
-  for (const pid of workspaceIds) {
-    if (!allSessions.some((s) => s.workspaceId === pid && !dead(s)))
-      keys.push(`workspace:${pid}`);
-  }
+  const emptied = [...workspaceIds].filter(
+    (pid) => !allSessions.some((s) => s.workspaceId === pid && !dead(s)),
+  );
+  for (const pid of emptied) keys.push(`workspace:${pid}`);
   await unpinEverywhere(keys);
+  await clearEmptiedWorkspaceDrafts(emptied);
 }
 
 export function getArchiveReason(id: string): ArchiveReason | null {
