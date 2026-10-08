@@ -541,35 +541,43 @@ recorded in the audit log (`review_rules_applied`, `review_skipped_by_rule`).
 
 `approvalGate` turns on a check run named **OS approval gate**, posted by the
 App on every open PR. Require it in the default-branch ruleset, with the App
-as its source, to replace a blanket "one approving review" rule:
+as its source, to replace a blanket "one approving review" rule while keeping
+code-owner review:
 
 ```jsonc
 {
-  "approvalGate": {
-    "checkName": "OS approval gate", // optional
-    "humanPaths": [".github/**", "infra/**", "**/migrations/**"],
-  },
+  "approvalGate": true, // or { "checkName": "OS approval gate" }
 }
 ```
 
-The check passes when either:
+CODEOWNERS decides which changes need a human. The gate reads it from the
+default branch in GitHub's lookup order (`.github/`, the root, `docs/`), as
+GitHub does, and applies the same rule as "Require review from Code Owners":
+every changed file with an owner needs an approval of the current head from
+one of that file's owners, either the user or a member of the owning team.
+Narrow CODEOWNERS to the paths that always need a person. A catch-all `*`
+rule sends every PR to its owners.
+
+The check passes when the owned files are covered and either:
 
 - the OS review of the PR's current head is `approve`, quality 5/5, merge
-  risk low, with no blocking findings, the PR touches no `humanPaths` glob,
-  and it is not from a fork; or
+  risk low, with no blocking findings, the PR touches no owned file, and it
+  is not from a fork; or
 - someone with write access, other than the author and not a bot, has
-  approved the current head, and no such reviewer's latest review requests
-  changes.
+  approved the current head.
 
-Until the head has been reviewed it shows as in progress. Otherwise it
-completes as `action_required` with the reason in its title, which the
-CI-failure notice ignores. Approvals of an older commit do not count.
-`.os-review.json` is always a human-review path, because its rules can
-change the review's scores. The gate reads its own settings from the default
-branch through the API, never from the PR head or a local checkout. The check
-refreshes when a PR is opened, pushed or retargeted, when a formal review is
-submitted or dismissed, when an OS review finishes, and from its **Re-run**
-button. Each post is recorded in the audit log (`approval_gate_posted`).
+A change request from such a reviewer blocks until they approve or it is
+dismissed. Until the head has been reviewed the check shows as in progress.
+Otherwise it completes as `action_required` with the reason in its title,
+which the CI-failure notice ignores. Approvals of an older commit do not
+count. `.os-review.json` and any file named `CODEOWNERS`, wherever it sits,
+always need a human: the first can change the review's scores and the review
+reads it from the PR head; the second decides who must approve. The gate's
+own settings come from the default branch through the API, never from the PR
+head or a local checkout. The check refreshes when a PR is opened, pushed or
+retargeted, when a formal review is submitted or dismissed, when an OS review
+finishes, and from its **Re-run** button. Each post is recorded in the audit
+log (`approval_gate_posted`).
 
 The check needs the App's **Checks: read and write** permission. It is minted
 on its own token, so an installation that has not accepted the upgrade keeps

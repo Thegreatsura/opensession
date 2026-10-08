@@ -1,14 +1,29 @@
 import { describe, expect, test } from "bun:test";
 import {
+  codeownersGlobs,
   evaluateApprovalGate,
   latestDecisiveReviews,
   normalizeApprovalGateConfig,
+  ownersFor,
+  parseCodeowners,
   type GateInput,
+  type GateReview,
 } from "./approval-gate-policy";
 import type { LastReviewState } from "./state";
 
 const HEAD = "a".repeat(40);
 const OLD = "b".repeat(40);
+const matchGlob = (glob: string, path: string) =>
+  new Bun.Glob(glob).match(path);
+
+const CODEOWNERS = parseCodeowners(`
+# Reserved areas
+/.github/ @acme/platform
+/infra/ @acme/infra
+**/migrations/** @dana
+docs/*  @acme/docs
+/infra/README.md
+`);
 
 function review(over: Partial<LastReviewState> = {}): LastReviewState {
   return {
@@ -32,14 +47,19 @@ function input(over: Partial<GateInput> = {}): GateInput {
     filesComplete: true,
     lastReview: review(),
     reviews: [],
-    approvers: new Set(["bob", "carol"]),
-    humanPaths: [".github/**", "infra/**"],
-    matchGlob: (glob, path) => new Bun.Glob(glob).match(path),
+    approvers: new Set(["bob", "carol", "dana"]),
+    codeowners: CODEOWNERS,
+    ownerTokens: new Map([
+      ["bob", new Set(["@bob"])],
+      ["carol", new Set(["@carol", "@acme/infra"])],
+      ["dana", new Set(["@dana"])],
+    ]),
+    matchGlob,
     ...over,
   };
 }
 
-const approve = (login: string, commitId = HEAD) => ({
+const approve = (login: string, commitId = HEAD): GateReview => ({
   login,
   userType: "User",
   state: "APPROVED",
@@ -51,8 +71,43 @@ function outcome(i: GateInput) {
   return r.status === "completed" ? r.conclusion : r.status;
 }
 
+describe("CODEOWNERS", () => {
+  test("patterns translate like GitHub's", () => {
+    expect(codeownersGlobs("*")).toEqual(["**"]);
+    expect(codeownersGlobs("/infra/")).toEqual(["infra/**"]);
+    expect(codeownersGlobs("apps/")).toEqual(["**/apps/**"]);
+    expect(codeownersGlobs("package.json")).toEqual([
+      "**/package.json",
+      "**/package.json/**",
+    ]);
+    expect(codeownersGlobs("*.tf")).toEqual(["**/*.tf"]);
+    expect(codeownersGlobs("docs/*")).toEqual(["docs/*"]);
+  });
+
+  test("the last matching rule wins, and an ownerless rule unowns", () => {
+    const owners = (p: string) => ownersFor(CODEOWNERS, p, matchGlob);
+    expect(owners(".github/workflows/ci.yml")).toEqual(["@acme/platform"]);
+    expect(owners("infra/main.tf")).toEqual(["@acme/infra"]);
+    expect(owners("infra/README.md")).toEqual([]);
+    expect(owners("api/db/migrations/0001.sql")).toEqual(["@dana"]);
+    expect(owners("docs/a.md")).toEqual(["@acme/docs"]);
+    expect(owners("docs/deep/a.md")).toEqual([]);
+    expect(owners("src/app.ts")).toEqual([]);
+    // A catch-all owns everything until a later rule says otherwise.
+    const all = parseCodeowners("* @acme/devs\n/infra/ @acme/infra");
+    expect(ownersFor(all, "src/app.ts", matchGlob)).toEqual(["@acme/devs"]);
+    expect(ownersFor(all, "infra/x", matchGlob)).toEqual(["@acme/infra"]);
+  });
+
+  test("owners are lowercased and comments end the owner list", () => {
+    expect(
+      parseCodeowners("/x/ @Acme/Infra dev@example.test # @ignored")[0]!.owners,
+    ).toEqual(["@acme/infra", "dev@example.test"]);
+  });
+});
+
 describe("approval gate policy", () => {
-  test("a 5/5, low-risk, approving review of the head passes", () => {
+  test("a 5/5, low-risk, approving review of an unowned change passes", () => {
     const r = evaluateApprovalGate(input());
     expect(r).toMatchObject({ status: "completed", conclusion: "success" });
     expect(r.title).toBe("OS review: approve · 5/5 · risk low");
@@ -79,7 +134,7 @@ describe("approval gate policy", () => {
     expect(outcome(input({ lastReview: null }))).toBe("in_progress");
   });
 
-  test("a human approval of the head passes whatever the review says", () => {
+  test("an approval of an unowned change passes whatever the review says", () => {
     const r = evaluateApprovalGate(
       input({
         lastReview: review({ confidence: 2, risk: "high" }),
@@ -88,28 +143,58 @@ describe("approval gate policy", () => {
     );
     expect(r).toMatchObject({ conclusion: "success" });
     expect(r.title).toBe("Approved by @bob");
-    // ...including with no review at all, or on a human-review path.
     expect(
-      outcome(
-        input({
-          lastReview: null,
-          files: [".github/workflows/ci.yml"],
-          reviews: [approve("bob")],
-        }),
-      ),
+      outcome(input({ lastReview: null, reviews: [approve("bob")] })),
     ).toBe("success");
+  });
+
+  test("an owned file needs one of its owners, whatever the review says", () => {
+    const files = ["src/app.ts", "infra/main.tf"];
+    const r = evaluateApprovalGate(input({ files }));
+    expect(r).toMatchObject({ conclusion: "action_required" });
+    expect(r.title).toBe("Needs a code owner approval from @acme/infra");
+    expect(r.summary).toContain("`infra/main.tf`");
+    // Bob has write access but does not own infra.
+    expect(outcome(input({ files, reviews: [approve("bob")] }))).toBe(
+      "action_required",
+    );
+    // Carol is in @acme/infra.
+    const ok = evaluateApprovalGate(
+      input({ files, lastReview: null, reviews: [approve("carol")] }),
+    );
+    expect(ok).toMatchObject({ conclusion: "success" });
+    expect(ok.title).toBe("Approved by code owner @carol");
+  });
+
+  test("every owned file needs an owner; one owner's approval covers only their files", () => {
+    const files = ["infra/main.tf", "db/migrations/2.sql"];
+    const one = evaluateApprovalGate(
+      input({ files, reviews: [approve("carol")] }),
+    );
+    expect(one.title).toBe("Needs a code owner approval from @dana");
+    expect(
+      outcome(input({ files, reviews: [approve("carol"), approve("dana")] })),
+    ).toBe("success");
+  });
+
+  test("an explicitly unowned path under an owned directory is not owned", () => {
+    expect(outcome(input({ files: ["infra/README.md"] }))).toBe("success");
+  });
+
+  test("a catch-all CODEOWNERS sends every PR to its owners", () => {
+    const codeowners = parseCodeowners("* @acme/devs");
+    expect(evaluateApprovalGate(input({ codeowners })).title).toBe(
+      "Needs a code owner approval from @acme/devs",
+    );
   });
 
   test("approvals count only on the head, from approvers other than the author", () => {
     const low = review({ confidence: 3 });
-    expect(
-      outcome(input({ lastReview: low, reviews: [approve("bob", OLD)] })),
-    ).toBe("action_required");
-    expect(
-      evaluateApprovalGate(
-        input({ lastReview: low, reviews: [approve("bob", OLD)] }),
-      ).summary,
-    ).toContain("older commit");
+    const stale = evaluateApprovalGate(
+      input({ lastReview: low, reviews: [approve("bob", OLD)] }),
+    );
+    expect(stale).toMatchObject({ conclusion: "action_required" });
+    expect(stale.summary).toContain("older commit");
     // Not in the approver set (no write access, or a bot).
     expect(
       outcome(input({ lastReview: low, reviews: [approve("mallory")] })),
@@ -118,16 +203,17 @@ describe("approval gate policy", () => {
     expect(
       outcome(
         input({
+          author: "carol",
           lastReview: low,
-          approvers: new Set(["alice"]),
-          reviews: [approve("alice")],
+          files: ["infra/main.tf"],
+          reviews: [approve("carol")],
         }),
       ),
     ).toBe("action_required");
   });
 
   test("an outstanding change request blocks both paths", () => {
-    const changes = {
+    const changes: GateReview = {
       login: "carol",
       userType: "User",
       state: "CHANGES_REQUESTED",
@@ -153,18 +239,28 @@ describe("approval gate policy", () => {
     ).toBe("success");
   });
 
-  test("human-review paths, the review policy, forks and truncated file lists need a human", () => {
+  test("the review policy and any CODEOWNERS file need a human, wherever it is", () => {
     for (const files of [
-      [".github/workflows/validate.yml"],
-      ["src/app.ts", "infra/main.tf"],
       [".os-review.json"],
+      ["CODEOWNERS"],
+      [".github/CODEOWNERS"],
+      ["packages/web/CODEOWNERS"],
     ]) {
-      const r = evaluateApprovalGate(input({ files }));
+      const r = evaluateApprovalGate(input({ files, codeowners: [] }));
       expect(r).toMatchObject({ conclusion: "action_required" });
-      expect(r.title).toContain("human-review path");
+      expect(r.title).toBe("Needs a human approval: changes the review policy");
+      expect(
+        outcome(input({ files, codeowners: [], reviews: [approve("bob")] })),
+      ).toBe("success");
     }
+  });
+
+  test("forks and truncated file lists need a human", () => {
     expect(evaluateApprovalGate(input({ fromFork: true })).title).toBe(
       "Needs a human approval: opened from a fork",
+    );
+    expect(outcome(input({ fromFork: true, reviews: [approve("bob")] }))).toBe(
+      "success",
     );
     expect(evaluateApprovalGate(input({ filesComplete: false })).title).toBe(
       "Needs a human approval: too many files to check",
@@ -192,13 +288,9 @@ describe("approval gate config", () => {
   test("true or an object enables it", () => {
     expect(normalizeApprovalGateConfig(true)).toEqual({
       checkName: "OS approval gate",
-      humanPaths: [],
     });
-    expect(
-      normalizeApprovalGateConfig({
-        checkName: "  Gate ",
-        humanPaths: ["infra/**", 3, ""],
-      }),
-    ).toEqual({ checkName: "Gate", humanPaths: ["infra/**"] });
+    expect(normalizeApprovalGateConfig({ checkName: "  Gate " })).toEqual({
+      checkName: "Gate",
+    });
   });
 });

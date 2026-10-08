@@ -1,5 +1,7 @@
 /**
  * Posts the "OS approval gate" check run (policy in approval-gate-policy.ts).
+ * Its settings and CODEOWNERS are read from the default branch through the
+ * API, never from the PR head or a local checkout.
  *
  * The App posts it, not a workflow: a ruleset that requires the check with
  * this App as its source accepts it from nowhere else, while a status from
@@ -19,9 +21,13 @@ import { isGithubBotLogin } from "../../server/config";
 import { githubRequest } from "./github-rest";
 import { readPrState } from "./state";
 import {
+  CODEOWNERS_LOCATIONS,
   evaluateApprovalGate,
   normalizeApprovalGateConfig,
+  ownedFiles,
+  parseCodeowners,
   type ApprovalGateConfig,
+  type CodeownersRule,
   type GateResult,
   type GateReview,
 } from "./approval-gate-policy";
@@ -38,6 +44,11 @@ const configCache = new Map<
   { at: number; config: ApprovalGateConfig | null }
 >();
 const permissionCache = new Map<string, { at: number; canApprove: boolean }>();
+const codeownersCache = new Map<
+  string,
+  { at: number; rules: CodeownersRule[] }
+>();
+const teamCache = new Map<string, { at: number; member: boolean }>();
 /** Last posted answer per PR, so a repeat refresh does not add a check run. */
 const lastPosted = new Map<string, string>();
 const chains = new Map<string, Promise<void>>();
@@ -51,24 +62,76 @@ export async function loadApprovalGateConfig(
   const key = ghRepo.toLowerCase();
   const cached = configCache.get(key);
   if (cached && Date.now() - cached.at < CONFIG_TTL_MS) return cached.config;
-  const r = await githubRequest<{ content?: string; encoding?: string }>(
-    "GET",
-    `/repos/${ghRepo}/contents/${OPTIONS_FILE}`,
-  );
+  const text = await defaultBranchFile(ghRepo, OPTIONS_FILE);
+  // Keep the last known answer through a GitHub hiccup.
+  if (text === undefined) return cached?.config ?? null;
   let config: ApprovalGateConfig | null = null;
-  if (r.ok && r.data?.content && r.data.encoding === "base64") {
+  if (text !== null) {
     try {
-      const raw = JSON.parse(Buffer.from(r.data.content, "base64").toString());
-      config = normalizeApprovalGateConfig(raw?.approvalGate);
+      config = normalizeApprovalGateConfig(JSON.parse(text)?.approvalGate);
     } catch {
       console.warn(`[github] ${ghRepo} ${OPTIONS_FILE} is not valid JSON`);
     }
-  } else if (!r.ok && r.status !== 404) {
-    // Keep the last known answer through a GitHub hiccup.
-    if (cached) return cached.config;
   }
   configCache.set(key, { at: Date.now(), config });
   return config;
+}
+
+/** A file's text on the default branch: null when it does not exist,
+ *  undefined when GitHub could not say. */
+async function defaultBranchFile(
+  ghRepo: string,
+  path: string,
+): Promise<string | null | undefined> {
+  const r = await githubRequest<{ content?: string; encoding?: string }>(
+    "GET",
+    `/repos/${ghRepo}/contents/${path}`,
+  );
+  if (r.status === 404) return null;
+  if (!r.ok || typeof r.data?.content !== "string") return undefined;
+  if (r.data.encoding !== "base64") return undefined;
+  return Buffer.from(r.data.content, "base64").toString("utf-8");
+}
+
+/** The CODEOWNERS rules GitHub enforces on the default branch: the first of
+ *  its three locations that exists. Null when GitHub could not say, since
+ *  owners then cannot be ruled out and the gate posts nothing. */
+async function loadCodeowners(
+  ghRepo: string,
+): Promise<CodeownersRule[] | null> {
+  const key = ghRepo.toLowerCase();
+  const cached = codeownersCache.get(key);
+  if (cached && Date.now() - cached.at < CONFIG_TTL_MS) return cached.rules;
+  let rules: CodeownersRule[] = [];
+  for (const path of CODEOWNERS_LOCATIONS) {
+    const text = await defaultBranchFile(ghRepo, path);
+    if (text === undefined) return cached?.rules ?? null;
+    if (text !== null) {
+      rules = parseCodeowners(text);
+      break;
+    }
+  }
+  codeownersCache.set(key, { at: Date.now(), rules });
+  return rules;
+}
+
+/** Whether `login` is an active member of `@org/team`. Unknown counts as no. */
+async function inTeam(owner: string, login: string): Promise<boolean> {
+  const [org, team] = owner.replace(/^@/, "").split("/");
+  if (!org || !team) return false;
+  const key = `${owner}:${login.toLowerCase()}`;
+  const cached = teamCache.get(key);
+  if (cached && Date.now() - cached.at < PERMISSION_TTL_MS)
+    return cached.member;
+  const r = await githubRequest<{ state?: string }>(
+    "GET",
+    `/orgs/${encodeURIComponent(org)}/teams/${encodeURIComponent(team)}/memberships/${encodeURIComponent(login)}`,
+    undefined,
+    { mint: "read", owner: org },
+  );
+  const member = r.ok && r.data?.state === "active";
+  if (r.ok || r.status === 404) teamCache.set(key, { at: Date.now(), member });
+  return member;
 }
 
 async function pagedList<T>(
@@ -139,7 +202,7 @@ async function postCheck(
     output: { title: result.title.slice(0, 255), summary: result.summary },
   };
   const r = await githubRequest("POST", `/repos/${ghRepo}/check-runs`, body, {
-    checks: true,
+    mint: "checks",
   });
   if (!r.ok) {
     console.warn(
@@ -175,16 +238,17 @@ async function refreshOnce(prNumber: number, ghRepo: string): Promise<void> {
   // A deleted head repository reads as null: treat it as outside too.
   const fromFork = headRepo !== ghRepo.toLowerCase();
 
-  const [files, reviews] = await Promise.all([
+  const [files, reviews, codeowners] = await Promise.all([
     pagedList<any>(`/repos/${ghRepo}/pulls/${prNumber}/files`, MAX_FILE_PAGES),
     pagedList<any>(
       `/repos/${ghRepo}/pulls/${prNumber}/reviews`,
       MAX_REVIEW_PAGES,
     ),
+    loadCodeowners(ghRepo),
   ]);
-  // A partial read could clear a path or miss a change request: post nothing
-  // and let the next event (or Re-run) try again.
-  if (!files || !reviews) return;
+  // A partial read could miss an owner or a change request: post nothing and
+  // let the next event (or Re-run) try again.
+  if (!files || !reviews || !codeowners) return;
   const paths = files.flatMap((f) =>
     [f.filename, f.previous_filename].filter(
       (x): x is string => typeof x === "string" && !!x,
@@ -218,6 +282,22 @@ async function refreshOnce(prNumber: number, ghRepo: string): Promise<void> {
     if (await canApprove(ghRepo, login)) approvers.add(login.toLowerCase());
   }
 
+  // Which owner tokens each approver of the head satisfies: their own
+  // `@login`, plus every owning team of a changed file they belong to.
+  const owned = ownedFiles({ files: paths, codeowners, matchGlob });
+  const teams = [
+    ...new Set(owned.flatMap((f) => f.owners).filter((o) => o.includes("/"))),
+  ];
+  const ownerTokens = new Map<string, Set<string>>();
+  for (const r of gateReviews) {
+    const login = r.login.toLowerCase();
+    if (r.state !== "APPROVED" || r.commitId !== headSha) continue;
+    if (!approvers.has(login) || ownerTokens.has(login)) continue;
+    const tokens = new Set([`@${login}`]);
+    for (const team of teams) if (await inTeam(team, r.login)) tokens.add(team);
+    ownerTokens.set(login, tokens);
+  }
+
   const result = evaluateApprovalGate({
     headSha,
     author,
@@ -227,7 +307,8 @@ async function refreshOnce(prNumber: number, ghRepo: string): Promise<void> {
     lastReview: readPrState(prNumber, ghRepo)?.lastReview ?? null,
     reviews: gateReviews,
     approvers,
-    humanPaths: config.humanPaths,
+    codeowners,
+    ownerTokens,
     matchGlob,
   });
   await postCheck(ghRepo, prNumber, headSha, p.html_url || "", config, result);

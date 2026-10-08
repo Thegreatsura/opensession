@@ -1,51 +1,53 @@
 /**
  * Approval gate policy: the pure decision behind the "OS approval gate" check
  * (approval-gate.ts posts it). A repository that requires this check in its
- * default-branch ruleset can drop the blanket "one approving review" rule:
+ * default-branch ruleset can drop the blanket "one approving review" rule
+ * while keeping code-owner review:
  *
- *   - the OS review of the CURRENT head is approve, quality 5/5, merge risk
- *     low, with no blocking findings, and the PR touches no human-review
- *     path → success; or
- *   - a human with write access, who is neither the author nor a bot, has
- *     approved the current head, and no such human's latest review requests
- *     changes → success;
- *   - a PR from a fork, or one touching a human-review path, never passes on
- *     the model review alone;
- *   - no review of this head yet → in progress (blocks like a running check);
- *   - anything else → action_required, with the reason in the title.
+ *   - CODEOWNERS (from the default branch) names the human-review paths.
+ *     Every changed file with an owner needs an approval of the CURRENT head
+ *     from one of that file's owners, the same rule as GitHub's "require
+ *     review from Code Owners", so the two never disagree.
+ *   - A PR that touches no owned file passes when the OS review of the
+ *     current head is approve, quality 5/5, merge risk low, with no blocking
+ *     findings, or when someone with write access approves the current head.
+ *   - A PR from a fork, or one touching the review policy or CODEOWNERS
+ *     itself, never passes on the model review alone.
+ *   - No review of this head yet → in progress (blocks like a running check).
+ *   - Anything else → action_required, with the reason in the title.
  *
- * The model review can make the gate pass only inside the policy the
- * repository wrote on its default branch. `.os-review.json` is always a
- * human-review path: its rules can override the review's verdict and scores,
- * and the review reads them from the PR head, so a PR that edits them must
- * not be able to approve itself.
+ * Approvers are humans with write access, never the author or a bot, and a
+ * change request from one of them blocks until they approve or it is
+ * dismissed. `.os-review.json` always needs a human: its rules can override
+ * the review's verdict and scores, and the review reads them from the PR
+ * head, so a PR that edits them must not be able to approve itself.
  *
- * Enabled per repository from `.os-review.json` on the default branch:
- *
- *   "approvalGate": {
- *     "checkName": "OS approval gate",        // optional
- *     "humanPaths": [".github/**", "infra/**"] // globs that always need a human
- *   }
- *
- * `"approvalGate": true` enables it with no extra human-review paths.
+ * Enabled per repository from `.os-review.json` on the default branch, with
+ * `"approvalGate": true` or `"approvalGate": { "checkName": "..." }`.
  */
 import type { LastReviewState } from "./state";
 
 export const DEFAULT_GATE_CHECK_NAME = "OS approval gate";
-/** Always human-review: the review policy itself. */
-export const ALWAYS_HUMAN_PATHS = [".os-review.json"];
+/** Where GitHub looks for CODEOWNERS, in order; the first that exists wins. */
+export const CODEOWNERS_LOCATIONS = [
+  ".github/CODEOWNERS",
+  "CODEOWNERS",
+  "docs/CODEOWNERS",
+];
+/** Always need a human: the review policy and code ownership themselves. A
+ *  CODEOWNERS file counts wherever it sits, so a PR cannot add one in a
+ *  location GitHub would start honouring, or retire the one it honours. */
+export const ALWAYS_HUMAN_GLOBS = [".os-review.json", "**/CODEOWNERS"];
 
 export interface ApprovalGateConfig {
   checkName: string;
-  humanPaths: string[];
 }
 
 /** Parse the `approvalGate` key of `.os-review.json`. Null = gate off. */
 export function normalizeApprovalGateConfig(
   raw: unknown,
 ): ApprovalGateConfig | null {
-  if (raw === true)
-    return { checkName: DEFAULT_GATE_CHECK_NAME, humanPaths: [] };
+  if (raw === true) return { checkName: DEFAULT_GATE_CHECK_NAME };
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const o = raw as Record<string, unknown>;
   if (o.enabled === false) return null;
@@ -53,13 +55,69 @@ export function normalizeApprovalGateConfig(
     typeof o.checkName === "string" && o.checkName.trim()
       ? o.checkName.trim().slice(0, 100)
       : DEFAULT_GATE_CHECK_NAME;
-  const humanPaths = Array.isArray(o.humanPaths)
-    ? o.humanPaths.filter(
-        (g): g is string => typeof g === "string" && !!g.trim(),
-      )
-    : [];
-  return { checkName: name, humanPaths };
+  return { checkName: name };
 }
+
+// ── CODEOWNERS ───────────────────────────────────────────────────────────────
+
+export interface CodeownersRule {
+  pattern: string;
+  /** Globs equivalent to the CODEOWNERS pattern. */
+  globs: string[];
+  /** Lowercased `@user`, `@org/team`, or email. Empty = explicitly unowned. */
+  owners: string[];
+}
+
+/** Translate one CODEOWNERS (gitignore-style) pattern into globs. A pattern
+ *  with a leading or inner slash is anchored to the root; otherwise it
+ *  matches at any depth. A trailing slash means a directory. A name without
+ *  wildcards in its last segment also matches everything below it. */
+export function codeownersGlobs(pattern: string): string[] {
+  let p = pattern.trim();
+  if (!p) return [];
+  if (p === "*" || p === "/*" || p === "**" || p === "/**") return ["**"];
+  const dirOnly = p.endsWith("/");
+  if (dirOnly) p = p.replace(/\/+$/, "");
+  const anchored = p.startsWith("/") || p.includes("/");
+  p = p.replace(/^\/+/, "");
+  if (!p) return ["**"];
+  const base = anchored ? p : `**/${p}`;
+  if (dirOnly) return [`${base}/**`];
+  const last = p.split("/").pop() || "";
+  return last.includes("*") ? [base] : [base, `${base}/**`];
+}
+
+export function parseCodeowners(text: string): CodeownersRule[] {
+  const rules: CodeownersRule[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const [pattern, ...rest] = line.split(/\s+/);
+    if (!pattern) continue;
+    const owners: string[] = [];
+    for (const token of rest) {
+      if (token.startsWith("#")) break;
+      if (token.includes("@")) owners.push(token.toLowerCase());
+    }
+    rules.push({ pattern, globs: codeownersGlobs(pattern), owners });
+  }
+  return rules;
+}
+
+/** The owners of one path: the LAST matching rule wins, as on GitHub. */
+export function ownersFor(
+  rules: CodeownersRule[],
+  path: string,
+  matchGlob: (glob: string, path: string) => boolean,
+): string[] {
+  for (let i = rules.length - 1; i >= 0; i--) {
+    const rule = rules[i]!;
+    if (rule.globs.some((g) => matchGlob(g, path))) return rule.owners;
+  }
+  return [];
+}
+
+// ── Reviews ──────────────────────────────────────────────────────────────────
 
 /** One formal PR review, as GitHub lists them (chronological). */
 export interface GateReview {
@@ -70,34 +128,6 @@ export interface GateReview {
   state: string;
   commitId: string;
 }
-
-export interface GateInput {
-  headSha: string;
-  author: string;
-  /** The head lives in another repository: an outside contributor, whose PR
-   *  the model alone never clears. */
-  fromFork: boolean;
-  /** Paths the PR changes (renames list both sides). */
-  files: string[];
-  /** False when GitHub truncated the file list: paths cannot be cleared. */
-  filesComplete: boolean;
-  lastReview?: LastReviewState | null;
-  reviews: GateReview[];
-  /** Logins allowed to approve: write access, not a bot, not the author. */
-  approvers: ReadonlySet<string>;
-  humanPaths: string[];
-  /** Matches a path against one glob; injected so the policy stays pure. */
-  matchGlob: (glob: string, path: string) => boolean;
-}
-
-export type GateResult =
-  | { status: "in_progress"; title: string; summary: string }
-  | {
-      status: "completed";
-      conclusion: "success" | "action_required";
-      title: string;
-      summary: string;
-    };
 
 /** The latest decisive review per login, as GitHub counts them: a comment
  *  does not replace an earlier approval or change request; a dismissal does. */
@@ -118,14 +148,48 @@ export function latestDecisiveReviews(
   return latest;
 }
 
-/** The human-review paths a PR touches, in file order. */
-export function humanPathsTouched(
-  files: string[],
-  globs: string[],
-  matchGlob: GateInput["matchGlob"],
-): string[] {
-  const all = [...ALWAYS_HUMAN_PATHS, ...globs];
-  return files.filter((f) => all.some((g) => g === f || matchGlob(g, f)));
+export interface GateInput {
+  headSha: string;
+  author: string;
+  /** The head lives in another repository: an outside contributor, whose PR
+   *  the model alone never clears. */
+  fromFork: boolean;
+  /** Paths the PR changes (renames list both sides). */
+  files: string[];
+  /** False when GitHub truncated the file list: owners cannot be checked. */
+  filesComplete: boolean;
+  lastReview?: LastReviewState | null;
+  reviews: GateReview[];
+  /** Lowercased logins allowed to approve: write access, not a bot. */
+  approvers: ReadonlySet<string>;
+  /** Default-branch CODEOWNERS rules (empty when the repo has none). */
+  codeowners: CodeownersRule[];
+  /** Lowercased login → the lowercased owner tokens (`@login`, `@org/team`)
+   *  that login satisfies. Only approvers of the head need an entry. */
+  ownerTokens: ReadonlyMap<string, ReadonlySet<string>>;
+  /** Matches a path against one glob; injected so the policy stays pure. */
+  matchGlob: (glob: string, path: string) => boolean;
+}
+
+export type GateResult =
+  | { status: "in_progress"; title: string; summary: string }
+  | {
+      status: "completed";
+      conclusion: "success" | "action_required";
+      title: string;
+      summary: string;
+    };
+
+/** Changed files that have code owners, with those owners, in file order. */
+export function ownedFiles(
+  input: Pick<GateInput, "files" | "codeowners" | "matchGlob">,
+): Array<{ path: string; owners: string[] }> {
+  return input.files
+    .map((path) => ({
+      path,
+      owners: ownersFor(input.codeowners, path, input.matchGlob),
+    }))
+    .filter((f) => f.owners.length > 0);
 }
 
 function short(sha: string): string {
@@ -147,13 +211,12 @@ function reviewLabel(r: LastReviewState): string {
 }
 
 const HOW =
-  "Passes when the OS review of the current head is approve, 5/5 and risk low and the PR touches no human-review path, or when someone with write access other than the author approves the current head.";
+  "Passes when every changed file with a code owner has an approval of the current head from one of its owners and either the OS review of the current head is approve, 5/5 and risk low, or someone with write access approves the current head. Files with code owners, the review policy, and PRs from forks always need a human.";
 
 export function evaluateApprovalGate(input: GateInput): GateResult {
   const head = input.headSha;
-  const latest = latestDecisiveReviews(input.reviews);
   const author = input.author.toLowerCase();
-  const counted = [...latest.entries()].filter(
+  const counted = [...latestDecisiveReviews(input.reviews).entries()].filter(
     ([login]) => login !== author && input.approvers.has(login),
   );
 
@@ -169,21 +232,60 @@ export function evaluateApprovalGate(input: GateInput): GateResult {
     };
   }
 
-  const approvedBy = counted
-    .filter(([, r]) => r.state === "APPROVED" && r.commitId === head)
-    .map(([, r]) => `@${r.login}`);
-  if (approvedBy.length) {
+  if (!input.filesComplete) {
     return {
       status: "completed",
-      conclusion: "success",
-      title: `Approved by ${approvedBy.join(", ")}`,
-      summary: `A human with write access approved \`${short(head)}\`.\n\n${HOW}`,
+      conclusion: "action_required",
+      title: "Needs a human approval: too many files to check",
+      summary: `GitHub listed only part of this PR's files, so code owners cannot be checked.\n\n${HOW}`,
     };
   }
-  const staleApproval = counted.some(([, r]) => r.state === "APPROVED");
+
+  const approvedHead = counted
+    .filter(([, r]) => r.state === "APPROVED" && r.commitId === head)
+    .map(([login, r]) => ({ login, display: r.login }));
+  const staleApproval = counted.some(
+    ([, r]) => r.state === "APPROVED" && r.commitId !== head,
+  );
   const reapprove = staleApproval
     ? "\n\nAn earlier approval was for an older commit; approvals count only on the current head."
     : "";
+
+  const owned = ownedFiles(input);
+  const satisfies = (login: string, owners: string[]) => {
+    const tokens = input.ownerTokens.get(login);
+    return !!tokens && owners.some((o) => tokens.has(o));
+  };
+  const unapproved = owned.filter(
+    (f) => !approvedHead.some((a) => satisfies(a.login, f.owners)),
+  );
+
+  if (approvedHead.length && !unapproved.length) {
+    const owners = approvedHead.filter((a) =>
+      owned.some((f) => satisfies(a.login, f.owners)),
+    );
+    const who = (owned.length ? owners : approvedHead)
+      .map((a) => `@${a.display}`)
+      .join(", ");
+    return {
+      status: "completed",
+      conclusion: "success",
+      title: owned.length
+        ? `Approved by code owner ${who}`
+        : `Approved by ${who}`,
+      summary: `${owned.length ? "Code owners of every owned file" : "A human with write access"} approved \`${short(head)}\`.\n\n${HOW}`,
+    };
+  }
+
+  if (unapproved.length) {
+    const owners = [...new Set(unapproved.flatMap((f) => f.owners))];
+    return {
+      status: "completed",
+      conclusion: "action_required",
+      title: `Needs a code owner approval from ${owners.slice(0, 3).join(", ")}${owners.length > 3 ? ` and ${owners.length - 3} more` : ""}`,
+      summary: `${list(unapproved.map((f) => f.path))} ${unapproved.length === 1 ? "has a code owner" : "have code owners"} in CODEOWNERS, so the OS review cannot clear this PR. An owner (${owners.join(", ")}) must approve the current head.${reapprove}\n\n${HOW}`,
+    };
+  }
 
   if (input.fromFork) {
     return {
@@ -194,26 +296,15 @@ export function evaluateApprovalGate(input: GateInput): GateResult {
     };
   }
 
-  if (!input.filesComplete) {
-    return {
-      status: "completed",
-      conclusion: "action_required",
-      title: "Needs a human approval: too many files to check",
-      summary: `GitHub listed only part of this PR's files, so the human-review paths cannot be ruled out.${reapprove}\n\n${HOW}`,
-    };
-  }
-
-  const reserved = humanPathsTouched(
-    input.files,
-    input.humanPaths,
-    input.matchGlob,
+  const policy = input.files.filter((f) =>
+    ALWAYS_HUMAN_GLOBS.some((g) => input.matchGlob(g, f)),
   );
-  if (reserved.length) {
+  if (policy.length) {
     return {
       status: "completed",
       conclusion: "action_required",
-      title: `Needs a human approval: touches ${reserved.length === 1 ? "a human-review path" : `${reserved.length} human-review paths`}`,
-      summary: `Changes to ${list(reserved)} always need a human approval, whatever the OS review says.${reapprove}\n\n${HOW}`,
+      title: "Needs a human approval: changes the review policy",
+      summary: `${list(policy)} decide${policy.length === 1 ? "s" : ""} what the OS review and this gate accept, so a change to ${policy.length === 1 ? "it" : "them"} always needs a human approval.${reapprove}\n\n${HOW}`,
     };
   }
 
@@ -236,7 +327,7 @@ export function evaluateApprovalGate(input: GateInput): GateResult {
       status: "completed",
       conclusion: "success",
       title: `OS review: ${reviewLabel(review)}`,
-      summary: `The OS review of \`${short(head)}\` cleared the automatic path: approve, 5/5, risk low, no blocking findings, no human-review paths.\n\n${HOW}`,
+      summary: `The OS review of \`${short(head)}\` cleared the automatic path: approve, 5/5, risk low, no blocking findings, and no file with a code owner.\n\n${HOW}`,
     };
   }
   return {
