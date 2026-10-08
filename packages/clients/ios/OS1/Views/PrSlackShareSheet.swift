@@ -296,7 +296,15 @@ struct PrSlackShareSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
-    @State private var description: String
+    /// What the field shows, with the people mentioned in it. Saves and
+    /// sends carry `draft.encoded`, Slack's `<@U…>` tokens.
+    @State private var draft: SlackMentionDraft
+    @State private var selection: TextSelection?
+    @State private var slackUsers: [SlackMentionUser]
+    /// The "@" whose picker Escape closed; it stays closed until the caret
+    /// leaves it, so the rest of the sentence is not a search.
+    @State private var dismissedMention: Int?
+    @State private var activeMention = 0
     @State private var images: [AttachedImage] = []
     @State private var uploadedImagePaths: [String: String] = [:]
     @State private var unloadedImagePaths: [String]
@@ -317,12 +325,17 @@ struct PrSlackShareSheet: View {
 
     init(request: PrSlackShareRequest) {
         self.request = request
-        _description = State(initialValue: request.merged
-            ? ShippedChangeCopy.suggestion(
-                title: request.title,
-                summary: request.walkthroughSummary
-            )
-            : request.title)
+        let users = SlackAPI.cachedUsers
+        _slackUsers = State(initialValue: users)
+        _draft = State(initialValue: SlackMentionDraft(
+            encoded: request.merged
+                ? ShippedChangeCopy.suggestion(
+                    title: request.title,
+                    summary: request.walkthroughSummary
+                )
+                : request.title,
+            users: users
+        ))
         let imagePaths = (
             [request.suggestedScreenshot].compactMap { $0 } + request.initialImages
         ).reduce(into: [String]()) { paths, path in
@@ -350,7 +363,30 @@ struct PrSlackShareSheet: View {
     }
 
     private var trimmedDescription: String {
-        description.trimmingCharacters(in: .whitespacesAndNewlines)
+        draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The message as Slack should receive it, mentions as tokens.
+    private var slackMessage: String {
+        draft.encoded.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var caret: Int? {
+        ComposerMentionContext.caretUTF16Offset(in: draft.text, selection: selection)
+    }
+
+    private var mentionTrigger: ComposerMentionContext? {
+        // The field reports a selection once it is edited or tapped; a
+        // freshly opened draft ending in "@" does not pop a picker.
+        guard selection != nil, !slackUsers.isEmpty, let caret else { return nil }
+        return draft.trigger(caret: caret)
+    }
+
+    private var mentionMatches: [SlackMentionUser] {
+        guard let trigger = mentionTrigger,
+              trigger.range.location != dismissedMention
+        else { return [] }
+        return SlackMentionDraft.matches(trigger.query, in: slackUsers)
     }
 
     private var canSend: Bool {
@@ -372,15 +408,28 @@ struct PrSlackShareSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    TextEditor(text: descriptionBinding)
+                    TextEditor(text: descriptionBinding, selection: $selection)
                         .frame(minHeight: 110)
                         .focused($descriptionFocused)
+                        .onKeyPress(keys: [.upArrow, .downArrow, .return, .tab, .escape]) { press in
+                            mentionKey(press)
+                        }
+                    let matches = mentionMatches
+                    ForEach(Array(matches.enumerated()), id: \.element.id) { index, user in
+                        Button {
+                            pickMention(user)
+                        } label: {
+                            SlackMentionRow(
+                                user: user,
+                                active: index == min(activeMention, matches.count - 1)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
                 } header: {
                     Text("Description")
                 } footer: {
-                    Text(acceptsImages
-                        ? "Keep it to 500 characters."
-                        : "The GitHub link is added automatically.")
+                    Text(descriptionFooter)
                 }
 
                 if acceptsImages {
@@ -458,6 +507,11 @@ struct PrSlackShareSheet: View {
                 _ = await (channelLoad, imageLoad)
                 loading = false
             }
+            .task { await loadSlackUsers() }
+            .onChange(of: mentionTrigger?.range.location) { _, location in
+                if location != dismissedMention { dismissedMention = nil }
+            }
+            .onChange(of: mentionTrigger?.query) { activeMention = 0 }
             .task(id: awaitingSlack) {
                 guard awaitingSlack else { return }
                 for _ in 0..<24 {
@@ -489,14 +543,76 @@ struct PrSlackShareSheet: View {
         #endif
     }
 
+    private var descriptionFooter: String {
+        let base = acceptsImages
+            ? "Keep it to 500 characters."
+            : "The GitHub link is added automatically."
+        return slackUsers.isEmpty ? base : "Type @ to mention someone. \(base)"
+    }
+
     private var descriptionBinding: Binding<String> {
         Binding(
-            get: { description },
+            get: { draft.text },
             set: { value in
-                description = String(value.prefix(500))
+                guard value != draft.text else { return }
+                let insertedEnd = draft.edit(to: value)
+                // Past the limit the paste was trimmed; keep the caret at
+                // the end of what landed rather than past the text.
+                if draft.text != value {
+                    selection = ComposerMentionEdit(
+                        text: draft.text,
+                        caretUTF16Offset: insertedEnd
+                    ).selection
+                }
                 draftEdited()
             }
         )
+    }
+
+    /// A late roster reads the draft's tokens as names in place, keeping any
+    /// edits made meanwhile and the caret where it was.
+    private func loadSlackUsers() async {
+        let users = await SlackAPI.users()
+        guard !users.isEmpty, users != slackUsers else { return }
+        slackUsers = users
+        let caretBefore = caret
+        let rewrites = draft.resolve(users: users)
+        if let caretBefore, !rewrites.isEmpty, selection != nil {
+            selection = ComposerMentionEdit(
+                text: draft.text,
+                caretUTF16Offset: SlackMentionDraft.adjust(caretBefore, by: rewrites)
+            ).selection
+        }
+    }
+
+    private func pickMention(_ user: SlackMentionUser) {
+        guard let trigger = mentionTrigger,
+              let caret = draft.pick(user, replacing: trigger.range)
+        else { return }
+        selection = ComposerMentionEdit(text: draft.text, caretUTF16Offset: caret).selection
+        descriptionFocused = true
+        Haptics.play(.selection)
+        draftEdited()
+    }
+
+    private func mentionKey(_ press: KeyPress) -> KeyPress.Result {
+        let matches = mentionMatches
+        guard !matches.isEmpty else { return .ignored }
+        switch press.key {
+        case .upArrow, .downArrow:
+            let step = press.key == .downArrow ? 1 : -1
+            activeMention = (min(activeMention, matches.count - 1) + step + matches.count)
+                % matches.count
+        case .return, .tab:
+            // Cmd+Return stays the window's own shortcut.
+            if press.modifiers.contains(.command) { return .ignored }
+            pickMention(matches[min(activeMention, matches.count - 1)])
+        case .escape:
+            dismissedMention = mentionTrigger?.range.location
+        default:
+            return .ignored
+        }
+        return .handled
     }
 
     private var channelBinding: Binding<String> {
@@ -532,14 +648,14 @@ struct PrSlackShareSheet: View {
 
     private func draftEdited() {
         draftPersistence.edited(
-            message: description,
+            message: draft.encoded,
             channel: selectedChannel,
             images: draftImages
         )
     }
 
     private func flushDraft() {
-        let message = description
+        let message = draft.encoded
         let channel = selectedChannel
         let draftImages = draftImages
         Task {
@@ -602,7 +718,7 @@ struct PrSlackShareSheet: View {
         Task {
             if request.composerRequestId != nil {
                 await draftPersistence.flush(
-                    message: description,
+                    message: draft.encoded,
                     channel: selectedChannel,
                     images: draftImages
                 )
@@ -618,7 +734,7 @@ struct PrSlackShareSheet: View {
                         sessionId: request.sessionId,
                         requestId: composerRequestId,
                         channelId: selectedChannel,
-                        message: trimmedDescription,
+                        message: slackMessage,
                         screenshots: screenshots
                     )
                     request.onComposerResolved?(SlackComposeReceipt(
@@ -640,13 +756,13 @@ struct PrSlackShareSheet: View {
                         repo: request.repo,
                         branch: request.branch,
                         channelId: selectedChannel,
-                        message: trimmedDescription,
+                        message: slackMessage,
                         screenshots: screenshots
                     )
                 } else {
                     try await SlackAPI.post(
                         channelId: selectedChannel,
-                        text: "\(trimmedDescription)\n\(request.url.absoluteString)"
+                        text: "\(slackMessage)\n\(request.url.absoluteString)"
                     )
                 }
                 Haptics.play(.commit)
@@ -713,5 +829,41 @@ struct PrSlackShareSheet: View {
                     ?? error.localizedDescription
             }
         }
+    }
+}
+
+/// One person in the composer's "@" picker. The real name under the display
+/// name tells apart two people who share one.
+private struct SlackMentionRow: View {
+    let user: SlackMentionUser
+    /// The row Return or Tab picks.
+    let active: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            UserAvatar(person: user.name, size: 24)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(user.name)
+                    .font(.subheadline)
+                    .foregroundStyle(OS1VisualStyle.text)
+                    .lineLimit(1)
+                if let realName = user.realName {
+                    Text(realName)
+                        .font(.caption)
+                        .foregroundStyle(OS1VisualStyle.textFaint)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+        }
+        .frame(minHeight: 36)
+        .padding(.horizontal, 6)
+        .background(
+            active ? OS1VisualStyle.hover : .clear,
+            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+        )
+        .padding(.horizontal, -6)
+        .contentShape(Rectangle())
+        .accessibilityLabel("Mention \(user.name)")
     }
 }

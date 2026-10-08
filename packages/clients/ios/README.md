@@ -373,7 +373,12 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   the person's existing grant lacks image access. Agent-requested Slack
   composers save edited copy, channel, and images while pending, including on
   dismiss or background. They settle into a sent or cancelled receipt; sent
-  receipts keep the channel and an **Open in Slack** link. A workspace row's
+  receipts keep the channel and an **Open in Slack** link. Typing `@` in any
+  of these sheets offers workspace people from `GET /api/slack/users`; the
+  field shows `@Name` while saves and sends carry Slack's `<@U…>` token
+  (`SlackMentionDraft` tracks each picked name's range, so duplicate names and
+  unknown ids survive edits), and a reopened draft reads back as names once
+  the roster lands. A workspace row's
   long-press menu also rolls the
   cached PR state into one next action: merge when ready, fix failed checks,
   resolve conflicts, address feedback, view running checks, or archive after it
