@@ -147,7 +147,22 @@ struct PrReviewCanvas: View {
                 }
             }
         }
-        .task { await load() }
+        .task {
+            await load()
+            #if DEBUG
+            // Verification hook: the pending-review sheet with one note in it,
+            // without aiming at a diff line first. Once per launch, since a
+            // paged TabView can build this page twice.
+            if ProcessInfo.processInfo.environment["OS1_OPEN_PR_FINISH_REVIEW"] == "1",
+               !PrFinishReviewHook.fired,
+               let line = files.first?.lines.first(where: { $0.newLine != nil })?.newLine,
+               let path = files.first?.path {
+                PrFinishReviewHook.fired = true
+                upsertComment(path: path, line: line, text: "Fixture note")
+                reviewing = true
+            }
+            #endif
+        }
         .task(id: lens) { await loadLens() }
         .task(id: guidePollKey) { await pollStaleGuide() }
         .sheet(item: $commentTarget) { target in
@@ -1264,6 +1279,13 @@ private enum PrDiffInk {
     }
 }
 
+#if DEBUG
+@MainActor
+private enum PrFinishReviewHook {
+    static var fired = false
+}
+#endif
+
 private struct PrLineTarget: Identifiable {
     let path: String
     let line: Int
@@ -1310,8 +1332,10 @@ private struct PrPendingReviewSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var event = "COMMENT"
     @State private var summary = ""
-    @State private var sending = false
+    @State private var gate = ReviewSubmitGate()
     @State private var errorText: String?
+
+    private var sending: Bool { gate.inFlight }
 
     var body: some View {
         NavigationStack {
@@ -1332,22 +1356,27 @@ private struct PrPendingReviewSheet: View {
             .navigationTitle("Submit review")
             .inlineTitleBarCompat()
             .toolbar {
-                ToolbarItem(placement: .topLeadingCompat) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .topTrailingCompat) {
+                ToolbarItem(placement: .sheetCancelCompat) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .sheetConfirmCompat) {
                     if sending { ProgressView().controlSize(.small) } else {
-                        Button("Submit") { send() }
+                        Button("Submit") { send() }.noDefaultReturnKey()
                     }
                 }
             }
             .disabled(sending)
+            .reviewSubmitShortcut(enabled: !sending) { send(viaKeyboard: true) }
         }
         #if os(macOS)
         .frame(minWidth: 440, minHeight: 400)
         #endif
     }
 
-    private func send() {
-        sending = true
+    /// The Submit button and Cmd+Enter both land here. Submit is always
+    /// enabled: the inline comments are the review, so an empty summary still
+    /// posts them. Only the chord defers to an input method's marked text.
+    private func send(viaKeyboard: Bool = false) {
+        let composing = viaKeyboard && TextComposition.isActive
+        guard gate.begin(enabled: true, composing: composing) else { return }
         errorText = nil
         Task {
             do {
@@ -1356,7 +1385,7 @@ private struct PrPendingReviewSheet: View {
             } catch {
                 errorText = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
-            sending = false
+            gate.finish()
         }
     }
 }

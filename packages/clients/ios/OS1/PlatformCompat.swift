@@ -76,6 +76,25 @@ extension ToolbarItemPlacement {
         .navigation
         #endif
     }
+
+    /// A form sheet's confirm and cancel buttons. On iOS they are the top bar
+    /// corners; a Mac sheet drops `.primaryAction` and `.navigation` items
+    /// entirely, so there they take the sheet's own button row.
+    static var sheetConfirmCompat: ToolbarItemPlacement {
+        #if os(iOS)
+        .topBarTrailing
+        #else
+        .confirmationAction
+        #endif
+    }
+
+    static var sheetCancelCompat: ToolbarItemPlacement {
+        #if os(iOS)
+        .topBarLeading
+        #else
+        .cancellationAction
+        #endif
+    }
 }
 
 extension View {
@@ -254,3 +273,41 @@ func copyToPasteboard(_ string: String) {
     NSPasteboard.general.setString(string, forType: .string)
     #endif
 }
+
+/// Whether the focused text field is mid-composition: an input method (Kana,
+/// Pinyin, a dead key) holds marked text that a Return would commit. A
+/// keyboard shortcut that submits a form must stand down while it does, the
+/// way the web checks `isComposing`.
+@MainActor
+enum TextComposition {
+    static var isActive: Bool {
+        #if os(iOS)
+        (FirstResponderProbe.current() as? UITextInput)?.markedTextRange != nil
+        #else
+        (NSApp.keyWindow?.firstResponder as? NSTextView)?.hasMarkedText() ?? false
+        #endif
+    }
+}
+
+#if os(iOS)
+/// UIKit has no public first-responder getter; an action sent to a nil target
+/// reaches it, and it reports itself.
+@MainActor
+private final class FirstResponderProbe: NSObject {
+    private static weak var found: UIResponder?
+
+    static func current() -> UIResponder? {
+        found = nil
+        UIApplication.shared.sendAction(#selector(UIResponder.os1ReportFirstResponder), to: nil, from: nil, for: nil)
+        return found
+    }
+
+    static func report(_ responder: UIResponder) { found = responder }
+}
+
+extension UIResponder {
+    @objc fileprivate func os1ReportFirstResponder() {
+        MainActor.assumeIsolated { FirstResponderProbe.report(self) }
+    }
+}
+#endif

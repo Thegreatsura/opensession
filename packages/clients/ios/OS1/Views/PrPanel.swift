@@ -321,6 +321,13 @@ struct PrPanelView: View {
             if ProcessInfo.processInfo.environment["OS1_OPEN_PR_INFO"] == "1" {
                 page = .info
             }
+            // Verification hooks for the two review sheets.
+            if ProcessInfo.processInfo.environment["OS1_OPEN_PR_REVIEW"] == "1" {
+                reviewing = true
+            }
+            if ProcessInfo.processInfo.environment["OS1_OPEN_PR_FINISH_REVIEW"] == "1" {
+                page = .files
+            }
             #endif
             #if DEBUG
             // Screenshot hook: the countdown with no request behind it.
@@ -1366,15 +1373,14 @@ private struct PrReviewSheet: View {
     @State private var event = "APPROVE"
     @State private var summary = ""
     @State private var mergeAfter = false
-    @State private var submitting = false
+    @State private var gate = ReviewSubmitGate()
     @State private var errorText: String?
     @FocusState private var summaryFocused: Bool
 
-    /// GitHub takes a bare approval, but a comment or a change request with no
-    /// body is nothing to post — the server refuses it too.
+    private var submitting: Bool { gate.inFlight }
+
     private var canSubmit: Bool {
-        event == "APPROVE"
-            || !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        ReviewSubmitGate.summaryAllows(event: event, summary: summary)
     }
 
     var body: some View {
@@ -1416,31 +1422,35 @@ private struct PrReviewSheet: View {
             .navigationTitle("Review")
             .inlineTitleBarCompat()
             .toolbar {
-                ToolbarItem(placement: .topLeadingCompat) {
+                ToolbarItem(placement: .sheetCancelCompat) {
                     Button("Cancel") { dismiss() }
                 }
-                ToolbarItem(placement: .topTrailingCompat) {
+                ToolbarItem(placement: .sheetConfirmCompat) {
                     if submitting {
                         ProgressView().controlSize(.small)
                     } else {
                         Button("Submit") { send() }
+                            .noDefaultReturnKey()
                             .disabled(!canSubmit)
                     }
                 }
             }
             .disabled(submitting)
+            .reviewSubmitShortcut(enabled: canSubmit && !submitting) { send(viaKeyboard: true) }
         }
         #if os(macOS)
         .frame(minWidth: 420, minHeight: 420)
         #endif
     }
 
-    private func send() {
-        guard !submitting else { return }
+    /// The Submit button and Cmd+Enter both land here. Only the chord defers
+    /// to an input method's marked text; a tap is unambiguous.
+    private func send(viaKeyboard: Bool = false) {
+        let composing = viaKeyboard && TextComposition.isActive
+        guard gate.begin(enabled: canSubmit, composing: composing) else { return }
         // On the tap, not on the result: the sheet dismisses itself the moment
         // the submit returns, and a review that fails says so in words.
         Haptics.play(.send)
-        submitting = true
         errorText = nil
         summaryFocused = false
         let payload = (event, summary, mergeAfter && event == "APPROVE" && canMerge)
@@ -1452,7 +1462,7 @@ private struct PrReviewSheet: View {
                 errorText = (error as? LocalizedError)?.errorDescription
                     ?? error.localizedDescription
             }
-            submitting = false
+            gate.finish()
         }
     }
 }
