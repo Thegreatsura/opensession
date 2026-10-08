@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+  attachmentUploadToken,
   attachmentUrl,
   parseAttachmentRender,
   spliceUserAttachments,
@@ -94,5 +95,26 @@ describe("parseAttachmentRender", () => {
   it("never mistakes a camo-proxied image for the signed answer", () => {
     const html = `<p><img src="https://camo.githubusercontent.com/abc/def" alt=""></p>`;
     expect(parseAttachmentRender(html)).toBeNull();
+  });
+});
+
+describe("attachment upload token", () => {
+  it("reads only a non-empty attachmentUpload.token", () => {
+    expect(
+      attachmentUploadToken({
+        attachmentUpload: {
+          token: " github_pat_example ",
+          permissions: "pull_requests:write",
+        },
+      }),
+    ).toBe("github_pat_example");
+    expect(attachmentUploadToken({})).toBeNull();
+    expect(
+      attachmentUploadToken({ attachmentUpload: { token: " " } }),
+    ).toBeNull();
+    expect(
+      attachmentUploadToken({ attachmentUpload: "github_pat_x" }),
+    ).toBeNull();
+    expect(attachmentUploadToken({ attachmentUpload: ["x"] })).toBeNull();
   });
 });

@@ -12,6 +12,12 @@
  * - uploadUserAttachment uploads a local file and returns its stable URL. The
  *   walkthrough PR mirror and media-comment tool use it, so private-repository
  *   media stays on GitHub instead of being copied to a public capability URL.
+ *   The upload endpoint answers 404 to GitHub App installation tokens, so an
+ *   operator can set `integrations.github.attachmentUpload.token`: a
+ *   fine-grained personal access token with write access to the target repos.
+ *   That token is sent only to the upload endpoint, never to any other GitHub
+ *   API; the repository id lookup keeps using the App token. Without it the
+ *   App token is tried and callers fall back to Open Session media links.
  *
  * - resolveUserAttachment turns such a URL back into a short-lived signed
  *   private-user-images URL (plus whether it is an image or a video). The
@@ -22,6 +28,7 @@
 
 import { statSync } from "fs";
 import { basename } from "path";
+import { configuredIntegration } from "./config";
 import { botGhToken } from "./github-limit";
 
 export type UserAttachmentKind = "image" | "video";
@@ -78,6 +85,24 @@ export function attachmentUrl(id: string): string {
 // ---------------------------------------------------------------------------
 // Upload
 
+const UPLOAD_ENDPOINT = "https://uploads.github.com/user-attachments/assets";
+
+/**
+ * The operator-configured upload-only token, from
+ * `integrations.github.attachmentUpload.token`. Use it only for the upload
+ * request itself; it is a personal access token, not the App's identity.
+ */
+export function attachmentUploadToken(
+  github: Record<string, unknown> = configuredIntegration("github"),
+): string | null {
+  const section = github.attachmentUpload;
+  if (!section || typeof section !== "object" || Array.isArray(section))
+    return null;
+  // SAFETY: checked above to be a non-array object.
+  const token = (section as Record<string, unknown>).token;
+  return typeof token === "string" && token.trim() ? token.trim() : null;
+}
+
 const repoDbIds = new Map<string, number>();
 
 async function repoDbId(ghRepo: string, token: string): Promise<number | null> {
@@ -127,18 +152,20 @@ export async function uploadUserAttachment(
   const cacheKey = [ghRepo, filePath, stat.size, stat.mtimeMs].join("\u0000");
   const cached = uploadCache.get(cacheKey);
   if (cached) return cached;
-  const token = await botGhToken({ write: true, repo: ghRepo });
-  if (!token) return null;
-  const repoId = await repoDbId(ghRepo, token);
+  const appToken = await botGhToken({ write: true, repo: ghRepo });
+  if (!appToken) return null;
+  const repoId = await repoDbId(ghRepo, appToken);
   if (repoId === null) return null;
+  const pat = attachmentUploadToken();
+  const uploadToken = pat ?? appToken;
   const name = basename(filePath).replace(/[^\w. -]/g, "_");
   try {
     const res = await fetch(
-      `https://uploads.github.com/user-attachments/assets?name=${encodeURIComponent(name)}&content_type=${encodeURIComponent(format.mime)}&repository_id=${repoId}`,
+      `${UPLOAD_ENDPOINT}?name=${encodeURIComponent(name)}&content_type=${encodeURIComponent(format.mime)}&repository_id=${repoId}`,
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${uploadToken}`,
           Accept: "application/vnd.github+json",
           // This matches gh 2.99. The media type belongs in the content_type
           // query parameter; the request itself is an opaque byte stream.
@@ -147,6 +174,9 @@ export async function uploadUserAttachment(
         // A Blob is replayable across the upload host's redirects and avoids
         // loading a permitted 100 MB video into the gateway heap at once.
         body: Bun.file(filePath),
+        // The personal token must reach only the upload endpoint, so it never
+        // follows a redirect; a refused redirect falls back like any failure.
+        ...(pat ? { redirect: "error" as const } : {}),
         signal: AbortSignal.timeout(60_000),
       },
     );

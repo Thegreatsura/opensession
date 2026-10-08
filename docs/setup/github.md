@@ -113,6 +113,38 @@ calls receive a short-lived App token in their process environment. HTTPS Git
 operations use a process-local credential helper, and SSH GitHub remotes are
 rewritten to HTTPS for that process so host keys cannot bypass the App.
 
+### Inline PR media uploads
+
+Walkthrough PR mirrors and `comment_on_pr_with_images` upload screenshots and
+videos as GitHub user attachments, so they render inline and stay private on
+private repositories. GitHub's upload endpoint rejects App installation tokens
+with a 404, so without extra configuration those posts fall back to Open
+Session media links. To render media inline, add a fine-grained personal access
+token with **Pull requests: write** on the target repositories:
+
+```jsonc
+{
+  "integrations": {
+    "github": {
+      "attachmentUpload": {
+        "token": "github_pat_…",
+        "permissions": "pull_requests:write",
+      },
+    },
+  },
+}
+```
+
+Open Session sends this token only to
+`https://uploads.github.com/user-attachments/assets` and refuses redirects for
+it. Every other call, including the repository id lookup and the comment or PR
+edit that places the media, still uses the App. `permissions` is a note for
+operators and is not enforced. The token still carries its full grant, so
+prefer a dedicated account that is not a required reviewer, keep its
+repository list and expiry short, and rotate it if it is ever exposed. Uploads
+are attributed to the token's account inside GitHub. A repository outside the
+token's grant fails the upload and falls back to media links.
+
 ## Who holds which credential
 
 A code turn a connected person started acts as that person: their token is
