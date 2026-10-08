@@ -1377,6 +1377,26 @@ export function requestCredential(
   );
   if (live)
     return { grant: live, instructions: grantInstructions(live, credMeta) };
+  // A standing grant already lets this session call the credential for any
+  // purpose (activeGrantFor), so asking the owner again for each new task
+  // only repeats the approval. Hand it back and audit the new purpose.
+  if (requestedMode === "once" || requestedMode === "standing") {
+    const standing = activeGrantFor(input.sessionId, credMeta.id);
+    if (standing?.mode === "standing") {
+      audit({
+        kind: "keychain_grant_reused",
+        grant_id: standing.id,
+        credential_id: credMeta.id,
+        session_id: input.sessionId,
+        requested_by: input.requestedBy,
+        purpose,
+      });
+      return {
+        grant: standing,
+        instructions: grantInstructions(standing, credMeta),
+      };
+    }
+  }
 
   const pending = [...keychainAsks.values()].find(
     (a) =>
