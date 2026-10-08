@@ -1908,25 +1908,62 @@ enum OS1API {
     struct RepoBrowse: Codable, Sendable {
         let source: String?
         let repos: [BrowsableRepo]?
+        /// The workspace GitHub App is configured, whether or not it could
+        /// list anything.
+        var appConfigured: Bool? = nil
+        /// App installations that failed to list, by account login.
+        var unavailableInstallations: [String]? = nil
     }
 
     static func browsableRepos() async throws -> RepoBrowse {
         try await getReportingServerError("/api/setup/github/repos")
     }
 
-    /// Register a GitHub `owner/name` on this instance.
+    /// `GET /api/setup/codestorage/repos`: the code.storage organization's
+    /// repositories. `source` is `org` when the integration is configured and
+    /// nil when it is not, which is an ordinary answer, not an error.
+    static func codeStorageRepos() async throws -> RepoBrowse {
+        try await getReportingServerError("/api/setup/codestorage/repos")
+    }
+
+    /// One account the workspace GitHub App is installed on.
+    struct GithubOwner: Codable, Sendable, Hashable, Identifiable {
+        let login: String
+        let type: String?
+        /// The installation the workspace defaults to.
+        let selected: Bool?
+
+        var id: String { login }
+    }
+
+    /// What `GET /api/setup/github/owners` answers. `owners` is nil when the
+    /// App identity could not answer, which is not the same as none.
+    struct GithubOwners: Codable, Sendable {
+        let appConfigured: Bool?
+        let owners: [GithubOwner]?
+    }
+
+    /// Where a new repository may be created on GitHub, for the New
+    /// repository form's owner choice.
+    static func githubOwners() async throws -> GithubOwners {
+        try await getReportingServerError("/api/setup/github/owners")
+    }
+
+    /// Register a repository on this instance: clone a remote, register a
+    /// checkout already on the server, or start a new one
+    /// (`POST /api/setup/repos`, the same body the web picker sends).
     ///
-    /// The server CLONES the repo before it answers, so this call is slow in a
+    /// A clone finishes before the server answers, so this call is slow in a
     /// way no other one here is — a minute or more on a large repo. It gets
     /// its own long timeout rather than the shared session's 60s, which would
-    /// fail the request while the clone kept running and leave the phone
+    /// fail the request while the clone kept running and leave the app
     /// reporting an error for a repo that did register.
     ///
     /// Returns nothing on purpose. The registered repo comes back in the
     /// reply, but the caller wants the whole list rather than one row, and
     /// decoding a body nobody reads would turn a successful clone into a
     /// visible error the moment that shape changed.
-    static func registerRepo(fullName: String) async throws {
+    static func registerRepo(_ registration: RepoRegistration) async throws {
         let config = ServerConfig.shared
         guard let base = config.baseURL, config.isConfigured else {
             throw APIError.notConfigured
@@ -1938,11 +1975,14 @@ enum OS1API {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 600
-        request.httpBody = try JSONSerialization.data(
-            withJSONObject: ["fullName": fullName]
-        )
+        request.httpBody = try registrationBody(registration)
         let (data, response) = try await URLSession.shared.data(for: request)
         try throwServerError(data: data, response: response)
+    }
+
+    /// The JSON body of a registration, sorted so it is stable to compare.
+    nonisolated static func registrationBody(_ registration: RepoRegistration) throws -> Data {
+        try JSONSerialization.data(withJSONObject: registration.body, options: [.sortedKeys])
     }
 
     /// `get`, but surfacing the server's own error text.

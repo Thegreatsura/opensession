@@ -84,6 +84,12 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   (the inbox's unread count) stay on the device. A banner only comes from a
   live `notification` socket frame the server marked as alerting, so reconnects
   and relaunches never replay one. Agent runs and questions do not notify.
+- **Add project** (`AddRepositoryView`, `RepoRegistration`) — the sidebar
+  filter panel's last row opens Clone repository, Local folder (a checkout
+  already on the server, by path) or New repository directly, the same flow
+  Settings → Repositories pushes. Every registration is confirmed, runs one at
+  a time, shows the server's own error inline, and refreshes the sidebar's
+  project bands when it lands.
 - **Feed** (iOS) — recent merged pull requests and commits in one page, with
   person and project filters.
 - **Tasks** (iOS) — the shared `/api/todos` list, with actions to add, complete,
@@ -626,6 +632,7 @@ OS1/
     PrDetails.swift          PR panel payload
     SettingsModels.swift     Settings payloads (tools/personal/workspace)
     MemoryRepos.swift        Memory repository, history, remote payloads
+    RepoRegistration.swift   Add project sources, setup/repos bodies, one-at-a-time model
     WorkspaceRunner.swift    Instance Runner list + the shared status words
     SandboxOffering.swift    What run environments a new session may choose
     SandboxMove.swift        Which sessions may move into a Sandbox later, and
@@ -679,6 +686,7 @@ OS1/
     RunnersSettingsView.swift  Read-only list of the instance's Runners
     Native*SettingsViews.swift  Native Tools, Personal, Workspace panels
     MemoryRepoSettingsViews.swift  Memory repositories: remote, changes, files
+    AddRepositoryView.swift  Add project: clone, local server folder, new repository
     MacSettings.swift        macOS settings window
     Glass · ImageAttachments · UserAvatar · WebIcon  smaller shared views
     SVGImage.swift           SVG sniffing, allowlist sanitizer, displayable bytes
