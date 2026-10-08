@@ -546,7 +546,7 @@ code-owner review:
 
 ```jsonc
 {
-  "approvalGate": true, // or { "checkName": "OS approval gate" }
+  "approvalGate": true, // or { "checkName": "OS approval gate", "maxRisk": "low" }
 }
 ```
 
@@ -560,11 +560,16 @@ rule sends every PR to its owners.
 
 The check passes when the owned files are covered and either:
 
-- the OS review of the PR's current head is `approve`, quality 5/5, merge
-  risk low, with no blocking findings, the PR touches no owned file, and it
-  is not from a fork; or
+- the OS review of the PR's current head is `approve`, quality 5/5, with
+  no blocking findings, the PR touches no owned file, and it is not from a
+  fork; or
 - someone with write access, other than the author and not a bot, has
   approved the current head.
+
+Merge risk is shown in the check but does not decide unless the repository
+sets `maxRisk` (`low`, `medium` or `high`): then the automatic path also
+needs a review risk at or below it, and a review without a risk score does
+not pass. A human approval is unaffected by `maxRisk`.
 
 A change request from such a reviewer blocks until they approve or it is
 dismissed. Until the head has been reviewed the check shows as in progress.

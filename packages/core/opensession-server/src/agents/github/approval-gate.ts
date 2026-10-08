@@ -309,6 +309,7 @@ async function refreshOnce(prNumber: number, ghRepo: string): Promise<void> {
     approvers,
     codeowners,
     ownerTokens,
+    ...(config.maxRisk ? { maxRisk: config.maxRisk } : {}),
     matchGlob,
   });
   await postCheck(ghRepo, prNumber, headSha, p.html_url || "", config, result);

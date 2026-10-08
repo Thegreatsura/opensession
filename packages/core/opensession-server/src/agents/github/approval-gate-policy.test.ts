@@ -107,17 +107,49 @@ describe("CODEOWNERS", () => {
 });
 
 describe("approval gate policy", () => {
-  test("a 5/5, low-risk, approving review of an unowned change passes", () => {
+  test("a 5/5 approving review of an unowned change passes", () => {
     const r = evaluateApprovalGate(input());
     expect(r).toMatchObject({ status: "completed", conclusion: "success" });
     expect(r.title).toBe("OS review: approve · 5/5 · risk low");
   });
 
-  test("anything short of approve, 5/5, low risk and no blockers needs a human", () => {
+  test("merge risk does not decide: an approving 5/5 review passes at any risk", () => {
+    for (const risk of ["medium", "high", undefined] as const) {
+      const r = evaluateApprovalGate(input({ lastReview: review({ risk }) }));
+      expect(r).toMatchObject({ conclusion: "success" });
+    }
+  });
+
+  test("a repository risk cap applies to the automatic path only", () => {
+    const capped = (risk: LastReviewState["risk"], maxRisk: "low" | "medium") =>
+      evaluateApprovalGate(input({ maxRisk, lastReview: review({ risk }) }));
+    expect(capped("low", "low")).toMatchObject({ conclusion: "success" });
+    expect(capped("medium", "medium")).toMatchObject({ conclusion: "success" });
+    const over = capped("medium", "low");
+    expect(over).toMatchObject({ conclusion: "action_required" });
+    expect(over.summary).toContain("risk low or lower");
+    expect(capped("high", "medium")).toMatchObject({
+      conclusion: "action_required",
+    });
+    // No risk score never clears a cap.
+    expect(capped(undefined, "medium")).toMatchObject({
+      conclusion: "action_required",
+    });
+    // A human approval still passes over the cap.
+    expect(
+      outcome(
+        input({
+          maxRisk: "low",
+          lastReview: review({ risk: "high" }),
+          reviews: [approve("bob")],
+        }),
+      ),
+    ).toBe("success");
+  });
+
+  test("anything short of approve, 5/5 and no blockers needs a human", () => {
     for (const over of [
       { confidence: 4 },
-      { risk: "medium" as const },
-      { risk: undefined },
       { verdict: "comment" },
       { blocking: 1 },
     ]) {
@@ -291,6 +323,13 @@ describe("approval gate config", () => {
     });
     expect(normalizeApprovalGateConfig({ checkName: "  Gate " })).toEqual({
       checkName: "Gate",
+    });
+    expect(normalizeApprovalGateConfig({ maxRisk: "low" })).toEqual({
+      checkName: "OS approval gate",
+      maxRisk: "low",
+    });
+    expect(normalizeApprovalGateConfig({ maxRisk: "extreme" })).toEqual({
+      checkName: "OS approval gate",
     });
   });
 });

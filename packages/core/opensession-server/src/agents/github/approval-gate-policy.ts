@@ -9,7 +9,7 @@
  *     from one of that file's owners, the same rule as GitHub's "require
  *     review from Code Owners", so the two never disagree.
  *   - A PR that touches no owned file passes when the OS review of the
- *     current head is approve, quality 5/5, merge risk low, with no blocking
+ *     current head is approve, quality 5/5, with no blocking
  *     findings, or when someone with write access approves the current head.
  *   - A PR from a fork, or one touching the review policy or CODEOWNERS
  *     itself, never passes on the model review alone.
@@ -23,7 +23,9 @@
  * head, so a PR that edits them must not be able to approve itself.
  *
  * Enabled per repository from `.os-review.json` on the default branch, with
- * `"approvalGate": true` or `"approvalGate": { "checkName": "..." }`.
+ * `"approvalGate": true` or `"approvalGate": { "checkName": "...",
+ * "maxRisk": "low" }`. `maxRisk` additionally caps the review's merge risk
+ * on the automatic path; without it, risk is shown but does not decide.
  */
 import type { LastReviewState } from "./state";
 
@@ -39,8 +41,13 @@ export const CODEOWNERS_LOCATIONS = [
  *  location GitHub would start honouring, or retire the one it honours. */
 export const ALWAYS_HUMAN_GLOBS = [".os-review.json", "**/CODEOWNERS"];
 
+export const GATE_RISKS = ["low", "medium", "high"] as const;
+export type GateRisk = (typeof GATE_RISKS)[number];
+
 export interface ApprovalGateConfig {
   checkName: string;
+  /** Highest merge risk the automatic path accepts. Absent = risk ignored. */
+  maxRisk?: GateRisk;
 }
 
 /** Parse the `approvalGate` key of `.os-review.json`. Null = gate off. */
@@ -55,7 +62,8 @@ export function normalizeApprovalGateConfig(
     typeof o.checkName === "string" && o.checkName.trim()
       ? o.checkName.trim().slice(0, 100)
       : DEFAULT_GATE_CHECK_NAME;
-  return { checkName: name };
+  const maxRisk = GATE_RISKS.find((r) => r === o.maxRisk);
+  return { checkName: name, ...(maxRisk ? { maxRisk } : {}) };
 }
 
 // ── CODEOWNERS ───────────────────────────────────────────────────────────────
@@ -167,6 +175,9 @@ export interface GateInput {
   /** Lowercased login → the lowercased owner tokens (`@login`, `@org/team`)
    *  that login satisfies. Only approvers of the head need an entry. */
   ownerTokens: ReadonlyMap<string, ReadonlySet<string>>;
+  /** Highest merge risk the automatic path accepts; absent = ignored. A
+   *  review without a risk score never clears a cap. */
+  maxRisk?: GateRisk;
   /** Matches a path against one glob; injected so the policy stays pure. */
   matchGlob: (glob: string, path: string) => boolean;
 }
@@ -211,7 +222,7 @@ function reviewLabel(r: LastReviewState): string {
 }
 
 const HOW =
-  "Passes when every changed file with a code owner has an approval of the current head from one of its owners and either the OS review of the current head is approve, 5/5 and risk low, or someone with write access approves the current head. Files with code owners, the review policy, and PRs from forks always need a human.";
+  "Passes when every changed file with a code owner has an approval of the current head from one of its owners and either the OS review of the current head clears the automatic path (approve and 5/5, plus the repository's risk cap if it sets one), or someone with write access approves the current head. Files with code owners, the review policy, and PRs from forks always need a human.";
 
 export function evaluateApprovalGate(input: GateInput): GateResult {
   const head = input.headSha;
@@ -317,23 +328,28 @@ export function evaluateApprovalGate(input: GateInput): GateResult {
     };
   }
 
+  const riskOk =
+    !input.maxRisk ||
+    (!!review.risk &&
+      GATE_RISKS.indexOf(review.risk) <= GATE_RISKS.indexOf(input.maxRisk));
+  const needs = `approve, 5/5${input.maxRisk ? `, risk ${input.maxRisk}${input.maxRisk === "high" ? "" : " or lower"}` : ""} and no blocking findings`;
   const passes =
     review.verdict === "approve" &&
     review.confidence === 5 &&
-    review.risk === "low" &&
-    review.blocking === 0;
+    review.blocking === 0 &&
+    riskOk;
   if (passes) {
     return {
       status: "completed",
       conclusion: "success",
       title: `OS review: ${reviewLabel(review)}`,
-      summary: `The OS review of \`${short(head)}\` cleared the automatic path: approve, 5/5, risk low, no blocking findings, and no file with a code owner.\n\n${HOW}`,
+      summary: `The OS review of \`${short(head)}\` cleared the automatic path (${needs}), and the PR touches no file with a code owner.\n\n${HOW}`,
     };
   }
   return {
     status: "completed",
     conclusion: "action_required",
     title: `Needs a human approval: OS review ${reviewLabel(review)}`,
-    summary: `The OS review of \`${short(head)}\` did not clear the automatic path (it needs approve, 5/5, risk low and no blocking findings${review.blocking ? `; this review has ${review.blocking} blocking` : ""}).${reapprove}\n\n${HOW}`,
+    summary: `The OS review of \`${short(head)}\` did not clear the automatic path (it needs ${needs}${review.blocking ? `; this review has ${review.blocking} blocking` : ""}).${reapprove}\n\n${HOW}`,
   };
 }
