@@ -291,12 +291,51 @@ describe("a request_credential call that timed out on the client", () => {
     expect(kc.listKeychainAsks({ sessionId: SESSION })).toHaveLength(1);
   });
 
-  test("a grant for another purpose is not handed back; the owner is asked", async () => {
+  test("a standing grant is handed back for another purpose without asking", async () => {
     const client = await connect();
     await requestThatTimesOut(client);
     const ask = pendingAsk();
     await deliver(ask.humanAskId!);
     humanAsks.resolveByOption(ask.humanAskId!, "Approve standing");
+    const grant = kc.listGrants({ sessionId: SESSION })[0]!;
+
+    for (const mode of ["once", "standing"] as const) {
+      const result = kc.requestCredential({
+        credential: "acme-prod",
+        sessionId: SESSION,
+        requestedBy: "Alex",
+        purpose: "issue refunds",
+        mode,
+      });
+      if (!("grant" in result)) throw new Error("expected the live grant");
+      expect(result.grant.id).toBe(grant.id);
+    }
+    expect(kc.listKeychainAsks({ sessionId: SESSION })).toHaveLength(1);
+    expect(kc.listGrants({ sessionId: SESSION })).toHaveLength(1);
+  });
+
+  test("another session's standing grant is not handed back", async () => {
+    const client = await connect();
+    await requestThatTimesOut(client);
+    const ask = pendingAsk();
+    await deliver(ask.humanAskId!);
+    humanAsks.resolveByOption(ask.humanAskId!, "Approve standing");
+
+    const result = kc.requestCredential({
+      credential: "acme-prod",
+      sessionId: "os-other",
+      requestedBy: "Alex",
+      purpose: "read the latest invoice",
+    });
+    expect(result).toHaveProperty("ask");
+  });
+
+  test("a once grant for another purpose is not handed back; the owner is asked", async () => {
+    const client = await connect();
+    await requestThatTimesOut(client);
+    const ask = pendingAsk();
+    await deliver(ask.humanAskId!);
+    humanAsks.resolveByOption(ask.humanAskId!, "Approve once");
 
     const result = kc.requestCredential({
       credential: "acme-prod",
