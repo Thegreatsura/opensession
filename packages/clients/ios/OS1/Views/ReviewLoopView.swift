@@ -10,6 +10,11 @@ import SwiftUI
 /// passed", "Over to humans") once it is merged and the live verdict is gone.
 /// Opened, it shows the same icon-led step rows as any other turn, with the
 /// verdict at the end. Mirrors the web viewer's `ReviewLoopBlock`.
+///
+/// The same row folds a check-back phase (`ReviewLoop.Kind.checkBack`): turns
+/// the agent started itself, from a background wait or its own scheduled
+/// check-back. Closed it reads "Checked back, 3 times"; the last turn's answer
+/// stays outside as the report. Mirrors the web's `CheckBackBlock`.
 struct ReviewLoopView: View {
     let loop: ReviewLoop
     let sessionId: String
@@ -32,7 +37,7 @@ struct ReviewLoopView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(accessibilityLabel)
-            .accessibilityHint(state.expanded ? "Hide the review work" : "Show the review work")
+            .accessibilityHint(accessibilityHint)
 
             if state.expanded {
                 VStack(alignment: .leading, spacing: 8) {
@@ -42,7 +47,8 @@ struct ReviewLoopView: View {
                         // twice, one indent apart. The settle notice stays: it
                         // is the loop's own last word, and the verdict row
                         // below only exists while GitHub still has one.
-                        if !isHandoff(block) {
+                        // Wait boundaries are structural, never a row.
+                        if !isHandoff(block), !isTurnBoundary(block) {
                             row(for: block)
                         }
                     }
@@ -68,7 +74,8 @@ struct ReviewLoopView: View {
                 items: turn.items,
                 sessionId: sessionId,
                 worktreeDir: worktreeDir,
-                isLive: loop.isLive,
+                // Only the loop's newest work can still be running.
+                isLive: loop.isLive && block.id == loop.blocks.last?.id,
                 expansionState: expansionState
             )
         case .tool(let item):
@@ -184,7 +191,7 @@ struct ReviewLoopView: View {
     }
 
     private var title: some View {
-        Text("Review loop")
+        Text(titleText)
             .font(.subheadline.weight(.medium))
             .foregroundStyle(OS1VisualStyle.textDim)
     }
@@ -211,13 +218,27 @@ struct ReviewLoopView: View {
         state.expanded && loop.isSettled ? loop.roundsLabel : loop.detail
     }
 
+    private var isCheckBack: Bool { loop.kind == .checkBack }
+
+    private var titleText: String { isCheckBack ? "Checked back" : "Review loop" }
+
+    private var accessibilityHint: String {
+        let work = isCheckBack ? "check-back work" : "review work"
+        return state.expanded ? "Hide the \(work)" : "Show the \(work)"
+    }
+
+    private func isTurnBoundary(_ block: TranscriptBlock) -> Bool {
+        guard case .message(let entry) = block else { return false }
+        return entry.turnBoundary == true
+    }
+
     private func isHandoff(_ block: TranscriptBlock) -> Bool {
         guard case .message(let entry) = block else { return false }
         return entry.notice?.kind == "review-handoff"
     }
 
     private var accessibilityLabel: String {
-        var parts = ["Review loop", loop.isLive ? "Working" : loop.detail]
+        var parts = [titleText, loop.isLive ? "Working" : loop.detail]
         if let prNumber = loop.prNumber { parts.append("PR #\(prNumber)") }
         return parts.joined(separator: ", ")
     }
