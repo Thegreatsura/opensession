@@ -17,7 +17,23 @@ private struct TranscriptPrChipsDrawnKey: EnvironmentKey {
     static let defaultValue: Set<String> = []
 }
 
+/// Where Markdown is being read. Chat is the transcript's dense scale; a
+/// document is a Markdown file opened on its own (`MarkdownDocumentView`).
+enum MarkdownPresentation {
+    case chat
+    case document
+}
+
+private struct MarkdownPresentationKey: EnvironmentKey {
+    static let defaultValue = MarkdownPresentation.chat
+}
+
 extension EnvironmentValues {
+    var markdownPresentation: MarkdownPresentation {
+        get { self[MarkdownPresentationKey.self] }
+        set { self[MarkdownPresentationKey.self] = newValue }
+    }
+
     var transcriptSessionId: String? {
         get { self[TranscriptSessionIdKey.self] }
         set { self[TranscriptSessionIdKey.self] = newValue }
@@ -49,6 +65,7 @@ struct MarkdownBody: View {
     @Environment(\.transcriptQuoteSelection) private var quoteSelection
     @Environment(\.transcriptAnchorEntryId) private var anchorEntryId
     @Environment(\.transcriptPrChipsDrawn) private var prChipsDrawn
+    @Environment(\.markdownPresentation) private var presentation
 
     /// Whether fences, placed media, callouts and math become native blocks.
     /// Off inside a block that renders markdown of its own (a slide, a
@@ -181,7 +198,9 @@ struct MarkdownBody: View {
     @MainActor private static var blockCache: [String: [TranscriptRichBlock]] = [:]
 
     private func markdownView(_ linkifiedValue: String) -> some View {
-        let base = dimmed ? MarkdownRenderConfig.os1Dim : .os1Static
+        let base = presentation == .document
+            ? MarkdownRenderConfig.os1Document
+            : dimmed ? MarkdownRenderConfig.os1Dim : .os1Static
         let config = quoteSelection == nil
             ? base
             : base.withTextContextMenu(value: .os1QuoteSelection)
@@ -546,4 +565,47 @@ extension MarkdownRenderConfig {
 
     static let os1Streaming = os1Base
         .withShouldAnimateText(value: true)
+
+    /// A Markdown file read as a page rather than a chat message: a real
+    /// heading ramp, a taller body line, open rhythm between blocks and quiet
+    /// list numbers. Only the file viewer uses it; transcripts never do.
+    /// Heading gaps above sections come from `MarkdownDocumentView`, since the
+    /// library has one spacing for every block.
+    static let os1Document: MarkdownRenderConfig = {
+        #if os(iOS)
+        let chat = os1Base
+        let body = chat.paragraphStyle.textFonts
+        // 17pt on a 27pt line, scaled like the font so large Dynamic Type
+        // keeps the same open measure instead of collapsing to solid.
+        let bodyFonts = TextFonts(
+            normal: body.normal,
+            italic: body.italic,
+            bold: body.bold,
+            boldItalic: body.boldItalic,
+            preferredLetterSpacing: body.preferredLetterSpacing,
+            preferredLineHeight: UIFontMetrics.default.scaledValue(for: 27)
+        )
+        return chat
+            .withParagraphStyle(value: .init(textFonts: bodyFonts, textColor: OS1VisualStyle.text))
+            .withBlockQuoteStyle(value: .init(textFonts: bodyFonts, textColor: OS1VisualStyle.textDim))
+            .withHeadingStyle(value: .init(
+                h1Font: .ios(size: 30, weight: .bold, lineHeight: 36, letterSpacing: -0.7),
+                h2Font: .ios(size: 22, lineHeight: 28, letterSpacing: -0.4),
+                h3Font: .ios(size: 19, lineHeight: 25, letterSpacing: -0.25),
+                h4Font: .ios(size: 17, lineHeight: 23, letterSpacing: -0.1),
+                h5Font: .ios(size: 15, lineHeight: 20, letterSpacing: 0),
+                h6Font: .ios(size: 15, lineHeight: 20, letterSpacing: 0),
+                textColor: OS1VisualStyle.text
+            ))
+            // Ordered-list numbers are the marker: faint, so the item reads.
+            .withOrderedListStyle(value: .init(
+                textFonts: chat.orderedListStyle.textFonts,
+                textColor: OS1VisualStyle.textFaint
+            ))
+            .withBlockSpacing(value: 16)
+            .withShouldAnimateText(value: false)
+        #else
+        return os1Static
+        #endif
+    }()
 }
