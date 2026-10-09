@@ -141,6 +141,9 @@ interface OauthPreset {
   };
   /** Env var the grant token is injected as for stdio MCP servers. */
   envVar?: string;
+  /** Env var naming the person a stdio server acts for, as their Slack id
+   *  when known, so it can credit them on what it posts. */
+  senderEnvVar?: string;
 }
 
 const OAUTH_PRESETS: Record<string, OauthPreset> = {
@@ -158,7 +161,9 @@ const OAUTH_PRESETS: Record<string, OauthPreset> = {
       refreshToken: res?.authed_user?.refresh_token,
       expiresIn: res?.authed_user?.expires_in,
     }),
-    envVar: "SLACK_BOT_TOKEN",
+    // Reads only: scripts/mcp-slack.ts always posts with its bot token.
+    envVar: "SLACK_USER_TOKEN",
+    senderEnvVar: "SLACK_POST_VIA",
   },
 };
 

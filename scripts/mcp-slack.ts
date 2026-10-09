@@ -325,24 +325,89 @@ function slackError(step: string, result: any): Error {
   );
 }
 
+/**
+ * The line that credits the person behind a bot post: a real mention for a
+ * Slack user id, otherwise their escaped name.
+ */
+export function viaLine(sender: string | undefined): string | undefined {
+  const ref = sender?.trim();
+  if (!ref) return undefined;
+  const tag = /^[UW][A-Z0-9]{2,}$/.test(ref)
+    ? `<@${ref}>`
+    : ref.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return `_via ${tag}_`;
+}
+
+export function withVia(text: string, sender: string | undefined): string {
+  const line = viaLine(sender);
+  if (!line) return text;
+  return text ? `${text}\n${line}` : line;
+}
+
+const NOT_IN_CHANNEL = new Set(["not_in_channel", "channel_not_found"]);
+
+export type SlackClientOptions = {
+  /** A person's own grant. Only reads use it, so they reach what that
+   *  person can see; everything posted goes out as the bot. */
+  readToken?: string;
+  /** Who the posts are for: a Slack user id or a name, tagged "via". */
+  sender?: string;
+};
+
 export class SlackClient {
   private readonly headers: Record<string, string>;
+  private readonly readHeaders: Record<string, string>;
+  private readonly sender: string | undefined;
 
   constructor(
     private readonly botToken: string,
     private readonly uploadRoot = UPLOAD_ROOT,
+    options: SlackClientOptions = {},
   ) {
     this.headers = {
       Authorization: `Bearer ${botToken}`,
       "Content-Type": "application/json",
     };
+    this.readHeaders = options.readToken
+      ? { ...this.headers, Authorization: `Bearer ${options.readToken}` }
+      : this.headers;
+    this.sender = options.sender;
   }
 
+  /** A bot read: what the bot itself posted, or setup for a post. */
   private async get(path: string, params: URLSearchParams): Promise<unknown> {
     const response = await fetch(`https://slack.com/api/${path}?${params}`, {
       headers: this.headers,
     });
     return response.json();
+  }
+
+  /** A read for the agent, through the person's grant when there is one. */
+  private async read(path: string, params: URLSearchParams): Promise<unknown> {
+    const response = await fetch(`https://slack.com/api/${path}?${params}`, {
+      headers: this.readHeaders,
+    });
+    return response.json();
+  }
+
+  /**
+   * Run a bot write, joining a public channel the bot isn't in yet and
+   * trying once more. A private channel needs the bot invited first.
+   */
+  private async inChannel(
+    channel: string,
+    write: () => Promise<any>,
+  ): Promise<any> {
+    const first = await write();
+    if (!NOT_IN_CHANNEL.has(first?.error)) return first;
+    const joined = (await this.post("conversations.join", { channel }).catch(
+      () => undefined,
+    )) as any;
+    if (!joined?.ok)
+      throw new Error(
+        "The Slack bot isn't in this channel and can't join it. Invite the bot to the channel in Slack, then post again.",
+      );
+    return write();
   }
 
   private async post(
@@ -362,7 +427,7 @@ export class SlackClient {
     if (predefined) {
       const channels = [];
       for (const channel of predefined.split(",").map((id) => id.trim())) {
-        const result = (await this.get(
+        const result = (await this.read(
           "conversations.info",
           new URLSearchParams({ channel }),
         )) as any;
@@ -379,7 +444,7 @@ export class SlackClient {
       team_id: process.env.SLACK_TEAM_ID!,
     });
     if (cursor) params.set("cursor", cursor);
-    return this.get("conversations.list", params);
+    return this.read("conversations.list", params);
   }
 
   postMessage(
@@ -387,10 +452,12 @@ export class SlackClient {
     text: string,
     options: UnfurlOptions,
   ): Promise<unknown> {
-    return this.post(
-      "chat.postMessage",
-      buildSlackMessageBody(channel, text, options),
+    const body = buildSlackMessageBody(
+      channel,
+      withVia(text, this.sender),
+      options,
     );
+    return this.inChannel(channel, () => this.post("chat.postMessage", body));
   }
 
   postReply(
@@ -399,10 +466,13 @@ export class SlackClient {
     text: string,
     options: UnfurlOptions,
   ): Promise<unknown> {
-    return this.post(
-      "chat.postMessage",
-      buildSlackMessageBody(channel, text, options, threadTs),
+    const body = buildSlackMessageBody(
+      channel,
+      withVia(text, this.sender),
+      options,
+      threadTs,
     );
+    return this.inChannel(channel, () => this.post("chat.postMessage", body));
   }
 
   private async postForm(
@@ -451,21 +521,22 @@ export class SlackClient {
     options: UploadOptions,
   ): Promise<Array<{ id: string; title: string }>> {
     for (const path of paths) await resolveUploadFile(path, this.uploadRoot);
-    const files = [];
+    const files: Array<{ id: string; title: string }> = [];
     for (const path of paths) {
       files.push({
         id: await this.reserveAndSend(path),
         title: (paths.length === 1 && options.title) || basename(path),
       });
     }
-    const completed = await this.postForm("files.completeUploadExternal", {
-      files: JSON.stringify(files),
-      channel_id: channel,
-      ...(options.threadTs ? { thread_ts: options.threadTs } : {}),
-      ...(options.initialComment
-        ? { initial_comment: options.initialComment }
-        : {}),
-    });
+    const comment = withVia(options.initialComment || "", this.sender);
+    const completed = await this.inChannel(channel, () =>
+      this.postForm("files.completeUploadExternal", {
+        files: JSON.stringify(files),
+        channel_id: channel,
+        ...(options.threadTs ? { thread_ts: options.threadTs } : {}),
+        ...(comment ? { initial_comment: comment } : {}),
+      }),
+    );
     if (!completed?.ok) throw slackError("upload completion", completed);
     return files;
   }
@@ -578,18 +649,20 @@ export class SlackClient {
     timestamp: string,
     reaction: string,
   ): Promise<unknown> {
-    return this.post("reactions.add", { channel, timestamp, name: reaction });
+    return this.inChannel(channel, () =>
+      this.post("reactions.add", { channel, timestamp, name: reaction }),
+    );
   }
 
   channelHistory(channel: string, limit = 10): Promise<unknown> {
-    return this.get(
+    return this.read(
       "conversations.history",
       new URLSearchParams({ channel, limit: String(limit) }),
     );
   }
 
   threadReplies(channel: string, threadTs: string): Promise<unknown> {
-    return this.get(
+    return this.read(
       "conversations.replies",
       new URLSearchParams({ channel, ts: threadTs }),
     );
@@ -601,11 +674,11 @@ export class SlackClient {
       team_id: process.env.SLACK_TEAM_ID!,
     });
     if (cursor) params.set("cursor", cursor);
-    return this.get("users.list", params);
+    return this.read("users.list", params);
   }
 
   userProfile(user: string): Promise<unknown> {
-    return this.get(
+    return this.read(
       "users.profile.get",
       new URLSearchParams({ user, include_labels: "true" }),
     );
@@ -618,7 +691,12 @@ async function main(): Promise<void> {
   if (!botToken || !teamId)
     throw new Error("SLACK_BOT_TOKEN and SLACK_TEAM_ID are required");
 
-  const client = new SlackClient(botToken);
+  // Posts always go out as the bot. A person's grant only widens reads, and
+  // the person a run acts for is credited with a "via" line.
+  const client = new SlackClient(botToken, UPLOAD_ROOT, {
+    readToken: process.env.SLACK_USER_TOKEN || undefined,
+    sender: process.env.SLACK_POST_VIA || undefined,
+  });
   const server = new Server(
     { name: "opensession-slack", version: "1.0.0" },
     { capabilities: { tools: {} } },

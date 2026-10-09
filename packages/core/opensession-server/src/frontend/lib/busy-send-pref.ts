@@ -3,7 +3,8 @@
 // ⌘/Ctrl+Enter does. Defaults queue/steer keep the classic split; set both to
 // steer to always fold into the live turn. "queue" holds the message until the
 // agent fully finishes (incl. running worker sessions); "steer" folds it into
-// the live turn at its next step boundary.
+// the live turn at its next step boundary (at once while the model is only
+// thinking).
 // Stored server-side per user (ui-prefs) so it follows you across devices,
 // with a localStorage copy as the synchronous cache — the same hydrate
 // pattern as lib/user-pref. Deliberately NOT a makeUserPref instance: this

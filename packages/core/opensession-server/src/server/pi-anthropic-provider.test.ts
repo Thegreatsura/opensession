@@ -413,6 +413,28 @@ describe("SDK session store", () => {
 });
 
 describe("piMessagesToAnthropic", () => {
+  test("drops a reply cut off before it wrote anything", () => {
+    const messages: PiWireMessage[] = [
+      { role: "user", content: "first" },
+      {
+        role: "assistant",
+        stopReason: "aborted",
+        content: [{ type: "thinking", thinking: "superseded" }],
+      },
+      { role: "user", content: "steer" },
+      {
+        role: "assistant",
+        stopReason: "aborted",
+        content: [{ type: "text", text: "partial" }],
+      },
+    ];
+    expect(piMessagesToAnthropic(messages)).toEqual([
+      { role: "user", content: "first" },
+      { role: "user", content: "steer" },
+      { role: "assistant", content: [{ type: "text", text: "partial" }] },
+    ]);
+  });
+
   test("maps the three pi roles onto the bridge's wire shape", () => {
     const messages: PiWireMessage[] = [
       { role: "user", content: "plain string" },

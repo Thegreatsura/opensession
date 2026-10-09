@@ -43,6 +43,7 @@ import {
   piGateReason,
   piStreamEventRequiresAccountContinuation,
   piSteeringBoundaryTools,
+  interruptPiThinkingForSteer,
   piToolNames,
   resolvePiPresetWiring,
   resolvePiRoutedModel,
@@ -157,6 +158,59 @@ describe("piSteeringBoundaryTools", () => {
       tool!.execute("call-1/2", {}, undefined, undefined, {} as any),
     ).rejects.toThrow(PI_STEER_TOOL_SKIP);
     expect(executed).toBe(0);
+  });
+});
+
+describe("interruptPiThinkingForSteer", () => {
+  const thinking = [{ type: "thinking", thinking: "planning" }];
+  const agent = (opts: {
+    streaming?: string;
+    content?: unknown[];
+    tools?: string[];
+    queued?: boolean;
+  }) => {
+    const calls = { abort: 0 };
+    return {
+      calls,
+      state: {
+        streamingMessage: opts.streaming
+          ? { role: opts.streaming, content: opts.content ?? [] }
+          : undefined,
+        pendingToolCalls: new Set(opts.tools ?? []),
+      },
+      hasQueuedMessages: () => opts.queued ?? true,
+      abort: () => {
+        calls.abort++;
+      },
+    };
+  };
+
+  test("cuts a response short while it is only thinking", () => {
+    for (const content of [[], thinking]) {
+      const target = agent({ streaming: "assistant", content });
+      expect(interruptPiThinkingForSteer(target)).toBe(true);
+      expect(target.calls.abort).toBe(1);
+    }
+  });
+
+  test("lets reply text, tool calls and running tools finish", () => {
+    for (const target of [
+      agent({
+        streaming: "assistant",
+        content: [...thinking, { type: "text", text: "Here is" }],
+      }),
+      agent({
+        streaming: "assistant",
+        content: [{ type: "toolCall", id: "call-1", name: "bash" }],
+      }),
+      agent({ streaming: "assistant", tools: ["call-1"] }),
+      agent({}),
+      agent({ streaming: "user" }),
+      agent({ streaming: "assistant", queued: false }),
+    ]) {
+      expect(interruptPiThinkingForSteer(target)).toBe(false);
+      expect(target.calls.abort).toBe(0);
+    }
   });
 });
 

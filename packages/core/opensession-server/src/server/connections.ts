@@ -13,6 +13,7 @@ import {
 } from "fs";
 import { writeFileAtomic } from "./shared/atomic-write";
 import { configuredPaths } from "./config";
+import { resolveTeammate } from "./shared/user-mappings";
 import {
   isOauthCapable,
   mcpOauthStatus,
@@ -115,8 +116,9 @@ export function withDynamicCredentials(
       const isHttp = c.type === "http" || c.type === "sse" || !!c.url;
       if (!isHttp) {
         // Stdio servers with a preset OAuth (slack): inject the grant token
-        // as the preset's env var — the run then acts AS THE PERSON
-        // (creator-first order), falling back to the static bot token.
+        // as the preset's env var (creator-first order) and name the person
+        // the run acts for. Slack still posts as its bot: the grant only
+        // widens reads, and the person is credited with a "via" line.
         const preset = oauthPresetFor(name);
         if (preset?.envVar && c.command) {
           const candidates = (Array.isArray(user) ? user : [user]).filter(
@@ -127,10 +129,23 @@ export function withDynamicCredentials(
               .map((u) => mcpUserGrantToken(name, u))
               .find((t) => !!t) ??
             mcpSharedGrantHeader(name)?.replace(/^Bearer\s+/i, "");
-          if (token)
+          const sender = preset.senderEnvVar && candidates[0];
+          if (token || sender)
             out = {
               ...out,
-              [name]: { ...c, env: { ...c.env, [preset.envVar]: token } },
+              [name]: {
+                ...c,
+                env: {
+                  ...c.env,
+                  ...(token ? { [preset.envVar]: token } : {}),
+                  ...(sender
+                    ? {
+                        [preset.senderEnvVar!]:
+                          resolveTeammate(sender)?.slackId || sender,
+                      }
+                    : {}),
+                },
+              },
             };
         }
         continue;
