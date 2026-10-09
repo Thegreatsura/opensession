@@ -314,6 +314,7 @@ export async function shareShippedVisualChange(opts: {
       {
         title: `${title} · shipped`,
         altText: `Screenshot of the shipped visual change: ${title}`,
+        sender: opts.caller || opts.requestedBy,
       },
     ));
     settleShippedChangeAnnouncement(

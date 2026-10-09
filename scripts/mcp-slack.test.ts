@@ -8,6 +8,7 @@ import {
   resolveUploadFile,
   SlackClient,
   tools,
+  withVia,
 } from "./mcp-slack";
 
 describe("buildSlackMessageBody", () => {
@@ -194,12 +195,12 @@ describe("SlackClient.uploadFile", () => {
         file_id: "F1",
       },
       "files.example.test": { ok: true },
-      "files.completeUploadExternal": { ok: false, error: "not_in_channel" },
+      "files.completeUploadExternal": { ok: false, error: "is_archived" },
     });
 
     await expect(
       new SlackClient("xoxb-test", dir).uploadFile("C1", path),
-    ).rejects.toThrow("upload completion failed: not_in_channel");
+    ).rejects.toThrow("upload completion failed: is_archived");
   });
 });
 
@@ -426,5 +427,92 @@ describe("posting with images", () => {
       ),
     ).rejects.toThrow("must be inside");
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("posting as the bot", () => {
+  const originalFetch = globalThis.fetch;
+  let calls: Array<{ method: string; auth: string; body: any }>;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function mockSlack(answer: (method: string) => object) {
+    calls = [];
+    globalThis.fetch = (async (input: any, init?: RequestInit) => {
+      const method = new URL(String(input)).pathname.replace("/api/", "");
+      calls.push({
+        method,
+        auth: new Headers(init?.headers).get("Authorization") || "",
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      });
+      return Response.json(answer(method));
+    }) as typeof fetch;
+  }
+
+  const client = () =>
+    new SlackClient("xoxb-bot", "/tmp/slack-uploads", {
+      readToken: "xoxp-person",
+      sender: "U0ALICE01",
+    });
+
+  test("posts with the bot token and credits the person", async () => {
+    mockSlack(() => ({ ok: true, ts: "1.2" }));
+    await client().postMessage("C1", "Shipped", {});
+    await client().postReply("C1", "1.2", "Details", {});
+    expect(calls.map((call) => call.auth)).toEqual([
+      "Bearer xoxb-bot",
+      "Bearer xoxb-bot",
+    ]);
+    expect(calls[0]!.body.text).toBe("Shipped\n_via <@U0ALICE01>_");
+    expect(calls[1]!.body.text).toBe("Details\n_via <@U0ALICE01>_");
+  });
+
+  test("reads through the person's grant", async () => {
+    mockSlack(() => ({ ok: true, messages: [] }));
+    await client().channelHistory("C1");
+    expect(calls[0]!.auth).toBe("Bearer xoxp-person");
+  });
+
+  test("joins a public channel the bot isn't in, then posts", async () => {
+    let posts = 0;
+    mockSlack((method) =>
+      method === "chat.postMessage" && ++posts === 1
+        ? { ok: false, error: "not_in_channel" }
+        : { ok: true, ts: "1.3" },
+    );
+    const result = (await client().postMessage("C1", "Shipped", {})) as any;
+    expect(result.ts).toBe("1.3");
+    expect(calls.map((call) => call.method)).toEqual([
+      "chat.postMessage",
+      "conversations.join",
+      "chat.postMessage",
+    ]);
+    expect(calls.every((call) => call.auth === "Bearer xoxb-bot")).toBe(true);
+  });
+
+  test("asks for an invite when the bot can't join", async () => {
+    mockSlack((method) =>
+      method === "chat.postMessage"
+        ? { ok: false, error: "not_in_channel" }
+        : { ok: false, error: "method_not_supported_for_channel_type" },
+    );
+    await expect(client().postMessage("C1", "Shipped", {})).rejects.toThrow(
+      "Invite the bot",
+    );
+  });
+});
+
+describe("withVia", () => {
+  test("escapes a name that isn't a Slack id", () => {
+    expect(withVia("Shipped", "<mallory>")).toBe(
+      "Shipped\n_via &lt;mallory&gt;_",
+    );
+  });
+
+  test("stands alone without text and is skipped without a sender", () => {
+    expect(withVia("", "mallory")).toBe("_via mallory_");
+    expect(withVia("Shipped", undefined)).toBe("Shipped");
   });
 });

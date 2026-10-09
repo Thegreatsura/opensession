@@ -228,6 +228,7 @@ export async function handleSlackComposeRoutes(
       {
         title: "Open Session update",
         altText: "Image attached to an Open Session update",
+        sender: caller,
       },
     );
     if (ts)

@@ -244,8 +244,13 @@ Two optional facilities are separate from inbound Slack-agent setup:
   find the posted message's `ts` through the conversation's history scope
   (`channels:history` and the like), not `files.info`, so `files:read` is not
   needed. The in-process `compose_message` tool stays the reviewed path: it
-  only posts after the signed-in person presses Send.
-- Personal Slack grants let signed-in people read or post as themselves. Set
+  only posts after the signed-in person presses Send. Every post, reply,
+  upload and reaction uses the bot token, joining a public channel the bot
+  isn't in yet. When a run acts for a person, it sets `SLACK_POST_VIA` to their
+  Slack id and each post ends with a "via @person" line. A personal grant
+  arrives as `SLACK_USER_TOKEN` and is used only for reads.
+- Personal Slack grants widen what agents and channel pickers can read for
+  signed-in people; agent and reviewed posts still go out as the bot. Set
   `SLACK_OAUTH_CLIENT_ID` and `SLACK_OAUTH_CLIENT_SECRET`, register
   `<OPENSESSION_UI_BASE>/api/connections/mcp-oauth/callback` as the Slack OAuth
   redirect, then connect under **Settings → Account** (personal) or

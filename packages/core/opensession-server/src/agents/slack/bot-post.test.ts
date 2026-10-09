@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { postAsSlackBot } from "./bot-post";
+import { __setIdentitiesForTest } from "../../server/shared/user-mappings";
+import { postAsSlackBot, withSenderTag } from "./bot-post";
 
 const originalFetch = globalThis.fetch;
 const originalToken = process.env.SLACK_BOT_TOKEN;
@@ -44,7 +45,9 @@ describe("postAsSlackBot", () => {
         ? { ok: true, ts: "1.2" }
         : { ok: true, permalink: "https://acme.slack.com/archives/C1/p12" },
     );
-    const posted = await postAsSlackBot(channel, "Shipped", [], {});
+    const posted = await postAsSlackBot(channel, "Shipped", [], {
+      sender: undefined,
+    });
     expect(posted).toEqual({
       ts: "1.2",
       permalink: "https://acme.slack.com/archives/C1/p12",
@@ -65,7 +68,9 @@ describe("postAsSlackBot", () => {
           : { ok: true, ts: "1.3" };
       return { ok: true };
     });
-    const posted = await postAsSlackBot(channel, "Shipped", [], {});
+    const posted = await postAsSlackBot(channel, "Shipped", [], {
+      sender: undefined,
+    });
     expect(posted.ts).toBe("1.3");
     expect(calls.map((call) => call.method)).toEqual([
       "chat.postMessage",
@@ -81,7 +86,9 @@ describe("postAsSlackBot", () => {
         ? { ok: false, error: "method_not_supported_for_channel_type" }
         : { ok: false, error: "not_in_channel" },
     );
-    await expect(postAsSlackBot(channel, "Shipped", [], {})).rejects.toThrow(
+    await expect(
+      postAsSlackBot(channel, "Shipped", [], { sender: undefined }),
+    ).rejects.toThrow(
       "Invite the bot to #engineering in Slack, then send again",
     );
   });
@@ -89,9 +96,43 @@ describe("postAsSlackBot", () => {
   test("refuses without a bot token", async () => {
     delete process.env.SLACK_BOT_TOKEN;
     const calls = mockSlack(() => ({ ok: true }));
-    await expect(postAsSlackBot(channel, "Shipped", [], {})).rejects.toThrow(
-      "Slack isn't set up on this server yet",
-    );
+    await expect(
+      postAsSlackBot(channel, "Shipped", [], { sender: undefined }),
+    ).rejects.toThrow("Slack isn't set up on this server yet");
     expect(calls).toEqual([]);
+  });
+
+  test("tags the person who pressed Send", async () => {
+    const restore = __setIdentitiesForTest([
+      {
+        name: "Alice Example",
+        email: "alice@example.com",
+        slackId: "U0ALICE01",
+        github: "alice",
+      },
+    ]);
+    try {
+      const calls = mockSlack(() => ({ ok: true, ts: "1.4" }));
+      await postAsSlackBot(channel, "Shipped", [], { sender: "alice" });
+      expect(calls[0]?.body?.text).toBe("Shipped\n_via <@U0ALICE01>_");
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe("withSenderTag", () => {
+  test("falls back to the escaped name for someone outside Slack", () => {
+    expect(withSenderTag("Shipped", "<mallory>")).toBe(
+      "Shipped\n_via &lt;mallory&gt;_",
+    );
+  });
+
+  test("stands alone under an image-only post", () => {
+    expect(withSenderTag("", "mallory")).toBe("_via mallory_");
+  });
+
+  test("leaves the message alone without a sender", () => {
+    expect(withSenderTag("Shipped", undefined)).toBe("Shipped");
   });
 });
