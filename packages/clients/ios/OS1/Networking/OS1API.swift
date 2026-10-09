@@ -2066,6 +2066,7 @@ enum OS1API {
         workspaceId: String? = nil,
         sandbox: String? = nil,
         forkFrom: ForkFrom? = nil,
+        branch: String? = nil,
         requestId: String? = nil
     ) async throws -> String {
         struct CreateResponse: Decodable { let id: String }
@@ -2082,6 +2083,7 @@ enum OS1API {
             workspaceId: workspaceId,
             sandbox: sandbox,
             forkFrom: forkFrom,
+            branch: branch,
             user: ServerConfig.shared.userName,
             requestId: requestId
         )
@@ -2113,6 +2115,7 @@ enum OS1API {
         workspaceId: String? = nil,
         sandbox: String? = nil,
         forkFrom: ForkFrom? = nil,
+        branch: String? = nil,
         user: String,
         requestId: String? = nil
     ) -> [String: Any] {
@@ -2135,6 +2138,9 @@ enum OS1API {
         // worktree/branch for code sessions, so the tabs share one checkout.
         if let workspaceId, !workspaceId.isEmpty { body["workspaceId"] = workspaceId }
         if let forkFrom { body["forkFrom"] = forkFrom.wireValue }
+        // A named branch for a code session (a suggested task can carry
+        // one); omitted, the server suggests one from the prompt.
+        if mode == "code", let branch, !branch.isEmpty { body["branch"] = branch }
         if let model, !model.isEmpty { body["model"] = model }
         if let effort, !effort.isEmpty { body["effort"] = effort }
         // `fastMode` for servers that predate `speed`; a newer one reads

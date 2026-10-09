@@ -355,6 +355,10 @@ struct WorkTurn: Identifiable, Equatable {
     /// Media the agent explicitly surfaced. Closed folds keep this visible;
     /// open folds render it in the tool row that produced it.
     var featuredMedia: TranscriptMedia = TranscriptMedia()
+    /// Follow-ups the turn proposed with `suggest_task`, in call order. Like
+    /// featured media they are addressed to the reader rather than steps of
+    /// the work, so the card renders outside the fold, open or shut.
+    var suggestedTasks: [SuggestedTaskProposal] = []
     /// "Bash: bun test" — what the fold is doing right now, shown while it is
     /// live and collapsed so the work never looks stalled.
     var livePreview: String?
@@ -1038,6 +1042,7 @@ enum TranscriptGrouping {
             lineStats: stats,
             hasMedia: tools.contains(where: \.hasMedia),
             featuredMedia: featuredMedia(from: tools),
+            suggestedTasks: SuggestedTaskProposal.proposals(in: tools),
             livePreview: preview,
             hasNarration: items.contains {
                 if case .message = $0 { return true }

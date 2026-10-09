@@ -40,6 +40,11 @@ struct NewSessionView: View {
     var initialImages: [AttachedImage]
     var initialFiles: [AttachedFile]
 
+    /// A prompt and mode to start from: a suggested task opened for editing.
+    /// Prefill only; nothing starts until the person does.
+    var initialPrompt: String?
+    var initialMode: String?
+
     /// Called the moment Start is tapped, with an optimistic session row
     /// (temporary `pending-` id) plus the prompt/images to seed the
     /// conversation view instantly.
@@ -59,6 +64,8 @@ struct NewSessionView: View {
         autoDictate: Bool = false,
         initialImages: [AttachedImage] = [],
         initialFiles: [AttachedFile] = [],
+        initialPrompt: String? = nil,
+        initialMode: String? = nil,
         onCreated: @escaping (Session, SessionViewModel.OptimisticSeed) -> Void,
         onResolved: @escaping (String, Result<String, Error>) -> Void,
         onDraftSaved: @escaping (OS1API.WorkspaceSummary) -> Void = { _ in }
@@ -69,6 +76,8 @@ struct NewSessionView: View {
         self.autoDictate = autoDictate
         self.initialImages = initialImages
         self.initialFiles = initialFiles
+        self.initialPrompt = initialPrompt
+        self.initialMode = initialMode
         _images = State(initialValue: initialImages)
         _files = State(initialValue: initialFiles)
         self.onCreated = onCreated
@@ -1111,7 +1120,10 @@ struct NewSessionView: View {
         installAnnotationScreenshotFixture()
         #endif
         if prompt.isEmpty, let initialDraft { prompt = initialDraft.text }
-        promptFocused = true
+        if prompt.isEmpty, let initialPrompt { prompt = initialPrompt }
+        // A prefilled prompt is there to be read first, so the keyboard
+        // stays down, the same as a recipe.
+        promptFocused = initialPrompt == nil
         // Opened from the Action Button: the mic goes hot with the sheet, so
         // speaking is the first thing that works. Everything else below still
         // loads underneath it. Only once the permissions exist, though — the
@@ -1124,6 +1136,9 @@ struct NewSessionView: View {
         // the repository list so a removed preference never flashes as real.
         repo = initialRepo ?? ""
         if initialRepo == Session.noRepoID { mode = "ask" }
+        if let initialMode, initialMode == "ask" || initialMode == "code" {
+            mode = initialMode
+        }
         let requestContext = NativePreferences.context()
         async let reposFetch = OS1API.repos()
         async let modelsFetch = OS1API.models(workspaceId: initialWorkspaceId)

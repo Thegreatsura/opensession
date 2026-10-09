@@ -81,6 +81,14 @@ struct TurnBlockView: View {
                 .padding(.leading, 6)
                 .padding(.top, 8)
             }
+
+            // A proposal addressed to the reader: the agent suggests, the
+            // person starts it. Unlike media it stays put when the fold
+            // opens, because the row inside only names it and the card is
+            // the one place to read and start it.
+            if !turn.suggestedTasks.isEmpty {
+                SuggestedTasksView(proposals: turn.suggestedTasks, sessionId: sessionId)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

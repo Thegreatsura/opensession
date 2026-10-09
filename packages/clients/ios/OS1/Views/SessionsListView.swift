@@ -175,6 +175,9 @@ struct SessionsListView: View {
         /// everything else stages through `/api/upload` in the composer.
         var images: [AttachedImage] = []
         var files: [AttachedFile] = []
+        /// A suggested task's instructions and mode, edited before starting.
+        var prompt: String?
+        var mode: String?
     }
 
     // Empty until the person picks a grouping, so the default can stay a
@@ -439,6 +442,20 @@ struct SessionsListView: View {
                 }
                 return openSessionLink(id: id)
             })
+            // A suggested-task card in a transcript starts its session or
+            // opens this list's composer prefilled with it.
+            .environment(\.suggestedTaskActions, SuggestedTaskActions(
+                openSession: { id in
+                    await openCreated(id, failureTitle: "Couldn't open session")
+                },
+                edit: { task in
+                    newSessionRequest = NewSessionRequest(
+                        repo: task.repo,
+                        prompt: task.instructions,
+                        mode: task.mode ?? "code"
+                    )
+                }
+            ))
             .task {
                 #if DEBUG
                 if showsTeamActivityFixture {
@@ -822,7 +839,9 @@ struct SessionsListView: View {
                 initialDraft: request.draft,
                 autoDictate: request.dictate,
                 initialImages: request.images,
-                initialFiles: request.files
+                initialFiles: request.files,
+                initialPrompt: request.prompt,
+                initialMode: request.mode
             ) { session, seed in
                 openOptimistic(session, seed: seed)
             } onResolved: { tempId, result in
@@ -1429,7 +1448,9 @@ struct SessionsListView: View {
                         initialDraft: request.draft,
                         autoDictate: request.dictate,
                         initialImages: request.images,
-                        initialFiles: request.files
+                        initialFiles: request.files,
+                        initialPrompt: request.prompt,
+                        initialMode: request.mode
                     ) { session, seed in
                         openOptimistic(session, seed: seed)
                     } onResolved: { tempId, result in
@@ -2615,6 +2636,11 @@ struct SessionsListView: View {
 
     @MainActor
     private func openFork(_ id: String) async {
+        await openCreated(id, failureTitle: "Couldn't open fork")
+    }
+
+    /// Open a session this device just created, before the list poll has it.
+    private func openCreated(_ id: String, failureTitle: String) async {
         do {
             let session = try await OS1API.session(id: id)
             await viewModel.refresh()
@@ -2625,7 +2651,7 @@ struct SessionsListView: View {
             selectedSessionID = session.id
             #endif
         } catch {
-            createErrorTitle = "Couldn't open fork"
+            createErrorTitle = failureTitle
             createError = error.localizedDescription
         }
     }
