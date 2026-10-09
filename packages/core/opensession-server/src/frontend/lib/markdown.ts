@@ -1414,6 +1414,29 @@ const CALLOUT_KINDS = new Map<string, CalloutIconKind>([
   ["caution", "caution"],
 ]);
 
+/**
+ * Cells in a table column that holds running text rather than a short value.
+ * On a phone those get a readable minimum width and the table scrolls
+ * sideways (base-markdown.css), while a column of PR numbers or statuses
+ * stays as narrow as its content. Filled by the table renderer just before
+ * marked renders the cells.
+ */
+const proseCells = new WeakSet<Tokens.TableCell>();
+/** A column whose longest cell is longer than this many characters reads as prose. */
+const PROSE_CELL_CHARS = 20;
+
+/** How many characters inline tokens show: a link counts its label, not its URL. */
+function visibleLength(tokens: Token[]): number {
+  let length = 0;
+  for (const token of tokens) {
+    length +=
+      "tokens" in token && token.tokens
+        ? visibleLength(token.tokens)
+        : ("text" in token ? String(token.text) : token.raw).length;
+  }
+  return length;
+}
+
 interface Callout {
   kind: CalloutIconKind;
   /** The quote's block tokens with the marker line taken out. */
@@ -1505,6 +1528,25 @@ md.use({
     // A GitHub callout renders as a titled block in its kind's colour
     // (styles/blocks/callout.css); every other blockquote falls through to
     // marked's own renderer, untouched.
+    table(token: Tokens.Table) {
+      token.header.forEach((head, column) => {
+        const cells = [head, ...token.rows.map((row) => row[column])];
+        if (
+          cells.some(
+            (cell) => cell && visibleLength(cell.tokens) > PROSE_CELL_CHARS,
+          )
+        ) {
+          for (const cell of cells) if (cell) proseCells.add(cell);
+        }
+      });
+      return false;
+    },
+    tablecell(token: Tokens.TableCell) {
+      if (!proseCells.has(token)) return false;
+      const tag = token.header ? "th" : "td";
+      const align = token.align ? ` align="${token.align}"` : "";
+      return `<${tag} class="md-prose-cell"${align}>${this.parser.parseInline(token.tokens)}</${tag}>\n`;
+    },
     blockquote(token: Tokens.Blockquote) {
       const callout = calloutOf(token);
       if (!callout) return false;

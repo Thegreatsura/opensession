@@ -461,6 +461,25 @@ html[data-theme="light"] .composer-hl .cmp-fence {
 .markdown tr:last-child td {
   border-bottom: none;
 }
+/* On a phone a table squeezes every column into the screen width: a
+   description wraps to a word or two per line and `anywhere` splits "#412"
+   into three. Keep short values whole, give prose columns (marked by the
+   renderer, lib/markdown.ts) a readable floor, and let the table scroll
+   sideways instead. The floor is a zero-height block rather than min-width,
+   which table layout ignores on cells. */
+@media (max-width: 720px) {
+  .markdown :is(td, th) {
+    overflow-wrap: break-word;
+  }
+  .markdown .md-prose-cell {
+    overflow-wrap: anywhere;
+  }
+  .markdown .md-prose-cell::before {
+    content: "";
+    display: block;
+    width: 10em;
+  }
+}
 
 .markdown hr {
   border: none;

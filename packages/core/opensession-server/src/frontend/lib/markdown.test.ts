@@ -1754,3 +1754,25 @@ describe("markdownAffordable", () => {
     expect(markdownAffordable(fill(600, "- item\n"))).toBe(false);
   });
 });
+
+describe("renderMarkdown tables", () => {
+  it("marks the columns that hold prose, counting link labels not URLs", () => {
+    const html = renderMarkdown(
+      "| PR | What it does | Status |\n|---|---|---|\n" +
+        "| [#412](https://github.com/acme/web/pull/412) | Fixes the login redirect loop | Merged |\n" +
+        "| [#415](https://github.com/acme/web/pull/415) | CSV export | Draft |\n",
+    );
+    const cells = html.match(/<t[dh](?: [^>]*)?>/g);
+    expect(cells).toEqual([
+      "<th>",
+      '<th class="md-prose-cell">',
+      "<th>",
+      "<td>",
+      '<td class="md-prose-cell">',
+      "<td>",
+      "<td>",
+      '<td class="md-prose-cell">',
+      "<td>",
+    ]);
+  });
+});
