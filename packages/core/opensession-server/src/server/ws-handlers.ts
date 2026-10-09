@@ -21,7 +21,7 @@ import {
 } from "./agent-runner";
 
 import { audit } from "./audit";
-import { pendingAskAwaitingAnswer } from "./asks";
+import { pendingAskAwaitingAnswer, skipPendingAskForMessage } from "./asks";
 import { resendPendingSlackComposer } from "./slack-compose";
 import { notifyMentions } from "./mentions";
 import {
@@ -183,6 +183,16 @@ function lastRestartBy(): string {
     } catch {}
   }
   return g.__lastRestartBy;
+}
+
+/** A message sent while the run waits on its question skips the question. */
+async function skipAskForSend(
+  sessionId: string,
+  steered: boolean,
+): Promise<void> {
+  await skipPendingAskForMessage(sessionId, steered).catch((error) =>
+    console.error(`[ask] Skip on send failed for ${sessionId}:`, error),
+  );
 }
 
 /**
@@ -1474,6 +1484,7 @@ export const websocketHandlers: WebSocketHandler<WSClientData> = {
                 hold: true,
               });
               watchExternalRunAndDrain(sessionId);
+              await skipAskForSend(sessionId, false);
               break;
             }
             const attributed = user ? `[${user}] ${content}` : content;
@@ -1508,6 +1519,7 @@ export const websocketHandlers: WebSocketHandler<WSClientData> = {
               if (steerResult !== "not_prepared") {
                 if (steerResult === "rejected")
                   watchExternalRunAndDrain(sessionId);
+                await skipAskForSend(sessionId, steerResult === "steered");
                 break;
               }
               const promptEntryId = steerItem.promptEntryId || steerItem.id;
@@ -1528,6 +1540,7 @@ export const websocketHandlers: WebSocketHandler<WSClientData> = {
                 { required: true },
               );
               watchExternalRunAndDrain(sessionId);
+              await skipAskForSend(sessionId, false);
               break;
             }
             await enqueuePrompt(sessionId, {
@@ -1539,6 +1552,7 @@ export const websocketHandlers: WebSocketHandler<WSClientData> = {
               contextSessions,
             });
             watchExternalRunAndDrain(sessionId);
+            await skipAskForSend(sessionId, false);
             break;
           }
 

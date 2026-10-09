@@ -28,6 +28,7 @@ import { audit } from "../audit";
 import {
   pendingAskAwaitingAnswerSync,
   pendingAskIdsAwaitingAnswer,
+  skipPendingAskForMessage,
 } from "../asks";
 import { prepareEntriesForWire, transcriptMatchSnippet } from "../jsonl-parser";
 import { classifyEntry } from "@tellahq/opensession-protocol/notices";
@@ -1480,6 +1481,19 @@ export async function handleSessionsRoutes(
       }
       if (session && result.status !== "handled") {
         await unarchiveForHumanTurn(session);
+      }
+      // A message sent while the run waits on its question skips the
+      // question, so the run takes the message instead of hanging on the card.
+      if (
+        !result.duplicate &&
+        (result.status === "steered" || result.status === "queued")
+      ) {
+        await skipPendingAskForMessage(
+          sessionId,
+          result.status === "steered",
+        ).catch((error) =>
+          console.error(`[ask] Skip on send failed for ${sessionId}:`, error),
+        );
       }
       if (session && !result.duplicate) {
         await notifyMentions(content, String(user || ""), sessionId, "prompt");

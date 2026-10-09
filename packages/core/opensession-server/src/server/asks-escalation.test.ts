@@ -2,6 +2,7 @@
  * An unanswered run-blocking question escalates to Slack. The escalation must
  * not put up a second card: a session has one card slot, so a second card
  * replaced the run's own card, and dismissing it never released the run.
+ * A message sent while the run waits skips the question the same way.
  */
 import { afterAll, expect, mock, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -46,8 +47,13 @@ mock.module("./session-cache", () => ({
       : undefined,
 }));
 
-const { makeAskHandler, pendingAskAwaitingAnswer, pendingAskTimers } =
-  await import("./asks");
+const {
+  makeAskHandler,
+  offerAskCard,
+  pendingAskAwaitingAnswer,
+  pendingAskTimers,
+  skipPendingAskForMessage,
+} = await import("./asks");
 const { deliverAsk, getAsk } = await import("./human-asks");
 
 afterAll(() => {
@@ -101,4 +107,39 @@ test("dismissing the card after Slack escalation releases the run", async () => 
   await pending!.resolve(null);
   expect(await result).toMatchObject({ behavior: "deny" });
   expect(getAsk(askId)?.state).toBe("cancelled");
+});
+
+async function waitForCard(sessionId: string) {
+  for (let i = 0; i < 100; i++) {
+    const pending = await pendingAskAwaitingAnswer(sessionId);
+    if (pending) return pending;
+    await Bun.sleep(5);
+  }
+  throw new Error("No question card went up");
+}
+
+test("a message sent while the run waits skips its question", async () => {
+  const result = makeAskHandler(SESSION)({
+    questions: [{ header: "Choice", question: "Which one?" }],
+  });
+  await waitForCard(SESSION);
+
+  expect(await skipPendingAskForMessage(SESSION, true)).toBe(true);
+  const outcome = await result;
+  expect(outcome).toMatchObject({ behavior: "deny" });
+  expect((outcome as { message: string }).message).toContain(
+    "sent a message instead. Their message follows",
+  );
+  expect(await pendingAskAwaitingAnswer(SESSION)).toBeUndefined();
+});
+
+test("a message leaves a teammate's question card alone", async () => {
+  const answers: unknown[] = [];
+  const card = await offerAskCard(SESSION, [{ question: "Approve?" }], (a) =>
+    answers.push(a),
+  );
+  expect(await skipPendingAskForMessage(SESSION, true)).toBe(false);
+  expect(await pendingAskAwaitingAnswer(SESSION)).toBeDefined();
+  expect(answers).toEqual([]);
+  await card.close();
 });

@@ -798,6 +798,37 @@ export async function offerAskCard(
   };
 }
 
+/** Why a run's question was skipped, keyed by question id. Read once by the
+ * waiting handler to tell the model what replaced the answer. */
+const skippedAskNotes = new Map<string, string>();
+
+/**
+ * A message sent while the run waits on its question skips the question: the
+ * person moved on, so the run must not keep waiting for a card nobody is
+ * answering. `steered` says the message was folded into this turn and will
+ * reach the model right after the tool result.
+ */
+export async function skipPendingAskForMessage(
+  sessionId: string,
+  steered: boolean,
+): Promise<boolean> {
+  const pending = await pendingAskAwaitingAnswer(sessionId);
+  if (!pending?.durable || pending.restored) return false;
+  skippedAskNotes.set(
+    pending.questionId,
+    steered
+      ? "The person skipped this question and sent a message instead. Their message follows: act on it, and do not ask this question again unless it is still needed."
+      : "The person skipped this question and sent a message instead, which arrives after this turn. Proceed with your best judgment, or end the turn if the work depends on their reply.",
+  );
+  try {
+    await pending.resolve(null);
+  } catch (error) {
+    skippedAskNotes.delete(pending.questionId);
+    throw error;
+  }
+  return true;
+}
+
 export function makeAskHandler(sessionId: string) {
   return async (
     input: Record<string, unknown>,
@@ -941,9 +972,12 @@ export function makeAskHandler(sessionId: string) {
     });
 
     if (!answers) {
+      const skipped = skippedAskNotes.get(questionId);
+      skippedAskNotes.delete(questionId);
       return {
         behavior: "deny",
         message:
+          skipped ??
           "The question was dismissed or nobody answered in time (web or Slack). Proceed with your best judgment and clearly note the open question and the assumption you made.",
       };
     }
