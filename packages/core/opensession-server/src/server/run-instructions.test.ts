@@ -192,7 +192,9 @@ describe("buildRunInstructions", () => {
     // number in every sentence.
     // The CI line in Waiting adds ~140: polling checks in a tool call was a
     // quarter of active agent time on PR work.
-    expect(prompt.length).toBeLessThan(3_660);
+    // The table line in Media adds ~220: multi-PR summaries came out as
+    // paragraphs that a table scans faster.
+    expect(prompt.length).toBeLessThan(3_880);
   });
 
   test("asks for visual proof by default only where walkthroughs are mounted", () => {
