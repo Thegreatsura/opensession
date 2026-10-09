@@ -89,6 +89,11 @@ import {
   type ThinkingMessagesPref,
 } from "../../lib/thinking-messages-pref";
 import {
+  getComposerPredictionsPref,
+  onComposerPredictionsChanged,
+  setComposerPredictionsPref,
+} from "../../lib/composer-prediction-pref";
+import {
   getReplySuggestionsPref,
   onReplySuggestionsChanged,
   setReplySuggestionsPref,
@@ -676,6 +681,16 @@ export function PreferencesPanel() {
   const [quickReplies, setQuickReplies] = useState<boolean>(
     getReplySuggestionsPref,
   );
+  const [predictions, setPredictions] = useState<boolean>(
+    getComposerPredictionsPref,
+  );
+  useEffect(
+    () =>
+      onComposerPredictionsChanged(() =>
+        setPredictions(getComposerPredictionsPref()),
+      ),
+    [],
+  );
   const [nextChatButton, setNextChatButton] = useState<boolean>(
     getNextChatButtonPref,
   );
@@ -900,6 +915,17 @@ export function PreferencesPanel() {
               aria-label="Quick replies"
               checked={quickReplies}
               onCheckedChange={setReplySuggestionsPref}
+            />
+          }
+        />
+        <SettingRow
+          title="Predicted reply"
+          desc="Suggest your next message in the composer. Press Tab to use it."
+          control={
+            <Switch
+              aria-label="Predicted reply"
+              checked={predictions}
+              onCheckedChange={setComposerPredictionsPref}
             />
           }
         />

@@ -138,6 +138,10 @@ import {
   clearReplySuggestions,
   maybeSuggestReplies,
 } from "./reply-suggestions";
+import {
+  clearComposerPrediction,
+  maybePredictComposer,
+} from "./composer-prediction";
 import { commitAuthorFor } from "./shared/user-mappings";
 import { writeFileAtomic, writeJsonAtomic } from "./shared/atomic-write";
 import { startWatching } from "./file-watcher";
@@ -3158,6 +3162,7 @@ async function runSessionPromptInner(
   // The last turn's quick-reply chips offered a choice that this prompt just
   // made, whichever way it was made (see reply-suggestions.ts).
   clearReplySuggestions(sessionId);
+  clearComposerPrediction(sessionId);
 
   // Everyone viewing this session sees the prompt and the live run
   broadcastToSession(sessionId, {
@@ -4008,8 +4013,12 @@ async function runSessionPromptInner(
     // choice as chips above the composer. Generated only for a watcher who is
     // actually there; anyone arriving later gets them on watch instead
     // (reply-suggestions.ts).
-    if (!endedWithError && assistantText.trim())
+    if (!endedWithError && assistantText.trim()) {
       maybeSuggestReplies(sessionId, user || session.startedBy || undefined);
+      // The predicted next message in the empty composer's placeholder
+      // (composer-prediction.ts). Same presence gate as the chips.
+      maybePredictComposer(sessionId, user || session.startedBy || undefined);
+    }
   }
 }
 

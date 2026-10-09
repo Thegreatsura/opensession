@@ -315,6 +315,7 @@ interface ActionBandRegion {
   isPhone: boolean;
   replySuggestions: ReplySuggestion[];
   pickReplySuggestion: (text: string) => void;
+  prediction: string | null;
   transcriptDownKeys: string[] | null;
   archiving: boolean;
   handleArchive: () => void | Promise<void>;
@@ -581,6 +582,7 @@ export function SessionViewerMainRegion({
     isPhone,
     replySuggestions,
     pickReplySuggestion,
+    prediction,
     transcriptDownKeys,
     archiving,
     handleArchive,
@@ -1400,6 +1402,19 @@ export function SessionViewerMainRegion({
                                 : isAsk
                                   ? `Ask ${AGENT_NAME}, read-only…`
                                   : `Ask ${AGENT_NAME}…`,
+                    // Same conditions as the chips: it answers a finished
+                    // turn, and an ask card or a fork is a different reply.
+                    // Phones have no Tab key to take it with.
+                    prediction:
+                      safety ||
+                      promoting ||
+                      isPhone ||
+                      isBusy ||
+                      ask ||
+                      forkFrom ||
+                      !connected
+                        ? null
+                        : prediction,
                     disabled: !!safety || (!connected && !!forkFrom),
                     sendDisabled: (text) =>
                       !!safety ||

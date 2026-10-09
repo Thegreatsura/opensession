@@ -955,6 +955,7 @@ export function SessionViewer({
       setContextSessions,
       setPrefill: setComposerPrefill,
       setReplySuggestions,
+      setComposerPrediction: viewState.preferences.setComposerPrediction,
       emptySuggestions: EMPTY_SUGGESTIONS,
     },
     slack: {
@@ -1797,6 +1798,7 @@ export function SessionViewer({
             isPhone,
             replySuggestions,
             pickReplySuggestion,
+            prediction: viewState.preferences.composerPrediction,
             transcriptDownKeys,
             archiving,
             handleArchive,
