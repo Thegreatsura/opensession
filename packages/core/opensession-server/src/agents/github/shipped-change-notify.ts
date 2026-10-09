@@ -20,16 +20,8 @@ import { writeJsonAtomic } from "../../server/shared/atomic-write";
 import { UPLOADS_DIR } from "../../server/uploads";
 import { homeDir } from "../../server/paths";
 import type { UnifiedSession } from "../../server/types";
-import {
-  postSlackFiles,
-  sendSlackMessage,
-  slackPermalink,
-  slackUploadTs,
-} from "../slack/slack-api";
-import {
-  joinSlackChannelIfNeeded,
-  resolveSlackChannel,
-} from "../slack/channel-directory";
+import { postAsSlackBot } from "../slack/bot-post";
+import { resolveSlackChannel } from "../slack/channel-directory";
 import { shippedChangesChannel } from "./constants";
 import { slackMessageLength } from "../../shared/slack-mentions";
 
@@ -267,7 +259,8 @@ export async function shareShippedVisualChange(opts: {
    *  caller's own grant can reach. */
   channel?: string;
   message?: string;
-  /** Whose grant `slackToken` is; keys their channel directory. */
+  /** Whose grant `slackToken` is; keys their channel directory. The grant
+   *  only resolves channels: the message always goes out as the bot. */
   caller?: string;
   slackToken?: string;
   screenshots?: string[];
@@ -279,17 +272,14 @@ export async function shareShippedVisualChange(opts: {
   ts?: string;
   announcementKey?: string;
 }> {
-  if (!opts.slackToken) {
-    throw new Error(
-      "Connect your Slack account in Settings → Account to post as yourself",
-    );
-  }
   const wanted = opts.channel || shippedChangesChannel();
   if (!wanted) throw new Error("Shipped changes channel is not configured");
   const target = await resolveSlackChannel(
     wanted,
     shippedChangeChannels(),
-    opts.caller ? { caller: opts.caller, token: opts.slackToken } : undefined,
+    opts.caller && opts.slackToken
+      ? { caller: opts.caller, token: opts.slackToken }
+      : undefined,
   );
   if (!target) throw new Error("Choose a Slack channel you can post to");
   const channel = target.id;
@@ -316,39 +306,16 @@ export async function shareShippedVisualChange(opts: {
   let permalink: string | undefined;
   let ts: string | undefined;
   try {
-    if (opts.caller)
-      await joinSlackChannelIfNeeded(target, {
-        caller: opts.caller,
-        token: opts.slackToken,
-      });
-    if (visual) {
-      const completed = await postSlackFiles(
-        channel,
-        visual.screenshots,
-        comment,
-        {
-          title: `${title} · shipped`,
-          altText: `Screenshot of the shipped visual change: ${title}`,
-        },
-        opts.slackToken,
-      );
-      ts = await slackUploadTs(completed, channel, opts.slackToken);
-    } else {
-      const posted = await sendSlackMessage(
-        channel,
-        comment,
-        undefined,
-        opts.slackToken,
-      );
-      if (!posted?.ok)
-        throw new Error(
-          `Slack message failed: ${posted?.error || "invalid response"}`,
-        );
-      ts = typeof posted.ts === "string" ? posted.ts : undefined;
-    }
-    permalink = ts
-      ? await slackPermalink(channel, ts, opts.slackToken)
-      : undefined;
+    // Posted as the bot, never as the person who pressed Send.
+    ({ ts, permalink } = await postAsSlackBot(
+      target,
+      comment,
+      visual?.screenshots || [],
+      {
+        title: `${title} · shipped`,
+        altText: `Screenshot of the shipped visual change: ${title}`,
+      },
+    ));
     settleShippedChangeAnnouncement(
       announcementKey,
       claimId,

@@ -99,22 +99,18 @@ export async function handleShippedChangeRoutes(
   const { mcpUserGrantToken } = await import("../mcp-oauth");
   const slackToken = caller ? mcpUserGrantToken("slack", caller) : undefined;
   // PUT is undo: take the message back out of Slack and drop the receipt, so
-  // the card offers the send again.
+  // the card offers the send again. The bot posted it, so the bot deletes it,
+  // and only for the person the receipt names.
   if (req.method === "PUT") {
     const at = typeof body?.at === "string" ? body.at : "";
     const share = session.slackShares?.find((candidate) => candidate.at === at);
-    if (!share || !share.ts)
+    if (!share || !share.ts || (share.by && share.by !== caller))
       return Response.json(
         { error: "That message can no longer be undone" },
         { status: 409 },
       );
-    if (!slackToken)
-      return Response.json(
-        { error: "Connect your Slack account in Settings → Account" },
-        { status: 403 },
-      );
     try {
-      await deleteSlackMessage(share.channelId, share.ts, slackToken);
+      await deleteSlackMessage(share.channelId, share.ts);
     } catch (error: any) {
       return Response.json(
         { error: error?.message || "Couldn't undo the Slack message" },
@@ -191,12 +187,6 @@ export async function handleShippedChangeRoutes(
     }
     return Response.json({ ...result, share });
   } catch (error: any) {
-    if (error?.message === "SLACK_RECONNECT_REQUIRED") {
-      return Response.json(
-        { error: "Reconnect Slack to add image access, then send again" },
-        { status: 403 },
-      );
-    }
     return Response.json(
       { error: error?.message || "Couldn't share the shipped update" },
       { status: 502 },

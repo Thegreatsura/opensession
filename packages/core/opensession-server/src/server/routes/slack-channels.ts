@@ -75,19 +75,8 @@ export async function slackChannelsPayload(
   const caller = ctx.authUser?.login || ctx.authUser?.name || undefined;
   const { mcpUserGrantToken } = await import("../mcp-oauth");
   const grantToken = caller ? mcpUserGrantToken("slack", caller) : undefined;
-  let canUploadImages = false;
-  if (grantToken) {
-    try {
-      const response = await fetch("https://slack.com/api/auth.test", {
-        headers: { Authorization: `Bearer ${grantToken}` },
-        signal: AbortSignal.timeout(5_000),
-      });
-      canUploadImages = (response.headers.get("x-oauth-scopes") || "")
-        .split(",")
-        .map((scope) => scope.trim())
-        .includes("files:write");
-    } catch {}
-  }
+  // Drafts post as the bot, which carries files:write itself.
+  const canUploadImages = Boolean(process.env.SLACK_BOT_TOKEN);
   const directory = !opts.everyChannel
     ? []
     : process.env.OPENSESSION_DEMO === "1"

@@ -326,8 +326,9 @@ export async function slackUploadPermalink(
 }
 
 /**
- * Remove a message from Slack. Slack only lets a user token delete that user's
- * own messages, which is exactly the undo we offer after a send.
+ * Remove a message from Slack: the undo offered after a reviewed draft is
+ * sent. The bot token deletes the bot's own messages, so callers must check
+ * the message is one they recorded sending for this person.
  */
 export async function deleteSlackMessage(
   channel: string,

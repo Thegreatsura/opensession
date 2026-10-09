@@ -4,6 +4,7 @@ import {
   claimPendingSlackComposer,
   openSlackComposer,
   pendingSlackComposers,
+  rememberSentSlackComposerMessage,
   resendPendingSlackComposer,
   restorePendingSlackComposer,
   sendPendingSlackComposer,
@@ -35,6 +36,62 @@ afterEach(() => {
       restorePendingSlackComposer(sessionId, pending.request.id);
     cancelPendingSlackComposer(sessionId, pending.request.id);
   }
+});
+
+describe("Slack composer undo", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const path = "/api/sessions/os-undo/slack-composer/undo";
+
+  test("deletes only a message this composer sent for the caller", async () => {
+    const deleted: object[] = [];
+    globalThis.fetch = (async (_input: any, init?: RequestInit) => {
+      deleted.push(JSON.parse(String(init?.body)));
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+    rememberSentSlackComposerMessage("os-undo", {
+      channelId: "C0ACME01",
+      ts: "1.2",
+      by: "michiel",
+    });
+    const unknown = await handleSlackComposeRoutes(
+      routeContext(
+        path,
+        { login: "michiel", name: "Michiel" },
+        { body: { channel: "C0ACME01", ts: "9.9" } },
+      ),
+    );
+    expect(unknown?.status).toBe(409);
+    const someoneElse = await handleSlackComposeRoutes(
+      routeContext(
+        path,
+        { login: "acme", name: "Acme" },
+        { body: { channel: "C0ACME01", ts: "1.2" } },
+      ),
+    );
+    expect(someoneElse?.status).toBe(409);
+    expect(deleted).toEqual([]);
+
+    const own = await handleSlackComposeRoutes(
+      routeContext(
+        path,
+        { login: "michiel", name: "Michiel" },
+        { body: { channel: "C0ACME01", ts: "1.2" } },
+      ),
+    );
+    expect(own?.status).toBe(200);
+    expect(deleted).toEqual([{ channel: "C0ACME01", ts: "1.2" }]);
+    const again = await handleSlackComposeRoutes(
+      routeContext(
+        path,
+        { login: "michiel", name: "Michiel" },
+        { body: { channel: "C0ACME01", ts: "1.2" } },
+      ),
+    );
+    expect(again?.status).toBe(409);
+  });
 });
 
 describe("Slack composer lifecycle", () => {

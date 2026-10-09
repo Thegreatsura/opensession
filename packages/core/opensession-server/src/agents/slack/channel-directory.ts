@@ -230,18 +230,20 @@ export async function resolveSlackChannel(
   if (typeof wanted !== "string" || !wanted.trim()) return undefined;
   const fromConfig = findSlackChannel(configured, wanted);
   if (fromConfig) return fromConfig;
-  if (!auth) return undefined;
-  const fromDirectory = findSlackChannel(
-    await slackChannelsForUser(auth.caller, auth.token),
-    wanted,
-  );
-  if (fromDirectory) return fromDirectory;
+  if (auth) {
+    const fromDirectory = findSlackChannel(
+      await slackChannelsForUser(auth.caller, auth.token),
+      wanted,
+    );
+    if (fromDirectory) return fromDirectory;
+  }
   const id = wanted.trim();
   if (!isSlackChannelId(id)) return undefined;
+  // Without the caller's grant the bot looks the id up itself.
   const info = await slackApiGet(
     "conversations.info",
     { channel: id },
-    auth.token,
+    auth?.token,
   ).catch(() => null);
   const name = info?.ok ? info.channel?.name : undefined;
   return typeof name === "string" && name ? { id, name } : undefined;

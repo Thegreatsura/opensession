@@ -1,18 +1,16 @@
-import {
-  deleteSlackMessage,
-  postSlackFiles,
-  sendSlackMessage,
-  slackPermalink,
-  slackUploadTs,
-} from "../../agents/slack/slack-api";
+import { deleteSlackMessage } from "../../agents/slack/slack-api";
+import { postAsSlackBot } from "../../agents/slack/bot-post";
 import { validFeaturedScreenshot } from "../../agents/github/shipped-change-notify";
 import {
   cancelPendingSlackComposer,
   claimPendingSlackComposer,
+  forgetSentSlackComposerMessage,
   openSlackComposer,
   pendingSlackComposers,
+  rememberSentSlackComposerMessage,
   restorePendingSlackComposer,
   sendPendingSlackComposer,
+  sentSlackComposerMessage,
   snapshotPendingSlackImages,
   updatePendingSlackComposer,
 } from "../slack-compose";
@@ -23,7 +21,6 @@ import {
 } from "./slack-channels";
 import {
   isSlackChannelId,
-  joinSlackChannelIfNeeded,
   resolveSlackChannel,
 } from "../../agents/slack/channel-directory";
 import type { RouteContext } from "./context";
@@ -71,12 +68,14 @@ export async function handleSlackComposeRoutes(
       );
     }
   }
-  // Undo: take a message this person just sent back out of Slack. Their own
-  // user token is the authority, so Slack refuses anything that isn't theirs.
+  // Undo: take a message this person just sent back out of Slack. Drafts go
+  // out as the bot, which could delete any bot message, so only a message
+  // this composer posted for this caller qualifies.
   const undoMatch = ctx.path.match(
     /^\/api\/sessions\/([^/]+)\/slack-composer\/undo$/,
   );
   if (undoMatch && ctx.req.method === "POST") {
+    const sessionId = decodeURIComponent(undoMatch[1]);
     const caller = ctx.authUser?.login || ctx.authUser?.name;
     if (!caller) {
       return Response.json(
@@ -85,35 +84,30 @@ export async function handleSlackComposeRoutes(
       );
     }
     const body = await ctx.req.json().catch(() => ({}));
-    // Deleting needs only the id, and Slack itself refuses anything that
-    // isn't the caller's own message, so the id does not have to be listed.
     const channelId =
       typeof body?.channel === "string" && isSlackChannelId(body.channel.trim())
         ? body.channel.trim()
         : "";
     const ts = typeof body?.ts === "string" ? body.ts : "";
-    if (!channelId || !ts) {
+    if (
+      !channelId ||
+      !ts ||
+      !sentSlackComposerMessage(sessionId, channelId, ts, caller)
+    ) {
       return Response.json(
         { error: "That message can no longer be undone" },
         { status: 409 },
       );
     }
-    const { mcpUserGrantToken } = await import("../mcp-oauth");
-    const slackToken = mcpUserGrantToken("slack", caller);
-    if (!slackToken) {
-      return Response.json(
-        { error: "Connect your Slack account in Settings → Account" },
-        { status: 403 },
-      );
-    }
     try {
-      await deleteSlackMessage(channelId, ts, slackToken);
+      await deleteSlackMessage(channelId, ts);
     } catch (error: any) {
       return Response.json(
         { error: error?.message || "Couldn't undo the Slack message" },
         { status: 502 },
       );
     }
+    forgetSentSlackComposerMessage(sessionId, channelId, ts);
     return Response.json({ status: "undone" });
   }
   const match = ctx.path.match(/^\/api\/sessions\/([^/]+)\/slack-composer$/);
@@ -189,6 +183,8 @@ export async function handleSlackComposeRoutes(
     return Response.json(request);
   }
 
+  // The caller's own grant only widens which channels they can pick; the
+  // message itself always goes out as the bot.
   const { mcpUserGrantToken } = await import("../mcp-oauth");
   const slackToken = mcpUserGrantToken("slack", caller);
   const channel = await targetChannel(
@@ -213,15 +209,6 @@ export async function handleSlackComposeRoutes(
     );
   }
 
-  if (!slackToken) {
-    return Response.json(
-      {
-        error:
-          "Connect your Slack account in Settings → Account to post as yourself",
-      },
-      { status: 403 },
-    );
-  }
   if (!claimPendingSlackComposer(sessionId, requestId)) {
     return Response.json(
       { error: "Slack message is already being sent" },
@@ -229,53 +216,30 @@ export async function handleSlackComposeRoutes(
     );
   }
   try {
-    await joinSlackChannelIfNeeded(channel, { caller, token: slackToken });
     const snapshottedScreenshots = snapshotPendingSlackImages(
       sessionId,
       requestId,
       screenshots,
     );
-    let ts: string | undefined;
-    if (snapshottedScreenshots.length > 0) {
-      const completed = await postSlackFiles(
-        channel.id,
-        snapshottedScreenshots,
-        message,
-        {
-          title: "Open Session update",
-          altText: "Image attached to an Open Session update",
-        },
-        slackToken,
-      );
-      ts = await slackUploadTs(completed, channel.id, slackToken);
-    } else {
-      const posted = await sendSlackMessage(
-        channel.id,
-        message,
-        undefined,
-        slackToken,
-      );
-      if (!posted?.ok)
-        throw new Error(posted?.error || "Slack returned an invalid response");
-      ts = typeof posted.ts === "string" ? posted.ts : undefined;
-    }
-    const permalink = ts
-      ? await slackPermalink(channel.id, ts, slackToken)
-      : undefined;
+    const { ts, permalink } = await postAsSlackBot(
+      channel,
+      message,
+      snapshottedScreenshots,
+      {
+        title: "Open Session update",
+        altText: "Image attached to an Open Session update",
+      },
+    );
+    if (ts)
+      rememberSentSlackComposerMessage(sessionId, {
+        channelId: channel.id,
+        ts,
+        by: caller,
+      });
     sendPendingSlackComposer(sessionId, requestId, channel, permalink, ts);
     return Response.json({ status: "sent", channel, permalink, ts });
   } catch (error: any) {
     restorePendingSlackComposer(sessionId, requestId);
-    if (
-      /SLACK_RECONNECT_REQUIRED|missing_scope|not_allowed_token_type/.test(
-        error?.message || "",
-      )
-    ) {
-      return Response.json(
-        { error: "Reconnect Slack to add image access, then send again" },
-        { status: 403 },
-      );
-    }
     return Response.json(
       { error: error?.message || "Couldn't send to Slack" },
       { status: 502 },

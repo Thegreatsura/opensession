@@ -39,6 +39,56 @@ const g = globalThis as any;
 export const pendingSlackComposers: Map<string, PendingSlackComposer> =
   (g.__pendingSlackComposers ??= new Map());
 
+interface SentSlackComposerMessage {
+  channelId: string;
+  ts: string;
+  by: string;
+}
+
+/** Messages the composer posted, by session. Drafts go out as the bot, which
+ *  can delete any bot message, so undo is limited to what is listed here and
+ *  to the person who sent it. */
+const sentSlackComposerMessages: Map<string, SentSlackComposerMessage[]> =
+  (g.__sentSlackComposerMessages ??= new Map());
+
+export function rememberSentSlackComposerMessage(
+  sessionId: string,
+  message: SentSlackComposerMessage,
+): void {
+  const sent = sentSlackComposerMessages.get(sessionId) || [];
+  sentSlackComposerMessages.set(sessionId, [...sent, message].slice(-20));
+}
+
+export function sentSlackComposerMessage(
+  sessionId: string,
+  channelId: string,
+  ts: string,
+  by: string,
+): boolean {
+  return !!sentSlackComposerMessages
+    .get(sessionId)
+    ?.some(
+      (message) =>
+        message.channelId === channelId &&
+        message.ts === ts &&
+        message.by === by,
+    );
+}
+
+export function forgetSentSlackComposerMessage(
+  sessionId: string,
+  channelId: string,
+  ts: string,
+): void {
+  const sent = sentSlackComposerMessages.get(sessionId);
+  if (!sent) return;
+  const rest = sent.filter(
+    (message) => message.channelId !== channelId || message.ts !== ts,
+  );
+  if (rest.length) sentSlackComposerMessages.set(sessionId, rest);
+  else sentSlackComposerMessages.delete(sessionId);
+}
+
 function snapshotImages(
   sessionId: string,
   requestId: string,
