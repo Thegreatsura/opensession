@@ -870,6 +870,57 @@ export function piSteeringBoundaryTools(
   }));
 }
 
+/** The part of pi's Agent a steer interrupt reads and drives. */
+export type PiSteerInterruptTarget = {
+  readonly state: {
+    readonly streamingMessage?: { role: string; content?: unknown };
+    readonly pendingToolCalls: ReadonlySet<string>;
+  };
+  hasQueuedMessages(): boolean;
+  abort(): void;
+};
+
+/** Whether an assistant message has started anything a person would lose:
+ *  reply text or a tool call. Thinking alone does not count. */
+export function piResponseHasOutput(content: unknown): boolean {
+  if (!Array.isArray(content)) return false;
+  return content.some((raw) => {
+    const block = raw as { type?: string; text?: unknown } | null;
+    if (!block || typeof block !== "object") return false;
+    if (block.type === "toolCall") return true;
+    return (
+      block.type === "text" &&
+      typeof block.text === "string" &&
+      block.text.trim().length > 0
+    );
+  });
+}
+
+/**
+ * Pi polls its steer queue only between model responses, so a steer sent
+ * while the model is still thinking waits for that whole response. With high
+ * effort that is often most of a minute, and the person's message sits
+ * unread.
+ *
+ * While the response is still only thinking, cut it short: abort just the
+ * agent's current model request, never the session. AgentSession's post-run
+ * loop sees the queued steer and continues at once, so the model starts over
+ * with the steer in view. Once the response has written reply text or a tool
+ * call, it is left to finish, and the steer lands at the next step as before.
+ * Running tools are never touched. Returns whether it aborted.
+ */
+export function interruptPiThinkingForSteer(
+  agent: PiSteerInterruptTarget,
+): boolean {
+  const streaming = agent.state.streamingMessage;
+  if (streaming?.role !== "assistant") return false;
+  if (piResponseHasOutput(streaming.content)) return false;
+  if (agent.state.pendingToolCalls.size > 0) return false;
+  if (!agent.hasQueuedMessages()) return false;
+  agent.abort();
+  return true;
+}
+
 /** Pi assigns `<parent id>/<n>` to calls a tool makes through
  *  `ctx.executeTool()`, which is how codemode scripts call tools. */
 export function isPiNestedToolCall(toolCallId: string): boolean {
@@ -3261,6 +3312,20 @@ async function* runPiAttempt(
           engineQueueDepth--;
         });
     };
+    // Set when a steer cut the current response short while it was only
+    // thinking. Its message_end then persists nothing: the thinking was
+    // superseded, and the next response starts from the steer.
+    let steerCutResponse = false;
+    const interruptForSteer = () => {
+      if (abort.signal.aborted) return;
+      if (!interruptPiThinkingForSteer(liveSession.agent)) return;
+      steerCutResponse = true;
+      audit({
+        ...auditBase,
+        direction: "in",
+        kind: "steer_interrupted_response",
+      });
+    };
     handle.steer = (text, images, steerId) => {
       // Same skill expansion as the prompt path. The queue holds the expanded
       // text so the delivery match stays exact; the audit line below still
@@ -3288,6 +3353,7 @@ async function* runPiAttempt(
         );
         if (!pendingSteers.includes(entry)) return; // retracted meanwhile
         await liveSession.steer(entry.text, piImages(images));
+        interruptForSteer();
       }, "steer");
       audit({
         ...auditBase,
@@ -3471,6 +3537,11 @@ async function* runPiAttempt(
       try {
         checkpointWriter?.observe(ev);
         switch (ev.type) {
+          case "message_start":
+            // A steer queued while the request was in flight, before its
+            // first token, cuts the response as soon as it starts.
+            if ((ev as any).message?.role === "assistant") interruptForSteer();
+            break;
           case "message_update": {
             const ame = (ev as any).assistantMessageEvent;
             if (
@@ -3546,7 +3617,15 @@ async function* runPiAttempt(
               // and the terminal error carries the failure text — persisting
               // each attempt would stack duplicate partial bubbles. Aborted
               // partials DO persist (parity with pi's own jsonl).
-              if (msg.stopReason !== "error") {
+              const cutBySteer = steerCutResponse;
+              steerCutResponse = false;
+              if (
+                cutBySteer &&
+                msg.stopReason === "aborted" &&
+                !piResponseHasOutput(msg.content)
+              ) {
+                // Superseded thinking: keep it out of the transcript.
+              } else if (msg.stopReason !== "error") {
                 persistRunEntries(
                   piAssistantTranscriptEntries(msg.content, ts, parsed.modelID),
                 );

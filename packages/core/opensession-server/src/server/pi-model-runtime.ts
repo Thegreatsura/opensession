@@ -383,6 +383,16 @@ export function piImageBlockToAnthropic(
   };
 }
 
+function assistantHasReplayable(content: PiWireMessage["content"]): boolean {
+  if (!Array.isArray(content)) return false;
+  return content.some(
+    (b) =>
+      !!b &&
+      ((b.type === "text" && typeof b.text === "string" && !!b.text) ||
+        (b.type === "toolCall" && !!b.id)),
+  );
+}
+
 /**
  * Convert pi's Message[] into the AnthropicMessage[] the bridge helpers
  * (flattenMessageText / replayConversation) understand: assistant ToolCall
@@ -417,6 +427,11 @@ export function piMessagesToAnthropic(
         out.push({ role: "user", content: blocks });
       }
     } else if (m.role === "assistant") {
+      // A reply cut off before it wrote text or a tool call (a steer cuts
+      // superseded thinking this way) has nothing to replay, and an empty
+      // assistant turn is not valid input. pi's own providers drop it too.
+      if (m.stopReason === "aborted" && !assistantHasReplayable(m.content))
+        continue;
       const blocks: ContentBlock[] = [];
       if (Array.isArray(m.content)) {
         for (const b of m.content) {
