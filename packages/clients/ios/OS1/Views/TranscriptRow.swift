@@ -51,6 +51,16 @@ struct TranscriptRow: View {
         }
     }
 
+    /// `OS1_EXPAND_LOOPS=1` opens review and check-back folds for the
+    /// screenshot harness; release builds always start them folded.
+    private static let loopsOpenForScreenshot: Bool = {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["OS1_EXPAND_LOOPS"] == "1"
+        #else
+        false
+        #endif
+    }()
+
     private var messageEntryId: String? {
         if case .message(let entry) = block { return entry.id }
         return nil
@@ -151,11 +161,12 @@ struct TranscriptRow: View {
         case .reviewLoop(let loop):
             // Folded by default, like the web: a settled loop's header already
             // says what it concluded, and the rounds behind it are automation.
+            // A check-back fold shares the row.
             ReviewLoopView(
                 loop: loop,
                 sessionId: sessionId,
                 worktreeDir: worktreeDir,
-                state: expansionState(block.id, false),
+                state: expansionState(block.id, Self.loopsOpenForScreenshot),
                 expansionState: expansionState
             )
         case .note(let thread):

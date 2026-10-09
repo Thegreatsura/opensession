@@ -163,7 +163,12 @@ Pure SwiftUI with SwiftStreamingMarkdown for CommonMark/GFM rendering. See
   the worker runs, via `GET /api/sessions/:id/subagent/:agentId`), and a
   footer's file chip opens that file's diff for the turn. A published
   walkthrough (demo recording, writeup, before/after stills) renders as a card
-  under the turn that published it. `bks-…` session ids in agent output become
+  under the turn that published it. A `suggest_task` proposal renders as a
+  card under its work fold, open or shut: Start session creates the session
+  (one request id per proposal, so retries never duplicate it) and opens it,
+  the pencil opens New Session prefilled. A started card stays closed on this
+  device, keyed by proposing session and transcript entry
+  (`StartedSuggestedTasks`). `bks-…` session ids in agent output become
   links labelled with the referenced session's title, and tapping one opens
   that session in the app (falling back to the web app for a session this
   client hasn't polled).

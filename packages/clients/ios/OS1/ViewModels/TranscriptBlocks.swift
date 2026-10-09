@@ -22,7 +22,8 @@ enum TranscriptBlock: Identifiable, Equatable {
     /// A team note that the agent never sees: a comment thread with no
     /// passage, placed by its opening comment's time.
     case note(CommentThread)
-    /// A PR review handoff and the fix work it triggered, as one fold.
+    /// A PR review handoff and the fix work it triggered, or the turns the
+    /// agent started itself (`ReviewLoop.Kind.checkBack`), as one fold.
     case reviewLoop(ReviewLoop)
 
     var id: String {
@@ -80,10 +81,19 @@ enum TranscriptBlock: Identifiable, Equatable {
 /// step rows, with the verdict at the end. Mirrors the web viewer's
 /// `groupReviewLoops` / `ReviewLoopBlock`.
 struct ReviewLoop: Identifiable, Equatable {
+    /// What opened the fold. A check-back is the turns the agent started
+    /// itself, with no person in between: a background wait waking it
+    /// (usually to look at CI again) or its own scheduled check-back. It
+    /// folds the same way and draws the same row, without a PR or verdict.
+    /// Mirrors the web's `CheckBackBlock`.
+    enum Kind: Equatable { case review, checkBack }
+
     var id: String
+    var kind: Kind = .review
     /// The PR under review, when the handoff named one.
     var prNumber: Int?
-    /// How many handoffs this loop swallowed — one per review round.
+    /// How many handoffs this loop swallowed — one per review round — or,
+    /// for a check-back, how many self-started turns.
     var rounds: Int
     /// The loop is the live tail of a running session: still working.
     var isLive: Bool
@@ -103,6 +113,7 @@ struct ReviewLoop: Identifiable, Equatable {
     /// GitHub last reported about the PR.
     var detail: String {
         if isLive { return "Working" }
+        if kind == .checkBack { return rounds == 1 ? "once" : "\(rounds) times" }
         switch result?.status {
         case .passed: return "Ready to merge"
         case .failed: return "Needs changes"
@@ -344,6 +355,10 @@ struct WorkTurn: Identifiable, Equatable {
     /// Media the agent explicitly surfaced. Closed folds keep this visible;
     /// open folds render it in the tool row that produced it.
     var featuredMedia: TranscriptMedia = TranscriptMedia()
+    /// Follow-ups the turn proposed with `suggest_task`, in call order. Like
+    /// featured media they are addressed to the reader rather than steps of
+    /// the work, so the card renders outside the fold, open or shut.
+    var suggestedTasks: [SuggestedTaskProposal] = []
     /// "Bash: bun test" — what the fold is doing right now, shown while it is
     /// live and collapsed so the work never looks stalled.
     var livePreview: String?
@@ -614,8 +629,11 @@ enum TranscriptGrouping {
                 )))
             case .entry(let entry) where entry.turnBoundary == true:
                 // Hidden system-triggered turns separate completed output from
-                // later work without drawing an empty user message.
+                // later work and open a check-back fold. They are structural,
+                // never a blank row: `groupCheckBacks` absorbs or drops every
+                // one, and a loop's row skips any it folded.
                 flush(isTrailing: false)
+                blocks.append(.message(entry))
             case .entry(let entry) where entry.isAssistant:
                 turn.append(.message(entry))
             case .entry(let entry) where entry.isTool:
@@ -638,16 +656,22 @@ enum TranscriptGrouping {
             }
             if isLast { flush(isTrailing: true) }
         }
-        let grouped = groupReviewLoops(
-            place(notes, into: place(walkthrough, into: blocks)),
-            live: live,
-            result: reviewResult
+        let grouped = groupCheckBacks(
+            groupReviewLoops(
+                place(notes, into: place(walkthrough, into: blocks)),
+                live: live,
+                result: reviewResult
+            ),
+            live: live
         )
         return thinkingMessages.visibleBlocks(grouped)
     }
 
     private enum ReviewBlockRole {
         case handoff(prNumber: Int?)
+        /// A background wait's content-free boundary or a scheduled
+        /// check-back: the agent started this turn itself.
+        case checkBack
         case settled(ReviewSettledOutcome)
         case userMessage
         case other
@@ -657,12 +681,14 @@ enum TranscriptGrouping {
     /// message presentation rule so only an actual person's message ends a loop.
     private static func reviewBlockRole(_ block: TranscriptBlock) -> ReviewBlockRole {
         guard case .message(let entry) = block else { return .other }
+        if entry.turnBoundary == true { return .checkBack }
         guard let notice = entry.notice else {
             return entry.isUser ? .userMessage : .other
         }
         switch notice.kind {
         case "review-handoff": return .handoff(prNumber: handoffPrNumber(block))
         case "review-settled": return .settled(ReviewSettledOutcome(notice: notice))
+        case "scheduled-prompt": return .checkBack
         default: return .other
         }
     }
@@ -681,7 +707,7 @@ enum TranscriptGrouping {
             switch reviewBlockRole(block) {
             case .userMessage: return false
             case .handoff, .settled: return true
-            case .other: continue
+            case .checkBack, .other: continue
             }
         }
         return false
@@ -739,7 +765,7 @@ enum TranscriptGrouping {
                     prNumber = prNumber ?? nextPrNumber
                 case .settled(let outcome):
                     settled = outcome
-                case .userMessage, .other:
+                case .userMessage, .checkBack, .other:
                     break
                 }
             }
@@ -768,6 +794,107 @@ enum TranscriptGrouping {
         loop.isLive = live && lastLoop == grouped.count - 1
         if let result, !interrupted, !loop.isLive { loop.result = result }
         grouped[lastLoop] = .reviewLoop(loop)
+        return grouped
+    }
+
+    private static func isCheckBack(_ block: TranscriptBlock) -> Bool {
+        if case .checkBack = reviewBlockRole(block) { return true }
+        return false
+    }
+
+    /// Whether a block ends a check-back phase outright: a person's message,
+    /// a note, a walkthrough or a review loop, each of which has its own
+    /// place and must never vanish inside an automation fold.
+    private static func endsCheckBacks(_ block: TranscriptBlock) -> Bool {
+        switch block {
+        case .note, .walkthrough, .reviewLoop: return true
+        default: break
+        }
+        if case .userMessage = reviewBlockRole(block) { return true }
+        return false
+    }
+
+    /// Whether the check-backs open before `index` go on: another one starts
+    /// before anything that ends the phase.
+    private static func checkBacksContinue(
+        _ blocks: [TranscriptBlock], from index: Int
+    ) -> Bool {
+        guard index < blocks.count else { return false }
+        for block in blocks[index...] {
+            if endsCheckBacks(block) { return false }
+            if isCheckBack(block) { return true }
+        }
+        return false
+    }
+
+    /// Turns the agent started itself (a background wait waking it, or its
+    /// own scheduled check-back) fold into one quiet row, like a review loop:
+    /// waiting on CI often means several "still running" turns in a row. The
+    /// last turn's final answer stays outside as the report; earlier answers
+    /// fold in once a later check-back proves them interim. Runs after review
+    /// grouping, so a check-back inside a review loop stays there. Mirrors the
+    /// web's `groupCheckBacks`.
+    private static func groupCheckBacks(
+        _ blocks: [TranscriptBlock], live: Bool
+    ) -> [TranscriptBlock] {
+        guard blocks.contains(where: isCheckBack) else { return blocks }
+        var grouped: [TranscriptBlock] = []
+        var index = 0
+        while index < blocks.count {
+            let first = blocks[index]
+            guard isCheckBack(first) else {
+                grouped.append(first)
+                index += 1
+                continue
+            }
+            var loop: [TranscriptBlock] = [first]
+            var rounds = 1
+            while index + 1 < blocks.count {
+                let next = blocks[index + 1]
+                if endsCheckBacks(next) { break }
+                if case .message(let entry) = next, entry.isAssistant,
+                   !checkBacksContinue(blocks, from: index + 2) {
+                    break
+                }
+                index += 1
+                loop.append(next)
+                if isCheckBack(next) { rounds += 1 }
+            }
+            index += 1
+            // A lone wait boundary has nothing to fold: it is structural only.
+            // A lone scheduled check-back notice stays a readable notice.
+            if loop.count == 1 {
+                if case .message(let entry) = first, entry.turnBoundary != true {
+                    grouped.append(first)
+                }
+                continue
+            }
+            grouped.append(.reviewLoop(ReviewLoop(
+                id: "check-back:\(first.id)",
+                kind: .checkBack,
+                rounds: rounds,
+                isLive: false,
+                blocks: loop
+            )))
+        }
+        // A check-back fold is running only while it is the live tail of a
+        // running session: its own final answer and footer may follow it,
+        // nothing else.
+        if live,
+           let last = grouped.lastIndex(where: { block in
+               if case .reviewLoop(let loop) = block { loop.kind == .checkBack } else { false }
+           }),
+           grouped[(last + 1)...].allSatisfy({ block in
+               switch block {
+               case .footer: true
+               case .message(let entry): entry.isAssistant
+               default: false
+               }
+           }),
+           case .reviewLoop(var loop) = grouped[last] {
+            loop.isLive = true
+            grouped[last] = .reviewLoop(loop)
+        }
         return grouped
     }
 
@@ -830,7 +957,8 @@ enum TranscriptGrouping {
             // the card summarizes the work, so splitting the turn from the
             // reply it ended with would read as an interruption.
             var at = publishing + 1
-            if at < blocks.count, case .message = blocks[at] { at += 1 }
+            if at < blocks.count, case .message(let entry) = blocks[at],
+               entry.turnBoundary != true { at += 1 }
             if at < blocks.count, case .footer = blocks[at] { at += 1 }
             out.insert(.walkthrough(walkthrough), at: at)
             return out
@@ -914,6 +1042,7 @@ enum TranscriptGrouping {
             lineStats: stats,
             hasMedia: tools.contains(where: \.hasMedia),
             featuredMedia: featuredMedia(from: tools),
+            suggestedTasks: SuggestedTaskProposal.proposals(in: tools),
             livePreview: preview,
             hasNarration: items.contains {
                 if case .message = $0 { return true }
