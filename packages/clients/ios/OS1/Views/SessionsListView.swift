@@ -402,6 +402,8 @@ struct SessionsListView: View {
                 } else if let mode = prReviewFreshnessFixture {
                     PrReviewFreshnessFixture(mode: mode)
                         .background(OS1VisualStyle.background)
+                } else if let mode = ProcessInfo.processInfo.environment["OS1_MARKDOWN_DOCUMENT_FIXTURE"] {
+                    MarkdownDocumentFixture(mode: mode)
                 }
             }
             #endif
