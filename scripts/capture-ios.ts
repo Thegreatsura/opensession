@@ -68,6 +68,8 @@ const USAGE = `usage: bun scripts/capture-ios.ts <output.png> [options]
   --session <id>        open this session on launch (OS1_OPEN_SESSION)
   --device <name>       simulator device type (default: iPhone 17 Pro)
   --theme light|dark    appearance (default: the app's own)
+  --content-size <size> Dynamic Type category for the simulator, e.g.
+                        accessibility-large (default: large, the system default)
   --env KEY=VALUE       extra launch env, repeatable (node-only debug hooks)
   --wait <ms>           settle before the screenshot (default: 45000)
   --server <url>        server the app talks to (default: the configured origin)
@@ -89,6 +91,7 @@ const PLATFORM = flag("platform", "ios")!;
 const DEVICE_TYPE = flag("device", "iPhone 17 Pro")!;
 const THEME = flag("theme");
 const SESSION = flag("session");
+const CONTENT_SIZE = flag("content-size", "large")!;
 const WAIT_MS = Number(flag("wait", "45000"));
 const MAX_LOAD = Number(flag("max-load", "100"));
 const LOAD_WAIT_MS = Number(flag("load-wait", "300000"));
@@ -98,6 +101,12 @@ if (PLATFORM !== "ios" && PLATFORM !== "mac")
   throw new Error("platform must be ios or mac");
 if (THEME && THEME !== "light" && THEME !== "dark")
   throw new Error("theme must be light or dark");
+if (
+  !/^(extra-small|small|medium|large|extra-large|extra-extra-large|extra-extra-extra-large|accessibility-(medium|large|extra-large|extra-extra-large|extra-extra-extra-large))$/.test(
+    CONTENT_SIZE,
+  )
+)
+  throw new Error("content-size must be a simctl content_size category");
 for (const [name, value] of [
   ["wait", WAIT_MS],
   ["max-load", MAX_LOAD],
@@ -445,6 +454,8 @@ try {
       [ -n "$app" ] || { echo "no built .app found" >&2; exit 1; }
       bundle=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")
       ${THEME ? `xcrun simctl ui ${udid} appearance ${THEME}` : ""}
+      # Always set: a reused device keeps the last run's text size.
+      xcrun simctl ui ${udid} content_size ${CONTENT_SIZE}
       # Reinstall every run: a stored value shadows a launch-env default, so a
       # changed --env would otherwise be silently ignored.
       xcrun simctl uninstall ${udid} "$bundle" 2>/dev/null || true
