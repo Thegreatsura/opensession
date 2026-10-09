@@ -15,6 +15,12 @@ export interface ComposerConfig {
    */
   draftKey?: string;
   placeholder?: string;
+  /**
+   * Predicted next message (lib/composer-prediction.ts). Replaces the
+   * placeholder while the draft is empty, and a bare Tab in the empty field
+   * takes it as an editable draft. It never sends on its own.
+   */
+  prediction?: string | null;
   disabled?: boolean;
   /** Boolean, or a predicate on the current draft (for uncontrolled mode,
    * where the parent cannot read the text). */

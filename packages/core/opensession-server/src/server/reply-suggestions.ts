@@ -88,7 +88,7 @@ const RETURN_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const MAX_SUGGESTIONS = 2;
 
 /** Turn states during which suggestions for the *previous* turn are stale. */
-const ACTIVE_STATES = new Set([
+export const REPLY_ACTIVE_STATES = new Set([
   "preparing",
   "starting",
   "running",
@@ -99,7 +99,7 @@ function disabled(): boolean {
   return process.env.OPENSESSION_REPLY_SUGGESTIONS === "0";
 }
 
-function anyPresentWatcher(sessionId: string): boolean {
+export function anyPresentWatcher(sessionId: string): boolean {
   const set = sessionWatchers.get(sessionId);
   if (!set) return false;
   for (const ws of set) if (ws.data?.away !== true) return true;
@@ -110,7 +110,7 @@ function anyPresentWatcher(sessionId: string): boolean {
  * Is this a session a person converses with? Automations, goals and the Desk
  * run their own shapes of turn that nobody replies to from a composer.
  */
-function conversational(sessionId: string): boolean {
+export function conversationalSession(sessionId: string): boolean {
   const session = findSession(sessionId);
   if (!session) return false;
   if (session.source !== "opensession") return false;
@@ -392,10 +392,10 @@ export function endsOnAQuestion(
 
 async function generate(sessionId: string, user?: string): Promise<void> {
   if (disabled() || inFlight.has(sessionId)) return;
-  if (!conversational(sessionId)) return;
+  if (!conversationalSession(sessionId)) return;
   // Idle with an empty queue is the only state where a reply is the next
   // thing that happens. A queued prompt already answers the turn.
-  if (ACTIVE_STATES.has(getRunState(sessionId))) return;
+  if (REPLY_ACTIVE_STATES.has(getRunState(sessionId))) return;
 
   inFlight.add(sessionId);
   try {
@@ -445,7 +445,7 @@ async function generate(sessionId: string, user?: string): Promise<void> {
     if (!items.length) return;
     // The viewer may have replied while we generated; chips answering a turn
     // that has already been answered would paste a stale instruction.
-    if (ACTIVE_STATES.has(getRunState(sessionId))) return;
+    if (REPLY_ACTIVE_STATES.has(getRunState(sessionId))) return;
     if ((await sessionDelivery({ op: "snapshot", sessionId })).queued.length)
       return;
     store(sessionId, items);

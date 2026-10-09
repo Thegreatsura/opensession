@@ -13,6 +13,10 @@ import {
 } from "react";
 import type { ReplySuggestion } from "../lib/reply-suggestions";
 import {
+  getComposerPredictionsPref,
+  onComposerPredictionsChanged,
+} from "../lib/composer-prediction-pref";
+import {
   getReplySuggestionsPref,
   onReplySuggestionsChanged,
 } from "../lib/reply-suggestions";
@@ -183,6 +187,19 @@ export function useSessionViewStateController({
   const setComposerPrefillRef = useRef(queueState.setComposerPrefill);
   const [replySuggestions, setReplySuggestions] =
     useState<ReplySuggestion[]>(EMPTY_SUGGESTIONS);
+  const [composerPrediction, setComposerPrediction] = useState<string | null>(
+    null,
+  );
+  const [showComposerPrediction, setShowComposerPrediction] = useState(
+    getComposerPredictionsPref,
+  );
+  useEffect(
+    () =>
+      onComposerPredictionsChanged(() =>
+        setShowComposerPrediction(getComposerPredictionsPref()),
+      ),
+    [],
+  );
   const [showReplySuggestions, setShowReplySuggestions] = useState(
     getReplySuggestionsPref,
   );
@@ -445,6 +462,9 @@ export function useSessionViewStateController({
       replySuggestions,
       setReplySuggestions,
       showReplySuggestions,
+      // Null while the person has predictions switched off.
+      composerPrediction: showComposerPrediction ? composerPrediction : null,
+      setComposerPrediction,
       showNextChatButton,
     },
     slack: {

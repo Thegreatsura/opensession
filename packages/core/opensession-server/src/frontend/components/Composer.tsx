@@ -89,6 +89,7 @@ import {
   composerToolbarScrollDivider,
 } from "../lib/composer-classes";
 import { noAutofill } from "../lib/composer-autofill";
+import { takesPrediction } from "../lib/composer-prediction";
 import { paletteIconBtn, paletteIconBtnRound } from "../lib/palette-classes";
 import { askSurface, noteSurface } from "../lib/tinted-surface";
 import { cn } from "../ui/cn";
@@ -191,6 +192,7 @@ export function Composer({
   config: {
     draftKey,
     placeholder,
+    prediction,
     disabled,
     sendDisabled,
     sendTitle,
@@ -521,6 +523,12 @@ export function Composer({
     !!quote ||
     hasAttached;
   const minimized = isPhone && !focused && !hasContent && !modelMenuOpen;
+  // A predicted next message stands in for the placeholder only where the
+  // placeholder is the generic prompt: a team note or a quote has its own.
+  const shownPrediction =
+    prediction && !text && !noteMode && !quote && !disabled && !minimized
+      ? prediction
+      : null;
   const composerIconButtonClass = cn(
     paletteIconBtn,
     minimized && paletteIconBtnRound,
@@ -965,13 +973,15 @@ export function Composer({
     const release = appliedHeight.current ? holdParentHeight(el) : null;
     if (appliedHeight.current) el.style.height = "";
     // min-/max-height clamp this, so tall drafts scroll internally at the cap.
-    const height = displayText ? `${el.scrollHeight}px` : "";
+    // A predicted message is measured too: it is the placeholder, and a long
+    // one would otherwise clip behind a scrollbar in a one-row field.
+    const height = displayText || shownPrediction ? `${el.scrollHeight}px` : "";
     if (height) el.style.height = height;
     release?.();
     appliedHeight.current = height;
     // Height (and thus clip state) just changed — re-evaluate both edges.
     updateScrollEdges(el);
-  }, [displayText, isPhone, minimized, textareaRef]);
+  }, [displayText, shownPrediction, isPhone, minimized, textareaRef]);
 
   // The draft can also start or stop clipping without a keystroke: the pane is
   // resized, a split opens, the phone keyboard takes the field's cap down. The
@@ -1253,6 +1263,18 @@ export function Composer({
     if (sessionNames.handleUndoRedoKey(e)) return;
     if (handleMentionKeyDown(e)) return;
     if (e.nativeEvent.isComposing) return;
+    // Tab in the empty field takes the predicted message as a draft to edit.
+    // It never sends: the person reads it, changes it or not, and sends.
+    if (shownPrediction && takesPrediction(e, text, shownPrediction)) {
+      e.preventDefault();
+      setText(shownPrediction);
+      onTyping?.(true, shownPrediction);
+      queueMicrotask(() => {
+        const el = textareaRef.current;
+        if (el) el.selectionStart = el.selectionEnd = el.value.length;
+      });
+      return;
+    }
     if (
       (e.key === "Backspace" || e.key === "Delete") &&
       !e.metaKey &&
@@ -1609,6 +1631,8 @@ export function Composer({
               noteMode
                 ? "placeholder:text-[color-mix(in_srgb,var(--text-faint)_84%,var(--yellow))]"
                 : "placeholder:text-faint",
+              // Room for the Tab key cap that takes the prediction.
+              shownPrediction && "pr-14",
               // With the mirror painting the styled draft, the field's own
               // glyphs go transparent and only the caret stays visible.
               hlActive
@@ -1627,7 +1651,7 @@ export function Composer({
                   ? `Ask ${shortModelLabel(effectiveModel, models)}`
                   : quote
                     ? "Chat with selected text"
-                    : placeholder
+                    : (shownPrediction ?? placeholder)
             }
             value={fieldText}
             onBeforeInput={sessionNames.handleBeforeInput}
@@ -1681,6 +1705,14 @@ export function Composer({
             {...noAutofill}
             autoFocus={autoFocus}
           />
+          {shownPrediction && (
+            <kbd
+              className="pointer-events-none absolute top-1/2 right-3 z-[2] inline-flex h-5 -translate-y-1/2 items-center rounded-sm border border-line px-1.5 text-meta font-medium text-faint [font-family:inherit]"
+              aria-hidden="true"
+            >
+              Tab
+            </kbd>
+          )}
           {/* What a press on a pill gets instead of the reference vanishing.
               Two rows, because removing it is only one of the two things a
               press can reasonably mean and it was the only one on offer.

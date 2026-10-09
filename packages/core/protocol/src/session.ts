@@ -741,6 +741,16 @@ export type ProtocolServerMessage =
       suggestions: { label: string; text: string }[] | null;
     }
   | {
+      /**
+       * The predicted next message for the empty composer's placeholder
+       * (server/composer-prediction.ts). `null` retires it. Taking it fills
+       * the composer as a draft, never a send.
+       */
+      type: "composer_prediction";
+      sessionId: string;
+      text: string | null;
+    }
+  | {
       type: "slack_composer";
       sessionId: string;
       request: {
