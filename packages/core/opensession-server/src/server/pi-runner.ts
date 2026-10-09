@@ -870,39 +870,6 @@ export function piSteeringBoundaryTools(
   }));
 }
 
-/** The part of pi's Agent a steer interrupt reads and drives. */
-export type PiSteerInterruptTarget = {
-  readonly state: {
-    readonly streamingMessage?: { role: string };
-    readonly pendingToolCalls: ReadonlySet<string>;
-  };
-  hasQueuedMessages(): boolean;
-  abort(): void;
-};
-
-/**
- * Pi polls its steer queue only between model responses, so a steer sent
- * while the model is thinking or writing waits for that whole response.
- * With high effort that is often most of a minute, and the person's message
- * sits unread.
- *
- * Cut the response short instead: abort only the agent's current model
- * request, never the session. AgentSession's post-run loop then sees the
- * queued steer and continues at once, so the next response starts from the
- * steer. The partial stays in the transcript as an aborted reply. Running
- * tools are left alone; the boundary tools above already skip the ones that
- * have not started. Returns whether it aborted.
- */
-export function interruptPiResponseForSteer(
-  agent: PiSteerInterruptTarget,
-): boolean {
-  if (agent.state.streamingMessage?.role !== "assistant") return false;
-  if (agent.state.pendingToolCalls.size > 0) return false;
-  if (!agent.hasQueuedMessages()) return false;
-  agent.abort();
-  return true;
-}
-
 /** Pi assigns `<parent id>/<n>` to calls a tool makes through
  *  `ctx.executeTool()`, which is how codemode scripts call tools. */
 export function isPiNestedToolCall(toolCallId: string): boolean {
@@ -3294,15 +3261,6 @@ async function* runPiAttempt(
           engineQueueDepth--;
         });
     };
-    const interruptForSteer = () => {
-      if (abort.signal.aborted) return;
-      if (!interruptPiResponseForSteer(liveSession.agent)) return;
-      audit({
-        ...auditBase,
-        direction: "in",
-        kind: "steer_interrupted_response",
-      });
-    };
     handle.steer = (text, images, steerId) => {
       // Same skill expansion as the prompt path. The queue holds the expanded
       // text so the delivery match stays exact; the audit line below still
@@ -3330,7 +3288,6 @@ async function* runPiAttempt(
         );
         if (!pendingSteers.includes(entry)) return; // retracted meanwhile
         await liveSession.steer(entry.text, piImages(images));
-        interruptForSteer();
       }, "steer");
       audit({
         ...auditBase,
@@ -3514,11 +3471,6 @@ async function* runPiAttempt(
       try {
         checkpointWriter?.observe(ev);
         switch (ev.type) {
-          case "message_start":
-            // A steer queued while the request was in flight, before its
-            // first token, interrupts as soon as the response starts.
-            if ((ev as any).message?.role === "assistant") interruptForSteer();
-            break;
           case "message_update": {
             const ame = (ev as any).assistantMessageEvent;
             if (

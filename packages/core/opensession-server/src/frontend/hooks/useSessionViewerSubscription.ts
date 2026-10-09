@@ -128,6 +128,7 @@ interface SubscriptionComposer {
   setContextSessions: Setter<string[]>;
   setPrefill: Setter<ComposerPrefill | null>;
   setReplySuggestions: Setter<ReplySuggestion[]>;
+  setComposerPrediction: Setter<string | null>;
   emptySuggestions: ReplySuggestion[];
 }
 
@@ -204,6 +205,7 @@ export function useSessionViewerSubscription({
     setContextSessions,
     setPrefill: setComposerPrefill,
     setReplySuggestions,
+    setComposerPrediction,
     emptySuggestions,
   },
   slack: {
@@ -536,6 +538,9 @@ export function useSessionViewerSubscription({
           if (msg.sessionId === session.id)
             setReplySuggestions(msg.suggestions ?? []);
           break;
+        case "composer_prediction":
+          if (msg.sessionId === session.id) setComposerPrediction(msg.text);
+          break;
         case "slack_composer":
           if (msg.sessionId === session.id) {
             setSlackComposer(msg.request);
@@ -607,6 +612,7 @@ export function useSessionViewerSubscription({
           // copy on the same event; this is what stops the row lingering
           // for the seconds before that broadcast lands.
           setReplySuggestions(emptySuggestions);
+          setComposerPrediction(null);
           break;
         case "stream_text": {
           if (isTimelineOnlyRunnerNotice(msg.text)) break;

@@ -111,6 +111,10 @@ import {
   maybeSuggestRepliesOnReturn,
   resendReplySuggestions,
 } from "./reply-suggestions";
+import {
+  maybePredictComposerOnReturn,
+  resendComposerPrediction,
+} from "./composer-prediction";
 import { unarchiveForHumanTurn } from "./session-unarchive";
 import {
   resizeTerminal,
@@ -221,6 +225,9 @@ async function sendWatchExtras(
     ws.send(JSON.stringify(message)),
   );
   resendReplySuggestions(sessionId, (message) =>
+    ws.send(JSON.stringify(message)),
+  );
+  resendComposerPrediction(sessionId, (message) =>
     ws.send(JSON.stringify(message)),
   );
 
@@ -975,6 +982,10 @@ export const websocketHandlers: WebSocketHandler<WSClientData> = {
             // Same return: offer the finished turn's choice as chips if it
             // ended one while nobody was here (reply-suggestions.ts).
             maybeSuggestRepliesOnReturn(returnedTo, ws.data?.user || undefined);
+            maybePredictComposerOnReturn(
+              returnedTo,
+              ws.data?.user || undefined,
+            );
           }
           break;
         }
@@ -1042,6 +1053,7 @@ export const websocketHandlers: WebSocketHandler<WSClientData> = {
           if (data.presenceSuppressed !== true) {
             maybeRecapOnReturn(sessionId, data.user || undefined);
             maybeSuggestRepliesOnReturn(sessionId, data.user || undefined);
+            maybePredictComposerOnReturn(sessionId, data.user || undefined);
           }
 
           // Transcript v2 (flag + supportsSeq gated): eligible watches are

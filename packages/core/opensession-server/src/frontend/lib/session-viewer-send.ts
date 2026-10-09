@@ -183,9 +183,8 @@ export function sendSessionMessage(
   // holds the queue behind), and the steer button / ⌘Ctrl+Enter STEERS
   // (folds into the LIVE run at its next step boundary — busyMode:"steer",
   // real in-band steering since 2026-07-12; the server falls back to the
-  // queue when nothing is steerable or files are attached). A steer cuts a
-  // model response that is still streaming short so the engine reads it at
-  // once; running tools finish and the turn continues. Idle: just run it.
+  // queue when nothing is steerable or files are attached). The turn keeps
+  // running on both paths: no abort, no lost work. Idle: just run it.
   // Attachments ride along on every path — images fold into the run as
   // content blocks; files route to the queue server-side.
   const steerNow = runtime.isBusy && !!options?.steer;

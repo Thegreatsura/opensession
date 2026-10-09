@@ -175,8 +175,7 @@ than one.
 
 You prompt; the agent takes a turn. While a turn is running, anything you send
 is either delivered as a steer or queued behind it and delivered as the next
-turn — nothing is dropped. A steer reaches the agent right away: a reply it is
-still writing is cut short, and a running tool finishes first. A session can also ask _you_ something mid-turn and park
+turn — nothing is dropped. A session can also ask _you_ something mid-turn and park
 until answered, which is what puts it in the "needs input" lane.
 
 Sessions can spawn other sessions. An orchestrator delegates focused work to workers
