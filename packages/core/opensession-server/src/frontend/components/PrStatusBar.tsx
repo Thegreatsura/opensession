@@ -74,8 +74,10 @@ import {
 import {
   cancelDeferredMergeByKey,
   deferredMergeKey,
+  mergeFailedMessage,
   scheduleDeferredMerge,
 } from "../lib/deferred-merge";
+import { toast } from "../ui/toast";
 import { BrandMark } from "./BrandTile";
 import { PrChecksPopover } from "./PrChecksPopover";
 import { PrSeriesRows } from "./PrSeriesRows";
@@ -686,12 +688,28 @@ export function PrStatusBar({
     // resolve to differently shaped results, and inferring `run`'s type
     // parameter from that union depends on check order (the Vercel build
     // rejected it while a fresh `tsc` accepted it).
+    const prNumber = pr?.number;
     scheduleDeferredMerge(mergeKey, async () => {
       await run("merge", async () => {
-        if (stackMerge) {
-          await mergePrStackApi(sessionId, "squash", targetRepo, targetBranch);
-        } else {
-          await mergePrApi(sessionId, "squash", targetRepo, targetBranch);
+        try {
+          if (stackMerge) {
+            await mergePrStackApi(
+              sessionId,
+              "squash",
+              targetRepo,
+              targetBranch,
+            );
+          } else {
+            await mergePrApi(sessionId, "squash", targetRepo, targetBranch);
+          }
+        } catch (error) {
+          // This strip may be gone by now (another session or workspace), so
+          // the failure also goes to a toast that outlives it.
+          toast(
+            mergeFailedMessage(prNumber, errorMessage(error, "unknown error")),
+            { variant: "error" },
+          );
+          throw error;
         }
       });
     });

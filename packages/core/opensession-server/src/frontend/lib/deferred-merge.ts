@@ -48,6 +48,17 @@ export function deferredMergeKey(
   }
 }
 
+/**
+ * The failure notice for a merge that ran after its undo window. It names the
+ * PR because the person may have moved to another session or workspace.
+ */
+export function mergeFailedMessage(
+  prNumber: number | null | undefined,
+  reason: string,
+): string {
+  return `Couldn’t merge${prNumber ? ` #${prNumber}` : ""}: ${reason}`;
+}
+
 export function deferredMergePhase(key: string | null): DeferredMergePhase {
   if (!key) return "idle";
   return entries.get(key)?.phase ?? "idle";

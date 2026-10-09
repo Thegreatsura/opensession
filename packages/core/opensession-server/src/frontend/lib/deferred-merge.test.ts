@@ -5,6 +5,7 @@ import {
   deferredMergeKey,
   deferredMergePhase,
   MERGE_UNDO_DELAY_MS,
+  mergeFailedMessage,
   scheduleDeferredMerge,
 } from "./deferred-merge";
 import { undoLatestAction } from "./undo";
@@ -98,5 +99,14 @@ describe("deferred merge", () => {
         "https://github.com/tellahq/opensession/pull/123/?tab=files",
       ),
     ).toBe("pr:https://github.com/tellahq/opensession/pull/123");
+  });
+
+  test("names the PR in a merge failure seen from elsewhere", () => {
+    expect(mergeFailedMessage(42, "Base branch moved")).toBe(
+      "Couldn’t merge #42: Base branch moved",
+    );
+    expect(mergeFailedMessage(null, "Not mergeable")).toBe(
+      "Couldn’t merge: Not mergeable",
+    );
   });
 });

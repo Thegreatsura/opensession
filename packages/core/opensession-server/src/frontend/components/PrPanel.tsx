@@ -126,6 +126,7 @@ import { useLocalReviewedFiles } from "../hooks/useLocalReviewedFiles";
 import {
   cancelDeferredMergeByKey,
   deferredMergeKey,
+  mergeFailedMessage,
   scheduleDeferredMerge,
 } from "../lib/deferred-merge";
 
@@ -597,6 +598,13 @@ export function PrPanel({
           }
           merged = true;
         } catch (error) {
+          toast(
+            mergeFailedMessage(
+              pr?.number,
+              errorMessage(error, "unknown error"),
+            ),
+            { variant: "error" },
+          );
           setMergeError(
             `Review approved, but merge failed: ${errorMessage(error, "unknown error")}`,
           );
@@ -634,6 +642,7 @@ export function PrPanel({
       onConfirm: () => {
         if (actionTargetKey !== activeLoadTargetRef.current) return;
         setMergeError(null);
+        const prNumber = pr.number;
         scheduleDeferredMerge(mergeKey, async () => {
           try {
             if (previewTarget) {
@@ -653,11 +662,16 @@ export function PrPanel({
             if (actionTargetKey === activeLoadTargetRef.current)
               await load(true);
           } catch (error) {
-            if (actionTargetKey === activeLoadTargetRef.current) {
-              const message = errorMessage(error, "Merge failed");
-              setMergeError(message);
-              toast(message);
-            }
+            // Toast even after the person moved on: the merge still ran.
+            toast(
+              mergeFailedMessage(
+                prNumber,
+                errorMessage(error, "unknown error"),
+              ),
+              { variant: "error" },
+            );
+            if (actionTargetKey === activeLoadTargetRef.current)
+              setMergeError(errorMessage(error, "Merge failed"));
           }
         });
       },
