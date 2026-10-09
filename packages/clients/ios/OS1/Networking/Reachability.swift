@@ -75,6 +75,8 @@ enum Reachability {
         /// The server address or the token is what's wrong, and neither
         /// heals by being asked again.
         case settings
+        /// The fix is in Tailscale: turn it on, or switch its account.
+        case tailscale
     }
 
     static func diagnose(_ error: Error) async -> Diagnosis {
@@ -137,6 +139,12 @@ enum Reachability {
         // resolving when the tunnel drops, and "check the address" is the
         // wrong advice for an address that is perfectly correct.
         if let tailnet = await tailnetDiagnosis() { return tailnet }
+        // On a tailnet, but not reaching a server that lives on one: the
+        // likeliest cause is Tailscale signed in to another account.
+        if deviceIsOnTailnet(),
+           let target = TailscaleHandoff.displayName(for: ServerConfig.shared.activeAccount) {
+            return wrongTailnet(target)
+        }
         if code == .cannotFindHost || code == .dnsLookupFailed {
             return Diagnosis(
                 title: "Can't find that server",
@@ -158,15 +166,35 @@ enum Reachability {
     /// the sessions list asks while its first request is still in flight,
     /// because a minute of spinner is a long way to go to be told "timed out".
     ///
-    /// Nil unless both halves are true: the server lives on a tailnet, and
-    /// this device is not on one.
+    /// Two cases, both needing Tailscale: this device is off the tailnet, or
+    /// it is on the tailnet of the organization it last reached and this one
+    /// lives on another (switching organizations does not switch Tailscale).
     static func tailnetDiagnosis() async -> Diagnosis? {
-        guard let hint = await tailnetHint() else { return nil }
-        return Diagnosis(
-            title: hint,
-            fix: "This server only answers on your tailnet. Turn Tailscale on, then try again.",
-            detail: "The server is on a tailnet this device isn't on.",
-            isConnection: true
+        let account = ServerConfig.shared.activeAccount
+        let target = TailscaleHandoff.displayName(for: account)
+        if let hint = await tailnetHint() {
+            return Diagnosis(
+                title: hint,
+                fix: target.map { "This server answers on the \($0) tailnet. Turn Tailscale on, then come back." }
+                    ?? "This server only answers on your tailnet. Turn Tailscale on, then try again.",
+                detail: "The server is on a tailnet this device isn't on.",
+                isConnection: true,
+                remedy: .tailscale
+            )
+        }
+        guard deviceIsOnTailnet(), let target, TailscaleHandoff.needsSwitch(to: account) else {
+            return nil
+        }
+        return wrongTailnet(target)
+    }
+
+    private static func wrongTailnet(_ target: String) -> Diagnosis {
+        Diagnosis(
+            title: "Switch Tailscale to \(target)",
+            fix: "This organization is on another Tailscale account. Switch in Tailscale, then come back.",
+            detail: "Tailscale is connected to a different account.",
+            isConnection: true,
+            remedy: .tailscale
         )
     }
 

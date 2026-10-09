@@ -7,6 +7,12 @@ struct ServerAccount: Codable, Identifiable, Hashable, Sendable {
     var url: String
     var userName: String
     var githubLogin: String
+    /// The Tailscale account this organization's server lives on, as the
+    /// person names it (iOS can't list Tailscale's accounts for us). Optional
+    /// so accounts saved before it existed still decode.
+    var tailscaleAccount: String? = nil
+    /// A Shortcuts shortcut that switches Tailscale to that account.
+    var tailscaleShortcut: String? = nil
 
     var displayLabel: String {
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -218,6 +224,15 @@ final class ServerConfig {
             activeId = accounts[min(index, accounts.count - 1)].id
         }
         persist()
+    }
+
+    func updateActiveTailscale(account: String, shortcut: String) {
+        let account = account.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shortcut = shortcut.trimmingCharacters(in: .whitespacesAndNewlines)
+        updateActive {
+            $0.tailscaleAccount = account.isEmpty ? nil : account
+            $0.tailscaleShortcut = shortcut.isEmpty ? nil : shortcut
+        }
     }
 
     func updateActiveLabel(_ label: String) {

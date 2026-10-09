@@ -1567,6 +1567,11 @@ struct SessionsListView: View {
                 }
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 300)
+                // The fix is in another app, so the way there can't wait
+                // for the request to give up.
+                if failure.remedy == .tailscale {
+                    tailscaleButton.padding(.top, 4)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -4425,10 +4430,24 @@ struct SessionsListView: View {
                 .disabled(isRetrying)
             case .settings:
                 settingsButton
+            case .tailscale:
+                tailscaleButton
             }
             Button("Archived") { showArchived = true }
                 .buttonStyle(PlaceholderActionStyle(prominent: false))
         }
+    }
+
+    /// Named for the destination: a shortcut makes the switch for you,
+    /// Tailscale leaves it to you.
+    private var tailscaleButton: some View {
+        let account = ServerConfig.shared.activeAccount
+        return Button(
+            TailscaleHandoff.shortcutURL(for: account) == nil ? "Open Tailscale" : "Switch Tailscale"
+        ) {
+            TailscaleHandoff.open(for: account)
+        }
+        .buttonStyle(PlaceholderActionStyle())
     }
 
     /// The one line under the headline: the fix when the diagnosis knows one,

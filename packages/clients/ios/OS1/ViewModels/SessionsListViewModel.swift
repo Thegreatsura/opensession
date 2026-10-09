@@ -1104,6 +1104,9 @@ final class SessionsListViewModel {
             error = nil
             loadFailure = nil
             hasLoaded = true
+            // The list came back, so Tailscale is on this organization's
+            // account; remember it to spot the next switch that needs one.
+            TailscaleHandoff.noteReached(ServerConfig.shared.activeAccount)
         } catch {
             // Keep showing the last good list; surface the error alongside it.
             let diagnosis = await Reachability.diagnose(error)

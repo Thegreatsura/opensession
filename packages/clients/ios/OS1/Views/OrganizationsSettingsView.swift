@@ -12,6 +12,7 @@ struct OrganizationsSettingsView: View {
                         GitHubSignIn.shared.cancel()
                         config.activate(account.id)
                         PresenceStore.shared.start()
+                        TailscaleHandoff.switchIfNeeded(to: config.activeAccount)
                     } label: {
                         HStack(spacing: 12) {
                             accountIcon(account)

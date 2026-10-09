@@ -38,6 +38,7 @@ struct ServerAccountPicker: View {
                     GitHubSignIn.shared.cancel()
                     config.activate(account.id)
                     PresenceStore.shared.start()
+                    TailscaleHandoff.switchIfNeeded(to: config.activeAccount)
                 } label: {
                     HStack {
                         Label(

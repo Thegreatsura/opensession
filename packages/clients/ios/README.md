@@ -603,6 +603,17 @@ Pasting a token manually still
 works as a fallback: tokens are the `opensession_auth` cookie values minted
 at web sign-in, stored server-side in `~/.opensession/web-sessions.json`.
 
+## Tailscale per organization
+
+iOS can't see or switch another app's VPN, so the switch always happens in
+Tailscale (`TailscaleHandoff.swift`). Each organization can name its
+Tailscale account and a Shortcuts shortcut that switches to it (connection
+form). A MagicDNS server name (`host.tailnet.ts.net`) identifies the tailnet
+without either. A successful list load records which tailnet the device is
+on; switching to an organization on another one runs its shortcut
+(`shortcuts://run-shortcut`, which should end with Open App), and the list's
+Tailscale diagnosis offers a button to the shortcut or to Tailscale.
+
 ## Build
 
 On a Mac:

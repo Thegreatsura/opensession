@@ -10,6 +10,8 @@ struct SettingsView: View {
     @State private var serverURL = ServerConfig.shared.baseURLString
     @State private var userName = ServerConfig.shared.userName
     @State private var token = ServerConfig.shared.token
+    @State private var tailscaleAccount = ServerConfig.shared.activeAccount.tailscaleAccount ?? ""
+    @State private var tailscaleShortcut = ServerConfig.shared.activeAccount.tailscaleShortcut ?? ""
     @State private var checkResult: String?
     @State private var copiedCode = false
     @State private var confirmingSignOut = false
@@ -71,6 +73,8 @@ struct SettingsView: View {
                 serverURL = config.baseURLString
                 userName = config.userName
                 token = config.token
+                tailscaleAccount = config.activeAccount.tailscaleAccount ?? ""
+                tailscaleShortcut = config.activeAccount.tailscaleShortcut ?? ""
                 showingConnection = !config.isConfigured
                 checkResult = nil
             }
@@ -401,6 +405,20 @@ struct SettingsView: View {
                     .autocorrectionDisabled()
             }
 
+            // Per organization, because switching organizations is when
+            // Tailscale has to follow — and only Tailscale can switch itself.
+            Section {
+                TextField("Tailscale account", text: $tailscaleAccount)
+                    .autocorrectionDisabled()
+                    .noAutocapitalizationCompat()
+                TextField("Shortcut that switches to it", text: $tailscaleShortcut)
+                    .autocorrectionDisabled()
+            } header: {
+                Text("Tailscale")
+            } footer: {
+                Text("When you switch to this organization from another Tailscale account, the shortcut runs. End it with Open App so you land back here. Without one, you get a button to open Tailscale.")
+            }
+
             Section {
                 if let flow = signIn.flow {
                     signInFlow(flow)
@@ -502,6 +520,8 @@ struct SettingsView: View {
             serverURL = config.baseURLString
             userName = config.userName
             token = config.token
+            tailscaleAccount = config.activeAccount.tailscaleAccount ?? ""
+            tailscaleShortcut = config.activeAccount.tailscaleShortcut ?? ""
         }
         // …and the answer can land while the form is already open, so adopt
         // it — but only into a field still holding what it was given, never
@@ -634,6 +654,7 @@ struct SettingsView: View {
     private func save() {
         config.baseURLString = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
         config.userName = userName.trimmingCharacters(in: .whitespacesAndNewlines)
+        config.updateActiveTailscale(account: tailscaleAccount, shortcut: tailscaleShortcut)
         let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedToken != config.token { config.githubLogin = "" }
         config.token = trimmedToken
