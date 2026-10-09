@@ -1102,6 +1102,12 @@ struct SessionView: View {
                    openPanel.isAvailable {
                     openPanel(.changes(sessionId: viewModel.session.id))
                 }
+                // Push one scratch file, e.g. a Markdown document, by its
+                // path in the session's assets.
+                if let path = ProcessInfo.processInfo.environment["OS1_OPEN_ASSET"],
+                   openPanel.isAvailable {
+                    openPanel(.asset(sessionId: viewModel.session.id, path: path))
+                }
                 #endif
                 #if DEBUG && os(macOS)
                 // The Mac has no panel stack; the PR panel is the sheet the
