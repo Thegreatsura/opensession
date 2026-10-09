@@ -102,12 +102,10 @@ final class TranscriptGroupingTests: XCTestCase {
             return entry.id
         }
         XCTAssertEqual(messageIDs, ["u1", "status", "final"])
+        // The woken turn's work folds into the check-back row.
         XCTAssertEqual(
-            viewModel.displayBlocks.filter {
-                if case .work = $0 { return true }
-                return false
-            }.count,
-            2
+            viewModel.displayBlocks.map(\.id),
+            ["u1", "tool-t1", "status", "check-back:wake", "final"]
         )
         XCTAssertFalse(viewModel.displayBlocks.contains { $0.id == "wake" })
     }
@@ -1160,6 +1158,216 @@ final class TranscriptGroupingTests: XCTestCase {
 
         session.prState = "MERGED"
         XCTAssertNil(ReviewLoopResult(session: session), "a closed PR has no loop verdict")
+    }
+
+    // MARK: - Check-backs
+
+    private func wake(_ id: String) -> TranscriptEntry {
+        TranscriptEntry(id: id, type: "user", content: "", turnBoundary: true)
+    }
+
+    /// The agent's own scheduled check-back, as the server classifies it.
+    private func scheduledPrompt(_ id: String) -> TranscriptEntry {
+        TranscriptEntry(
+            id: id,
+            type: "user",
+            content: "Check CI again.",
+            notice: EntryNotice(
+                kind: "scheduled-prompt",
+                title: "Scheduled check-back",
+                tone: "info",
+                body: "collapsed",
+                link: nil,
+                ask: nil,
+                icon: "clock"
+            )
+        )
+    }
+
+    private func checkBacks(in blocks: [TranscriptBlock]) -> [ReviewLoop] {
+        blocks.compactMap { block in
+            if case .reviewLoop(let loop) = block, loop.kind == .checkBack { return loop }
+            return nil
+        }
+    }
+
+    func testAWaitFoldsTheWorkItWokeAndKeepsItsAnswer() {
+        append([
+            TranscriptEntry(id: "u1", type: "user", content: "Merge main"),
+            TranscriptEntry(id: "a1", type: "assistant", content: "Pushed; waiting on CI."),
+            wake("w1"),
+            toolUse("t1", name: "Bash", input: ["command": .string("gh pr checks")]),
+            toolResult("t1", text: "pending"),
+            TranscriptEntry(id: "a2", type: "assistant", content: "CI is green."),
+        ])
+
+        let blocks = viewModel.displayBlocks
+        XCTAssertEqual(blocks.map(\.id), ["u1", "a1", "check-back:w1", "a2"])
+        let loop = checkBacks(in: blocks).first
+        XCTAssertEqual(loop?.rounds, 1)
+        XCTAssertEqual(loop?.detail, "once")
+        XCTAssertEqual(loop?.blocks.flatMap(\.entryIds), ["w1", "t1", "tr-t1"])
+        XCTAssertNil(loop?.prNumber)
+        XCTAssertNil(loop?.result)
+    }
+
+    func testAScheduledPromptOpensACheckBack() {
+        append([
+            TranscriptEntry(id: "a0", type: "assistant", content: "Scheduled a look in 10 minutes."),
+            scheduledPrompt("s1"),
+            toolUse("t1", name: "Bash"),
+            TranscriptEntry(id: "a1", type: "assistant", content: "Deploy finished."),
+        ])
+
+        let blocks = viewModel.displayBlocks
+        XCTAssertEqual(blocks.map(\.id), ["a0", "check-back:s1", "a1"])
+        XCTAssertEqual(
+            checkBacks(in: blocks).first?.blocks.flatMap(\.entryIds),
+            ["s1", "t1"],
+            "the scheduled notice stays inside the fold, readable once opened"
+        )
+    }
+
+    func testRepeatedCheckBacksFoldIntoOneRowWithTheLastReportOutside() {
+        append([
+            TranscriptEntry(id: "u1", type: "user", content: "Merge main"),
+            TranscriptEntry(id: "a0", type: "assistant", content: "Pushed; waiting on CI."),
+            wake("w1"),
+            toolUse("t1", name: "Bash"),
+            TranscriptEntry(id: "a1", type: "assistant", content: "Still waiting on the approval gate."),
+            wake("w2"),
+            toolUse("t2", name: "Bash"),
+            TranscriptEntry(id: "a2", type: "assistant", content: "Still waiting, nothing broken."),
+            scheduledPrompt("s1"),
+            toolUse("t3", name: "Bash"),
+            TranscriptEntry(id: "a3", type: "assistant", content: "CI finished: 52 passed."),
+        ])
+
+        let blocks = viewModel.displayBlocks
+        XCTAssertEqual(blocks.map(\.id), ["u1", "a0", "check-back:w1", "a3"])
+        let loop = checkBacks(in: blocks).first
+        XCTAssertEqual(loop?.rounds, 3)
+        XCTAssertEqual(loop?.detail, "3 times")
+        let folded = loop?.blocks.flatMap(\.entryIds) ?? []
+        XCTAssertTrue(folded.contains("a1") && folded.contains("a2"), "interim answers fold in")
+        XCTAssertFalse(folded.contains("a3"), "the last answer is the report")
+    }
+
+    func testAHumanMessageEndsTheCheckBacksAndStaysVisible() {
+        append([
+            TranscriptEntry(id: "u1", type: "user", content: "Ship it"),
+            TranscriptEntry(id: "a0", type: "assistant", content: "Waiting on CI."),
+            wake("w1"),
+            toolUse("t1", name: "Bash"),
+            TranscriptEntry(id: "a1", type: "assistant", content: "CI is green."),
+            TranscriptEntry(id: "u2", type: "user", content: "Now merge it"),
+            wake("w2"),
+            toolUse("t2", name: "Bash"),
+            TranscriptEntry(id: "a2", type: "assistant", content: "Merged."),
+            wake("w3"),
+            TranscriptEntry(id: "a3", type: "assistant", content: "Nothing new."),
+        ])
+
+        let blocks = viewModel.displayBlocks
+        XCTAssertEqual(
+            blocks.map(\.id),
+            ["u1", "a0", "check-back:w1", "a1", "u2", "check-back:w2", "a3"],
+            "the second fold takes in the later wake, so its last answer reports"
+        )
+        XCTAssertEqual(checkBacks(in: blocks).map(\.rounds), [1, 2])
+        XCTAssertTrue(checkBacks(in: blocks)[1].blocks.flatMap(\.entryIds).contains("a2"))
+    }
+
+    func testALoneWaitBoundaryNeverRendersAndANoteStaysOutside() {
+        let entries = [
+            TranscriptEntry(
+                id: "a0", type: "assistant", content: "Waiting.",
+                timestamp: "2026-01-01T00:00:00Z"
+            ),
+            wake("w1"),
+            TranscriptEntry(
+                id: "a1", type: "assistant", content: "Nothing new.",
+                timestamp: "2026-01-01T00:00:20Z"
+            ),
+            wake("w2"),
+        ]
+        let blocks = TranscriptGrouping.blocks(
+            from: TranscriptGrouping.displayItems(from: entries),
+            live: false,
+            worktreeDir: nil,
+            notes: [CommentThread(legacyNote: SessionNote(
+                id: "n1",
+                user: "Kent",
+                text: "looks right",
+                ts: Date(timeIntervalSince1970: 1_767_225_610).timeIntervalSince1970 * 1000
+            ), sessionId: "bks-1")]
+        )
+        XCTAssertEqual(
+            blocks.map(\.id),
+            ["a0", "note:n1", "a1"],
+            "a wait with only a note after it folds nothing, and no boundary draws a row"
+        )
+    }
+
+    func testATrailingLiveCheckBackIsWorkingUntilItsAnswerSettles() {
+        viewModel.handle(.sessionStatus(sessionId: "bks-1", isRunning: true))
+        append([
+            TranscriptEntry(id: "u1", type: "user", content: "Watch CI"),
+            TranscriptEntry(id: "a0", type: "assistant", content: "Waiting on CI."),
+            wake("w1"),
+            toolUse("t1", name: "Bash"),
+        ])
+
+        var loop = checkBacks(in: viewModel.displayBlocks).first
+        XCTAssertEqual(viewModel.displayBlocks.map(\.id), ["u1", "a0", "check-back:w1"])
+        XCTAssertEqual(loop?.isLive, true)
+        XCTAssertEqual(loop?.detail, "Working")
+        guard case .work(let turn)? = loop?.blocks.last else {
+            return XCTFail("the live work belongs inside the fold")
+        }
+        XCTAssertTrue(turn.isLive)
+
+        append([TranscriptEntry(id: "a1", type: "assistant", content: "Still running.")])
+        loop = checkBacks(in: viewModel.displayBlocks).first
+        XCTAssertEqual(viewModel.displayBlocks.last?.id, "a1", "the live answer stays visible")
+        XCTAssertEqual(loop?.isLive, true)
+
+        viewModel.handle(.sessionStatus(sessionId: "bks-1", isRunning: false))
+        loop = checkBacks(in: viewModel.displayBlocks).first
+        XCTAssertEqual(loop?.isLive, false)
+        XCTAssertEqual(loop?.detail, "once")
+    }
+
+    func testAWaitInsideAReviewLoopStaysInTheLoop() {
+        append([
+            handoff("h1", pr: 128),
+            TranscriptEntry(id: "a1", type: "assistant", content: "Fixed; waiting on CI."),
+            wake("w1"),
+            toolUse("t1", name: "Bash"),
+            handoff("h2", pr: 128),
+            TranscriptEntry(id: "a2", type: "assistant", content: "Fixed again."),
+        ])
+
+        let blocks = viewModel.displayBlocks
+        XCTAssertEqual(blocks.map(\.id), ["review-loop:h1", "a2"])
+        XCTAssertEqual(firstLoop(in: blocks)?.rounds, 2)
+        XCTAssertTrue(checkBacks(in: blocks).isEmpty)
+    }
+
+    func testReasoningPreferenceStillAppliesInsideACheckBack() {
+        append([
+            TranscriptEntry(id: "a0", type: "assistant", content: "Waiting."),
+            wake("w1"),
+            TranscriptEntry(id: "r1", type: "assistant", content: "Checking CI", isReasoning: true),
+            toolUse("t1", name: "Bash"),
+            TranscriptEntry(id: "r2", type: "assistant", content: "Reading logs", isReasoning: true),
+            toolUse("t2", name: "Bash"),
+            TranscriptEntry(id: "a1", type: "assistant", content: "Green."),
+        ])
+
+        let folded = checkBacks(in: viewModel.displayBlocks).first?.blocks.flatMap(\.entryIds) ?? []
+        XCTAssertFalse(folded.contains("r1"), "only the latest reasoning stays by default")
+        XCTAssertTrue(folded.contains("r2"))
     }
 }
 
