@@ -285,6 +285,19 @@ function isNotFound(e: unknown): boolean {
   return (e as { status?: number })?.status === 404;
 }
 
+/** Whether `POST /sandboxes {from}` failed because the named snapshot itself
+ *  cannot be restored: it is gone (404), or Boat kept a failed save under the
+ *  name (409 `snapshot_failed`). Both mean the template is dead, so the create
+ *  must drop it and go cold. Treating only 404 that way once wedged every
+ *  create for a repo on one failed save until someone deleted it by hand. */
+export function boxTemplateUnusable(e: unknown): boolean {
+  const detail = e as { status?: number; code?: string };
+  return (
+    detail?.status === 404 ||
+    (detail?.status === 409 && detail.code === "snapshot_failed")
+  );
+}
+
 /** 409 codes that mean the command plane has not accepted the request yet:
  *  `boat_starting` while provisioning, `boat_restoring` in the first seconds
  *  of a resume, plus the pre-rename `box_starting` spelling. */
@@ -1227,11 +1240,8 @@ export class BoxProvider implements SandboxProvider {
       try {
         created = await create(template?.artifactId);
       } catch (error) {
-        if (!template || !isNotFound(error)) throw error;
-        invalidateRemoteRepoTemplate("box", repo.id);
-        console.warn(
-          `[sandbox:box] repo template ${template.artifactId} is unavailable; retrying cold`,
-        );
+        if (!template || !boxTemplateUnusable(error)) throw error;
+        await discardBoxRepoTemplate(cfg, repo.id, template.artifactId, error);
         created = await create();
       }
       box = created.sandbox;
@@ -1502,7 +1512,7 @@ export class BoxProvider implements SandboxProvider {
 
 // ── Project templates + warm-on-typing ──────────────────────────────────────
 
-interface NamedSnapshot {
+export interface NamedSnapshot {
   name: string;
   status: "saving" | "ready" | "failed";
   error?: string;
@@ -1524,8 +1534,90 @@ export function boxSnapshotSaveIsRecoverable(
   );
 }
 
-function boxSnapshotName(repoId: string): string {
-  return remoteRepoTemplateName("box", repoId).slice(0, 63).replace(/-+$/, "");
+/** Box limits snapshot names to 63 characters. */
+const BOX_SNAPSHOT_NAME_MAX = 63;
+/** `-` plus a base36 millisecond timestamp (8 characters until 2059). */
+const BOX_SNAPSHOT_GENERATION_CHARS = 9;
+
+/** The stable part of a repo's snapshot names: everything a refresh keeps.
+ * It ends in the runner and project-preparation hash, so a setup change
+ * starts a new family. Long repo ids lose characters, never the hash. */
+export function boxSnapshotFamily(templateName: string): string {
+  const max = BOX_SNAPSHOT_NAME_MAX - BOX_SNAPSHOT_GENERATION_CHARS;
+  if (templateName.length <= max) return templateName;
+  const hash = templateName.slice(templateName.lastIndexOf("-"));
+  return `${templateName.slice(0, max - hash.length).replace(/-+$/, "")}${hash}`;
+}
+
+/** Every publish saves under a fresh name. Reusing one name meant a refresh
+ * deleted the live template before its replacement existed, and a failed save
+ * then left nothing but a broken snapshot under the name every create used. */
+export function boxSnapshotGenerationName(
+  family: string,
+  now = Date.now(),
+): string {
+  return `${family}-${now.toString(36)}`;
+}
+
+/** Snapshots of one family, newest first. The bare family name is the
+ * pre-generation spelling and still counts. */
+export function boxSnapshotsOfFamily<T extends NamedSnapshot>(
+  snapshots: readonly T[],
+  family: string,
+): T[] {
+  const generation = new RegExp(
+    `^${family.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-[0-9a-z]+$`,
+  );
+  return snapshots
+    .filter((s) => s.name === family || generation.test(s.name))
+    .sort(
+      (a, b) =>
+        (Date.parse(b.updatedAt || b.createdAt || "") || 0) -
+        (Date.parse(a.updatedAt || a.createdAt || "") || 0),
+    );
+}
+
+function boxSnapshotFamilyFor(repoId: string): string {
+  return boxSnapshotFamily(remoteRepoTemplateName("box", repoId));
+}
+
+async function listNamedSnapshots(
+  cfg: BoxClientConfig,
+): Promise<NamedSnapshot[]> {
+  const response = await boxApi<{ snapshots?: NamedSnapshot[] }>(
+    cfg,
+    "GET",
+    "/named-snapshots",
+  );
+  return response.snapshots || [];
+}
+
+/** Best-effort: a failed save still counts against Box's snapshot cap. */
+async function deleteFailedSnapshot(cfg: BoxClientConfig, name: string) {
+  try {
+    await deleteNamedSnapshot(cfg, name);
+    console.log(`[sandbox:box] deleted failed repo template ${name}`);
+  } catch (error) {
+    console.warn(
+      `[sandbox:box] could not delete failed repo template ${name}:`,
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
+/** A create could not restore `artifactId`: forget it so later creates go
+ * cold and the next prewarm publishes a replacement. */
+async function discardBoxRepoTemplate(
+  cfg: BoxClientConfig,
+  repoId: string,
+  artifactId: string,
+  error: unknown,
+): Promise<void> {
+  invalidateRemoteRepoTemplate("box", repoId);
+  console.warn(
+    `[sandbox:box] repo template ${artifactId} is unusable (${error instanceof Error ? error.message : String(error)}); retrying cold`,
+  );
+  if (!isNotFound(error)) await deleteFailedSnapshot(cfg, artifactId);
 }
 
 async function getNamedSnapshot(
@@ -1566,16 +1658,45 @@ async function waitForNamedSnapshot(
   );
 }
 
+/** Finish or adopt this family's newest save when no local mapping exists,
+ * for example after a coordinator restart mid-publish. Failed saves are
+ * deleted on the way; they can never be restored. */
+async function findBoxFamilySnapshot(
+  cfg: BoxClientConfig,
+  family: string,
+): Promise<string | null> {
+  const candidates = boxSnapshotsOfFamily(
+    await listNamedSnapshots(cfg),
+    family,
+  );
+  for (const snapshot of candidates) {
+    if (snapshot.status === "failed") {
+      await deleteFailedSnapshot(cfg, snapshot.name);
+      continue;
+    }
+    if (snapshot.status === "ready") return snapshot.name;
+    if (boxSnapshotSaveIsRecoverable(snapshot)) {
+      try {
+        await waitForNamedSnapshot(cfg, snapshot.name);
+        return snapshot.name;
+      } catch (error) {
+        console.warn(
+          `[sandbox:box] in-flight repo template ${snapshot.name} did not finish:`,
+          error instanceof Error ? error.message : String(error),
+        );
+        if ((await getNamedSnapshot(cfg, snapshot.name))?.status === "failed")
+          await deleteFailedSnapshot(cfg, snapshot.name);
+      }
+    }
+  }
+  return null;
+}
+
 async function recoverBoxRepoTemplate(cfg: BoxClientConfig, repoId: string) {
   const stored = readRemoteRepoTemplate("box", repoId);
   if (stored) return stored;
-  const name = boxSnapshotName(repoId);
-  let snapshot = await getNamedSnapshot(cfg, name);
-  if (snapshot && boxSnapshotSaveIsRecoverable(snapshot)) {
-    await waitForNamedSnapshot(cfg, name);
-    snapshot = await getNamedSnapshot(cfg, name);
-  }
-  if (snapshot?.status !== "ready") return null;
+  const name = await findBoxFamilySnapshot(cfg, boxSnapshotFamilyFor(repoId));
+  if (!name) return null;
   await recordBoxRepoTemplate(cfg, repoId, name);
   console.log(`[sandbox:box] recovered completed repo template ${name}`);
   return readRemoteRepoTemplate("box", repoId);
@@ -1614,21 +1735,6 @@ async function deleteNamedSnapshot(
   } catch (error) {
     if (!isNotFound(error)) throw error;
   }
-}
-
-async function waitForNamedSnapshotGone(
-  cfg: BoxClientConfig,
-  name: string,
-  timeoutMs = 2 * 60_000,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!(await getNamedSnapshot(cfg, name))) return;
-    await sleep(2_000);
-  }
-  throw new Error(
-    `Box named snapshot ${name} was not deleted after ${timeoutMs}ms`,
-  );
 }
 
 async function stopBox(
@@ -1701,8 +1807,8 @@ export const boxPrewarmAdapter: PrewarmAdapter = {
     try {
       response = await create(template?.artifactId);
     } catch (error) {
-      if (!template || !isNotFound(error)) throw error;
-      invalidateRemoteRepoTemplate("box", repoId);
+      if (!template || !boxTemplateUnusable(error)) throw error;
+      await discardBoxRepoTemplate(cfg, repoId, template.artifactId, error);
       restoredFromTemplate = false;
       response = await create();
     }
@@ -1727,36 +1833,72 @@ export const boxPrewarmAdapter: PrewarmAdapter = {
 
   async publishTemplate(sandboxId, repo) {
     const cfg = boxClientConfig();
-    const name = boxSnapshotName(repo.id);
+    const family = boxSnapshotFamilyFor(repo.id);
     const driver = boxDriver(cfg, sandboxId);
     await sealRemoteRepoTemplate(driver, "box", repo);
-    const existing = await getNamedSnapshot(cfg, name);
-    if (existing && boxSnapshotSaveIsRecoverable(existing)) {
-      // Snapshot publication survives a coordinator restart. Its deterministic
-      // name includes the runner signature, so finishing this recent in-flight
-      // save is the exact artifact the restarted prewarm needs. A provider save
-      // stuck longer than 20 minutes is deleted and rebuilt below instead of
-      // blocking every rebuild on the same dead operation forever.
-      await waitForNamedSnapshot(cfg, name);
-      await recordBoxRepoTemplate(cfg, repo.id, name);
-      console.log(
-        `[sandbox:box] recovered in-flight post-setup repo template ${name}`,
-      );
-      return;
+    const current = readRemoteRepoTemplate("box", repo.id)?.artifactId;
+    const siblings = boxSnapshotsOfFamily(
+      await listNamedSnapshots(cfg),
+      family,
+    );
+    for (const snapshot of siblings) {
+      if (snapshot.status === "failed") {
+        await deleteFailedSnapshot(cfg, snapshot.name);
+      } else if (boxSnapshotSaveIsRecoverable(snapshot)) {
+        // Snapshot publication survives a coordinator restart. A recent save
+        // in this family has the same runner and project inputs, so finishing
+        // it is the artifact this prewarm would produce. A save stuck longer
+        // than 20 minutes is ignored and swept once a replacement lands.
+        await waitForNamedSnapshot(cfg, snapshot.name);
+        await recordBoxRepoTemplate(cfg, repo.id, snapshot.name);
+        console.log(
+          `[sandbox:box] recovered in-flight post-setup repo template ${snapshot.name}`,
+        );
+        return;
+      }
     }
     // Box already captures a final filesystem snapshot while stopping. Saving
     // a named template from that archived state reuses the completed capture;
     // saving from a running multi-gigabyte tella-fusion Box stayed in `saving`
     // for hours and was repeatedly interrupted by coordinator restarts.
     await stopBox(cfg, sandboxId, TEMPLATE_ARCHIVE_WAIT_MS);
-    if (existing) {
-      await deleteNamedSnapshot(cfg, name);
-      await waitForNamedSnapshotGone(cfg, name);
-    }
+    // The live template stays untouched until this save is ready: creates
+    // keep restoring it meanwhile, and a failed save costs nothing but itself.
+    const name = boxSnapshotGenerationName(family);
     await boxApi(cfg, "POST", "/named-snapshots", { sandboxId, name }, 60_000);
-    await waitForNamedSnapshot(cfg, name);
+    try {
+      await waitForNamedSnapshot(cfg, name);
+    } catch (error) {
+      if (
+        (await getNamedSnapshot(cfg, name).catch(() => null))?.status ===
+        "failed"
+      )
+        await deleteFailedSnapshot(cfg, name);
+      throw error;
+    }
     await recordBoxRepoTemplate(cfg, repo.id, name);
     console.log(`[sandbox:box] published post-setup repo template ${name}`);
+    // Sweep this family's leftovers (an old-style fixed name, a save orphaned
+    // by a restart) so they cannot fill Box's per-account snapshot cap.
+    for (const snapshot of siblings) {
+      if (snapshot.name === name || snapshot.name === current) continue;
+      if (
+        boxSnapshotSaveIsRecoverable(snapshot) ||
+        snapshot.status === "failed"
+      )
+        continue;
+      try {
+        await deleteNamedSnapshot(cfg, snapshot.name);
+        console.log(
+          `[sandbox:box] deleted stale repo template ${snapshot.name}`,
+        );
+      } catch (error) {
+        console.warn(
+          `[sandbox:box] could not delete stale repo template ${snapshot.name}:`,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
   },
 
   async park(sandboxId) {

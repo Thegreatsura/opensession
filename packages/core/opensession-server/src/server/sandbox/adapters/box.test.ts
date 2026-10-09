@@ -21,6 +21,10 @@ import {
   boxCommandPlaneUnavailable,
   boxComposeShell,
   boxReadRetryable,
+  boxSnapshotFamily,
+  boxSnapshotGenerationName,
+  boxSnapshotsOfFamily,
+  boxTemplateUnusable,
   boxKnownHostsKey,
   boxMachineIpSshEndpoint,
   boxMachineType,
@@ -101,6 +105,63 @@ describe("Box named snapshots", () => {
         now,
       ),
     ).toBe(false);
+  });
+});
+
+describe("Box template failures", () => {
+  test("a missing or failed snapshot sends the create cold", () => {
+    expect(boxTemplateUnusable({ status: 404 })).toBe(true);
+    expect(boxTemplateUnusable({ status: 409, code: "snapshot_failed" })).toBe(
+      true,
+    );
+    expect(boxTemplateUnusable({ status: 409, code: "boat_starting" })).toBe(
+      false,
+    );
+    expect(boxTemplateUnusable({ status: 502 })).toBe(false);
+    expect(boxTemplateUnusable(new Error("timed out"))).toBe(false);
+  });
+});
+
+describe("Box snapshot generations", () => {
+  const family = "opensession-acme-web-1e001c1947e82562";
+
+  test("every publish gets a fresh name within Box's limit", () => {
+    const a = boxSnapshotGenerationName(family, 1_791_000_000_000);
+    const b = boxSnapshotGenerationName(family, 1_791_000_000_001);
+    expect(a).not.toBe(b);
+    expect(a.startsWith(`${family}-`)).toBe(true);
+    const long = boxSnapshotFamily(
+      `opensession-${"x".repeat(36)}-1e001c1947e82562`,
+    );
+    expect(long.endsWith("-1e001c1947e82562")).toBe(true);
+    expect(
+      boxSnapshotGenerationName(long, 1_791_000_000_000).length,
+    ).toBeLessThanOrEqual(63);
+  });
+
+  test("lists one family newest first, including the fixed legacy name", () => {
+    const found = boxSnapshotsOfFamily(
+      [
+        { name: family, status: "ready", createdAt: "2026-10-08T14:00:00Z" },
+        {
+          name: `${family}-mg1abcd`,
+          status: "failed",
+          createdAt: "2026-10-08T17:00:00Z",
+        },
+        {
+          name: "opensession-acme-web-ffffffffffffffff-mg1abcd",
+          status: "ready",
+          createdAt: "2026-10-08T18:00:00Z",
+        },
+        {
+          name: `${family}-x-y`,
+          status: "ready",
+          createdAt: "2026-10-08T18:00:00Z",
+        },
+      ],
+      family,
+    );
+    expect(found.map((s) => s.name)).toEqual([`${family}-mg1abcd`, family]);
   });
 });
 
