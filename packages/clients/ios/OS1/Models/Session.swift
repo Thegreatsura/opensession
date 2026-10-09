@@ -146,6 +146,9 @@ struct Session: Identifiable, Decodable, Equatable, Hashable {
     /// The agent-published demo of a user-visible change, rendered inline in
     /// the transcript where it was published.
     var walkthrough: SessionWalkthrough?
+    /// The root-relative route the agent recorded for the feature under test
+    /// (`set_portal_path`). The PR preview link opens here.
+    var previewPath: String?
     /// What this conversation has cost so far, and how full the model's
     /// context window is. Absent until the first run reports usage; the live
     /// value during a run arrives on the socket as `usage_update`.
