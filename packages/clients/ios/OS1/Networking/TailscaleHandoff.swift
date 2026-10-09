@@ -68,16 +68,53 @@ enum TailscaleHandoff {
         return wanted != current
     }
 
-    /// The person's shortcut, run through the Shortcuts app.
+    /// The shortcut the app offers to add: it takes an account name as input
+    /// and runs Tailscale's own Switch Account action with it. Signing a
+    /// shortcut needs an iCloud account, so it is shared as an iCloud link
+    /// rather than shipped in the bundle. Nil hides the Add button.
+    nonisolated static let sharedShortcutName = "Switch Tailscale Account"
+    nonisolated static let sharedShortcutLink: URL? = nil
+
+    /// Where Shortcuts sends you when the shortcut finishes. Only the iOS
+    /// target registers it; the Electron shell owns `os1://` on the Mac.
+    nonisolated static let returnScheme = "os1-native"
+
+    /// The person's shortcut, run through the Shortcuts app with the
+    /// account name as its input, returning here when it finishes.
     nonisolated static func shortcutURL(for account: ServerAccount) -> URL? {
         guard let name = account.tailscaleShortcut?.trimmingCharacters(in: .whitespaces),
               !name.isEmpty
         else { return nil }
         var components = URLComponents()
         components.scheme = "shortcuts"
+        var items = [URLQueryItem(name: "name", value: name)]
+        if let target = account.tailscaleAccount?.trimmingCharacters(in: .whitespaces),
+           !target.isEmpty {
+            items += [
+                URLQueryItem(name: "input", value: "text"),
+                URLQueryItem(name: "text", value: target),
+            ]
+        }
+        #if os(iOS)
+        components.host = "x-callback-url"
+        components.path = "/run-shortcut"
+        items.append(URLQueryItem(name: "x-success", value: "\(returnScheme)://tailscale"))
+        #else
         components.host = "run-shortcut"
-        components.queryItems = [URLQueryItem(name: "name", value: name)]
+        #endif
+        components.queryItems = items
         return components.url
+    }
+
+    /// Whether `url` is Shortcuts handing control back after a switch.
+    nonisolated static func isReturn(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == returnScheme
+    }
+
+    /// Open Apple's Add Shortcut screen for the shared shortcut.
+    static func addSharedShortcut() {
+        guard let link = sharedShortcutLink else { return }
+        launch(link) { _ in }
     }
 
     /// Where the switch button goes: the shortcut when there is one, else

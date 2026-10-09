@@ -616,8 +616,11 @@ Tailscale account and a Shortcuts shortcut that switches to it (connection
 form). A MagicDNS server name (`host.tailnet.ts.net`) identifies the tailnet
 without either. A successful list load records which tailnet the device is
 on; switching to an organization on another one runs its shortcut
-(`shortcuts://run-shortcut`, which should end with Open App), and the list's
-Tailscale diagnosis offers a button to the shortcut or to Tailscale.
+(`shortcuts://x-callback-url/run-shortcut` with the account name as text
+input; `x-success` returns via the iOS-only `os1-native://` scheme), and the
+list's Tailscale diagnosis offers a button to the shortcut or to Tailscale.
+Settings offers to add a shared shortcut once `sharedShortcutLink` names its
+iCloud link (signing a shortcut needs an iCloud account).
 
 ## Build
 

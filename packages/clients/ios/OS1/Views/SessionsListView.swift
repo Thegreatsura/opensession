@@ -1662,6 +1662,9 @@ struct SessionsListView: View {
     /// valid; the composer owns plain Data after that, so Files can revoke the
     /// source URL without breaking the upload.
     private func openFile(_ url: URL) {
+        // Back from the Tailscale switch shortcut: nothing to import, and
+        // the list's own poll notices the server answering again.
+        if TailscaleHandoff.isReturn(url) { return }
         Task {
             do {
                 let attachment = try await Task.detached(priority: .userInitiated) {

@@ -34,14 +34,26 @@ final class TailscaleHandoffTests: XCTestCase {
         XCTAssertNil(TailscaleHandoff.tailnetKey(for: account(url: "https://example.test")))
     }
 
-    func testShortcutURLRunsTheNamedShortcut() {
-        let url = TailscaleHandoff.shortcutURL(for: account(url: "", shortcut: "Tailscale Acme"))
-        XCTAssertEqual(url?.absoluteString, "shortcuts://run-shortcut?name=Tailscale%20Acme")
+    func testShortcutURLPassesTheAccountAndReturns() throws {
+        let url = try XCTUnwrap(TailscaleHandoff.shortcutURL(
+            for: account(url: "", tailscale: "acme.test", shortcut: "Tailscale Acme")
+        ))
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let query = Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0.value ?? "") })
+        XCTAssertEqual(url.scheme, "shortcuts")
+        XCTAssertEqual(query["name"], "Tailscale Acme")
+        XCTAssertEqual(query["input"], "text")
+        XCTAssertEqual(query["text"], "acme.test")
+        #if os(iOS)
+        XCTAssertEqual(query["x-success"], "os1-native://tailscale")
+        #endif
         XCTAssertNil(TailscaleHandoff.shortcutURL(for: account(url: "", shortcut: "  ")))
         XCTAssertEqual(
             TailscaleHandoff.switchURL(for: account(url: "")),
             TailscaleHandoff.appURL
         )
+        XCTAssertTrue(TailscaleHandoff.isReturn(URL(string: "os1-native://tailscale")!))
+        XCTAssertFalse(TailscaleHandoff.isReturn(URL(string: "file:///tmp/a.png")!))
     }
 
     func testAccountsSavedBeforeTailscaleFieldsStillDecode() throws {

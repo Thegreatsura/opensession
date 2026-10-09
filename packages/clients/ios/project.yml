@@ -41,6 +41,12 @@ targets:
         NSSpeechRecognitionUsageDescription: Turn what you say into text in the message box.
         NSSupportsLiveActivities: true
         LSSupportsOpeningDocumentsInPlace: true
+        # Shortcuts returns here after the Tailscale switch shortcut runs
+        # (x-success in TailscaleHandoff.shortcutURL).
+        CFBundleURLTypes:
+          - CFBundleURLName: tailscale-return
+            CFBundleURLSchemes:
+              - os1-native
         CFBundleDocumentTypes:
           - CFBundleTypeName: File
             CFBundleTypeRole: Viewer

@@ -413,10 +413,18 @@ struct SettingsView: View {
                     .noAutocapitalizationCompat()
                 TextField("Shortcut that switches to it", text: $tailscaleShortcut)
                     .autocorrectionDisabled()
+                if TailscaleHandoff.sharedShortcutLink != nil {
+                    Button {
+                        tailscaleShortcut = TailscaleHandoff.sharedShortcutName
+                        TailscaleHandoff.addSharedShortcut()
+                    } label: {
+                        Label("Add shortcut", systemImage: "plus.circle")
+                    }
+                }
             } header: {
                 Text("Tailscale")
             } footer: {
-                Text("When you switch to this organization from another Tailscale account, the shortcut runs. End it with Open App so you land back here. Without one, you get a button to open Tailscale.")
+                Text("Use the account name Tailscale shows. When you switch to this organization from another Tailscale account, the shortcut runs with that name and brings you back here. Without one, you get a button to open Tailscale.")
             }
 
             Section {
