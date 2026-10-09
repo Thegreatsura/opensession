@@ -92,7 +92,11 @@ import {
   getComposerPredictionsPref,
   onComposerPredictionsChanged,
   setComposerPredictionsPref,
+  getComposerAutocompletePref,
+  onComposerAutocompleteChanged,
+  setComposerAutocompletePref,
 } from "../../lib/composer-prediction-pref";
+import { composerAutocompleteAvailable } from "../../lib/api/composer-autocomplete";
 import {
   getReplySuggestionsPref,
   onReplySuggestionsChanged,
@@ -691,6 +695,26 @@ export function PreferencesPanel() {
       ),
     [],
   );
+  const [autocomplete, setAutocomplete] = useState<boolean>(
+    getComposerAutocompletePref,
+  );
+  useEffect(
+    () =>
+      onComposerAutocompleteChanged(() =>
+        setAutocomplete(getComposerAutocompletePref()),
+      ),
+    [],
+  );
+  const [autocompleteAvailable, setAutocompleteAvailable] = useState(true);
+  useEffect(() => {
+    let live = true;
+    void composerAutocompleteAvailable().then((ok) => {
+      if (live) setAutocompleteAvailable(ok);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
   const [nextChatButton, setNextChatButton] = useState<boolean>(
     getNextChatButtonPref,
   );
@@ -918,17 +942,37 @@ export function PreferencesPanel() {
             />
           }
         />
-        <SettingRow
-          title="Predicted reply"
-          desc="Suggest your next message in the composer. Press Tab to use it."
-          control={
-            <Switch
-              aria-label="Predicted reply"
-              checked={predictions}
-              onCheckedChange={setComposerPredictionsPref}
-            />
-          }
-        />
+        {/* The composer's two suggestions sit together so it is clear each
+            can be switched off on its own. */}
+        <SettingGroup>
+          <SettingRow
+            title="Predicted reply"
+            desc="Suggest your next message when a turn ends. Tab or double tap to use it."
+            control={
+              <Switch
+                aria-label="Predicted reply"
+                checked={predictions}
+                onCheckedChange={setComposerPredictionsPref}
+              />
+            }
+          />
+          <SettingRow
+            title="Autocomplete"
+            desc={
+              autocompleteAvailable
+                ? "Suggest the rest of your message as you type. Tab or double tap to accept."
+                : "Needs an OpenAI key in Settings, Desk voice."
+            }
+            control={
+              <Switch
+                aria-label="Autocomplete"
+                checked={autocomplete && autocompleteAvailable}
+                disabled={!autocompleteAvailable}
+                onCheckedChange={setComposerAutocompletePref}
+              />
+            }
+          />
+        </SettingGroup>
         <SettingRow
           title="Next button"
           control={

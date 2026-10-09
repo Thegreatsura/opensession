@@ -1,4 +1,6 @@
 import { useSessionVoice } from "../../hooks/useSessionVoice";
+import { useComposerAutocompleteEnabled } from "../../hooks/useComposerAutocomplete";
+import { composerCompleteApi } from "../../lib/api/composer-autocomplete";
 import { SessionVoiceStatus } from "../SessionVoiceStatus";
 import { SESSION_VOICE_STATUS } from "../../lib/session-voice-client";
 import type { useSessionModelWorkflowController } from "../../hooks/useSessionModelWorkflowController";
@@ -667,6 +669,7 @@ export function SessionViewerMainRegion({
     !showReview &&
     !showVideo &&
     !showTerminal;
+  const autocompleteEnabled = useComposerAutocompleteEnabled();
   const voice = useSessionVoice({
     sessionId: session.id,
     title: session.title,
@@ -1404,17 +1407,21 @@ export function SessionViewerMainRegion({
                                   : `Ask ${AGENT_NAME}…`,
                     // Same conditions as the chips: it answers a finished
                     // turn, and an ask card or a fork is a different reply.
-                    // Phones have no Tab key to take it with.
+                    // Tab takes it, or a double tap on phones.
                     prediction:
                       safety ||
                       promoting ||
-                      isPhone ||
                       isBusy ||
                       ask ||
                       forkFrom ||
                       !connected
                         ? null
                         : prediction,
+                    complete:
+                      autocompleteEnabled && !safety && connected
+                        ? (draft, signal) =>
+                            composerCompleteApi(session.id, draft, signal)
+                        : undefined,
                     disabled: !!safety || (!connected && !!forkFrom),
                     sendDisabled: (text) =>
                       !!safety ||

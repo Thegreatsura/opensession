@@ -21,6 +21,12 @@ export interface ComposerConfig {
    * takes it as an editable draft. It never sends on its own.
    */
   prediction?: string | null;
+  /**
+   * Typing autocomplete (hooks/useComposerAutocomplete.ts): asked after a
+   * pause for the rest of the draft, shown as faint text after the caret, and
+   * taken with Tab or a double tap. Omit to turn it off.
+   */
+  complete?: (draft: string, signal: AbortSignal) => Promise<string | null>;
   disabled?: boolean;
   /** Boolean, or a predicate on the current draft (for uncontrolled mode,
    * where the parent cannot read the text). */

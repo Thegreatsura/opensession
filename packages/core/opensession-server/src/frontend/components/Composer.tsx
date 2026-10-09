@@ -89,7 +89,13 @@ import {
   composerToolbarScrollDivider,
 } from "../lib/composer-classes";
 import { noAutofill } from "../lib/composer-autofill";
-import { takesPrediction } from "../lib/composer-prediction";
+import {
+  isBareTab,
+  isDoubleTap,
+  takesPrediction,
+  type TapPoint,
+} from "../lib/composer-prediction";
+import { useComposerAutocomplete } from "../hooks/useComposerAutocomplete";
 import { paletteIconBtn, paletteIconBtnRound } from "../lib/palette-classes";
 import { askSurface, noteSurface } from "../lib/tinted-surface";
 import { cn } from "../ui/cn";
@@ -193,6 +199,7 @@ export function Composer({
     draftKey,
     placeholder,
     prediction,
+    complete,
     disabled,
     sendDisabled,
     sendTitle,
@@ -529,6 +536,66 @@ export function Composer({
     prediction && !text && !noteMode && !quote && !disabled && !minimized
       ? prediction
       : null;
+  // Typing autocomplete: faint text after the caret, taken like a prediction.
+  const autocomplete = useComposerAutocomplete({
+    complete,
+    text,
+    enabled: focused && !noteMode && !disabled && !minimized,
+    textareaRef,
+  });
+  const ghost = autocomplete.ghost;
+  const ghostRef = useRef<HTMLDivElement>(null);
+  const ghostTextRef = useRef<HTMLSpanElement>(null);
+  const lastTap = useRef<TapPoint | null>(null);
+  // Types a prediction or a completion in at the end of the draft. It never
+  // sends: the person reads it, changes it or not, and sends. It goes through
+  // the field's own editing (as a pasted session link does, lib/session-url)
+  // so the normal input path sees it and one undo takes it back out.
+  const takeSuggestion = (insert: string) => {
+    autocomplete.taken();
+    const el = textareaRef.current;
+    if (!el) return;
+    el.focus();
+    el.selectionStart = el.selectionEnd = el.value.length;
+    if (document.execCommand("insertText", false, insert)) return;
+    el.setRangeText(insert, el.value.length, el.value.length, "end");
+    el.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: insert,
+        inputType: "insertText",
+      }),
+    );
+  };
+  // Touch has no Tab key: a double tap on the field takes the prediction, and
+  // one on the faint completion takes that.
+  const handleTouchEnd = (e: React.TouchEvent<HTMLTextAreaElement>) => {
+    const touch = e.changedTouches[0];
+    if (!touch) return;
+    const tap = { t: e.timeStamp, x: touch.clientX, y: touch.clientY };
+    if (!isDoubleTap(lastTap.current, tap)) {
+      lastTap.current = tap;
+      return;
+    }
+    lastTap.current = null;
+    if (shownPrediction && !text.trim()) {
+      e.preventDefault();
+      takeSuggestion(shownPrediction);
+      return;
+    }
+    const rects = ghost ? ghostTextRef.current?.getClientRects() : undefined;
+    const onGhost = [...(rects ?? [])].some(
+      (r) =>
+        tap.x >= r.left - 16 &&
+        tap.x <= r.right + 16 &&
+        tap.y >= r.top - 12 &&
+        tap.y <= r.bottom + 12,
+    );
+    if (ghost && onGhost) {
+      e.preventDefault();
+      takeSuggestion(ghost);
+    }
+  };
   const composerIconButtonClass = cn(
     paletteIconBtn,
     minimized && paletteIconBtnRound,
@@ -975,13 +1042,18 @@ export function Composer({
     // min-/max-height clamp this, so tall drafts scroll internally at the cap.
     // A predicted message is measured too: it is the placeholder, and a long
     // one would otherwise clip behind a scrollbar in a one-row field.
-    const height = displayText || shownPrediction ? `${el.scrollHeight}px` : "";
+    // So is a completion: the field grows to show it rather than clip it.
+    const measured = Math.max(
+      el.scrollHeight,
+      ghost ? (ghostRef.current?.scrollHeight ?? 0) : 0,
+    );
+    const height = displayText || shownPrediction ? `${measured}px` : "";
     if (height) el.style.height = height;
     release?.();
     appliedHeight.current = height;
     // Height (and thus clip state) just changed — re-evaluate both edges.
     updateScrollEdges(el);
-  }, [displayText, shownPrediction, isPhone, minimized, textareaRef]);
+  }, [displayText, shownPrediction, ghost, isPhone, minimized, textareaRef]);
 
   // The draft can also start or stop clipping without a keystroke: the pane is
   // resized, a split opens, the phone keyboard takes the field's cap down. The
@@ -1267,12 +1339,20 @@ export function Composer({
     // It never sends: the person reads it, changes it or not, and sends.
     if (shownPrediction && takesPrediction(e, text, shownPrediction)) {
       e.preventDefault();
-      setText(shownPrediction);
-      onTyping?.(true, shownPrediction);
-      queueMicrotask(() => {
-        const el = textareaRef.current;
-        if (el) el.selectionStart = el.selectionEnd = el.value.length;
-      });
+      takeSuggestion(shownPrediction);
+      return;
+    }
+    // Tab takes the faint completion after the caret; Escape dismisses it
+    // before Escape means anything else here.
+    if (ghost && isBareTab(e)) {
+      e.preventDefault();
+      takeSuggestion(ghost);
+      return;
+    }
+    if (ghost && e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      autocomplete.dismiss();
       return;
     }
     if (
@@ -1610,6 +1690,30 @@ export function Composer({
               dangerouslySetInnerHTML={{ __html: hlHtml }}
             />
           )}
+          {ghost && (
+            // The completion is painted after an invisible copy of the draft
+            // in a mirror with the code mirror's exact metrics, so it starts
+            // exactly where the caret is and wraps where the field would.
+            <div
+              ref={ghostRef}
+              className={cn(
+                composerTextarea,
+                composerTextareaPadding,
+                "pointer-events-none absolute inset-0 z-0 overflow-hidden break-words whitespace-pre-wrap select-none",
+                "-mx-[6px] w-[calc(100%+12px)] px-[6px]",
+              )}
+              aria-hidden="true"
+            >
+              <span className="text-transparent">{fieldText}</span>
+              <span
+                ref={ghostTextRef}
+                className="text-faint"
+                data-composer-ghost=""
+              >
+                {ghost}
+              </span>
+            </div>
+          )}
           <textarea
             ref={textareaRef}
             {...mentionInputProps}
@@ -1631,8 +1735,8 @@ export function Composer({
               noteMode
                 ? "placeholder:text-[color-mix(in_srgb,var(--text-faint)_84%,var(--yellow))]"
                 : "placeholder:text-faint",
-              // Room for the Tab key cap that takes the prediction.
-              shownPrediction && "pr-14",
+              // Room for the key cap that takes the prediction.
+              shownPrediction && (isPhone ? "pr-24" : "pr-14"),
               // With the mirror painting the styled draft, the field's own
               // glyphs go transparent and only the caret stays visible.
               hlActive
@@ -1667,6 +1771,8 @@ export function Composer({
             }}
             onKeyDown={handleKeyDown}
             onKeyUp={syncMentions}
+            onSelect={autocomplete.onSelect}
+            onTouchEnd={handleTouchEnd}
             onClick={(e) => {
               if (openPillMenu(e.currentTarget, e.clientX, e.clientY)) return;
               syncMentions();
@@ -1679,6 +1785,7 @@ export function Composer({
               // on every scroll frame.
               const scrollTop = updateScrollEdges(e.currentTarget);
               if (hlRef.current) hlRef.current.scrollTop = scrollTop;
+              if (ghostRef.current) ghostRef.current.scrollTop = scrollTop;
             }}
             onFocus={() => setFocused(true)}
             onBlur={() => {
@@ -1710,7 +1817,7 @@ export function Composer({
               className="pointer-events-none absolute top-1/2 right-3 z-[2] inline-flex h-5 -translate-y-1/2 items-center rounded-sm border border-line px-1.5 text-meta font-medium text-faint [font-family:inherit]"
               aria-hidden="true"
             >
-              Tab
+              {isPhone ? "Double tap" : "Tab"}
             </kbd>
           )}
           {/* What a press on a pill gets instead of the reference vanishing.
