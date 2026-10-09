@@ -1215,9 +1215,10 @@ export function activeDetachedAgentRunCount(): number {
 }
 
 /**
- * Steer a message into an in-flight run. Pi runs steer natively
- * (steerPiRun: session.steer folds the message in at the next step, and a
- * model response still streaming is cut short so that step comes at once);
+ * Steer a message into an in-flight run. Pi runs steer in-band since
+ * 2026-07-12 (steerPiRun: a noReply history append the running turn
+ * picks up at its next step boundary — Claude-SDK-steer semantics); pi runs
+ * steer natively (session.steer folds the message in at the next step);
  * host-forwarded runs steer over RPC. False = nothing steerable — caller
  * should queue.
  */

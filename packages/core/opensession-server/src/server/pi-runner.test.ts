@@ -43,7 +43,6 @@ import {
   piGateReason,
   piStreamEventRequiresAccountContinuation,
   piSteeringBoundaryTools,
-  interruptPiResponseForSteer,
   piToolNames,
   resolvePiPresetWiring,
   resolvePiRoutedModel,
@@ -158,45 +157,6 @@ describe("piSteeringBoundaryTools", () => {
       tool!.execute("call-1/2", {}, undefined, undefined, {} as any),
     ).rejects.toThrow(PI_STEER_TOOL_SKIP);
     expect(executed).toBe(0);
-  });
-});
-
-describe("interruptPiResponseForSteer", () => {
-  const agent = (opts: {
-    streaming?: string;
-    tools?: string[];
-    queued?: boolean;
-  }) => {
-    const calls = { abort: 0 };
-    return {
-      calls,
-      state: {
-        streamingMessage: opts.streaming ? { role: opts.streaming } : undefined,
-        pendingToolCalls: new Set(opts.tools ?? []),
-      },
-      hasQueuedMessages: () => opts.queued ?? true,
-      abort: () => {
-        calls.abort++;
-      },
-    };
-  };
-
-  test("cuts a streaming response short once a steer is queued", () => {
-    const target = agent({ streaming: "assistant" });
-    expect(interruptPiResponseForSteer(target)).toBe(true);
-    expect(target.calls.abort).toBe(1);
-  });
-
-  test("leaves running tools, idle gaps and empty queues alone", () => {
-    for (const target of [
-      agent({ streaming: "assistant", tools: ["call-1"] }),
-      agent({}),
-      agent({ streaming: "user" }),
-      agent({ streaming: "assistant", queued: false }),
-    ]) {
-      expect(interruptPiResponseForSteer(target)).toBe(false);
-      expect(target.calls.abort).toBe(0);
-    }
   });
 });
 
