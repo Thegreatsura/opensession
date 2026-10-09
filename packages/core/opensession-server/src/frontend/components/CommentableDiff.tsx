@@ -2,6 +2,7 @@ import React, {
   startTransition,
   useEffect,
   useEffectEvent,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -159,14 +160,18 @@ const BASE_OPTIONS = {
   expansionLineCount: 20,
 };
 
-/** Parse the patch and keep only the files the visible order names. */
+/** Parse the patch and keep only the files the visible order names, given as
+ *  the paths joined by NUL. */
 function parseFileDiffs(
   patch: string,
-  visibleFileOrder: readonly string[] | undefined,
+  visibleFileOrderKey: string | undefined,
 ): FileDiffMetadata[] {
   try {
     const parsed = parsePatchFiles(patch).flatMap((p) => p.files);
-    if (!visibleFileOrder) return parsed;
+    if (visibleFileOrderKey === undefined) return parsed;
+    const visibleFileOrder = visibleFileOrderKey
+      ? visibleFileOrderKey.split("\0")
+      : [];
     const order = new Map(visibleFileOrder.map((path, index) => [path, index]));
     return parsed
       .filter((file) => order.has(file.name))
@@ -265,7 +270,27 @@ export function CommentableDiff({ patch, options }: Props) {
   const isPhone = useIsPhone();
   const resolvedTheme = useResolvedTheme();
   const theme = codeTheme === "system" ? resolvedTheme : codeTheme;
-  const files = parseFileDiffs(patch, visibleFileOrder);
+  // Parse once per patch and visible order, not once per render: a fresh parse
+  // hands every FileDiff a new object, and FileDiff then redraws the whole
+  // file, which on a phone throws the reader's scroll position. The compiler
+  // cannot memoize this (the result feeds hook state below), and callers
+  // rebuild the order array every render, so key it on the joined paths.
+  const visibleFileOrderKey = visibleFileOrder?.join("\0");
+  const [parsed, setParsed] = useState(() => ({
+    patch,
+    orderKey: visibleFileOrderKey,
+    files: parseFileDiffs(patch, visibleFileOrderKey),
+  }));
+  let current = parsed;
+  if (parsed.patch !== patch || parsed.orderKey !== visibleFileOrderKey) {
+    current = {
+      patch,
+      orderKey: visibleFileOrderKey,
+      files: parseFileDiffs(patch, visibleFileOrderKey),
+    };
+    setParsed(current);
+  }
+  const files = current.files;
 
   // GitHub-backed "Viewed" checkboxes: hidden until the parent's fetch lands.
   const viewedEnabled = !!onToggleViewed && viewedFiles !== undefined;
@@ -1411,6 +1436,26 @@ const FileDiffRow = function FileDiffRow({
   createEditor?: (options: EditorOptions<Meta>) => DiffsEditor<Meta>;
   loadDiffFiles?: (fd: FileDiffMetadata) => Promise<FileDiffLoadedFiles>;
 }) {
+  // FileDiff compares options shallowly and redraws the whole file when any
+  // entry differs, so the callbacks in them must keep one identity. The
+  // parent's handlers change on most of its renders; read them through a ref.
+  const latest = useRef({
+    onSelect,
+    fileIndex,
+    path: file.name,
+    loadDiffFiles,
+  });
+  useLayoutEffect(() => {
+    latest.current = { onSelect, fileIndex, path: file.name, loadDiffFiles };
+  });
+  const [handlers] = useState(() => ({
+    onLineSelected: (range: SelectedLineRange | null) => {
+      const { onSelect, fileIndex, path } = latest.current;
+      onSelect(fileIndex, path, range);
+    },
+    loadDiffFiles: (fd: FileDiffMetadata) => latest.current.loadDiffFiles!(fd),
+  }));
+  const canLoadFiles = !!loadDiffFiles;
   const options = {
     ...BASE_OPTIONS,
     diffStyle,
@@ -1419,10 +1464,10 @@ const FileDiffRow = function FileDiffRow({
     // Line selection drives commenting; while editing, clicks place the
     // caret instead.
     enableLineSelection: !editing,
-    onLineSelected: (range: SelectedLineRange | null) =>
-      onSelect(fileIndex, file.name, range),
+    onLineSelected: handlers.onLineSelected,
   };
-  if (loadDiffFiles) Object.assign(options, { loadDiffFiles });
+  if (canLoadFiles)
+    Object.assign(options, { loadDiffFiles: handlers.loadDiffFiles });
 
   const fileDiff = (
     <FileDiff<Meta>

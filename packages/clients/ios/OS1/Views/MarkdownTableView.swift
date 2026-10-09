@@ -40,8 +40,12 @@ struct MarkdownTableView: View {
     var sortControls: SortControls?
     @Environment(\.transcriptQuoteSelection) private var quoteSelection
     @Environment(\.transcriptAnchorEntryId) private var anchorEntryId
+    /// A Markdown file frames its tables; a chat message keeps them open.
+    @Environment(\.markdownPresentation) private var presentation
 
     @State private var available: CGFloat = 0
+
+    private var framed: Bool { presentation == .document }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -54,7 +58,7 @@ struct MarkdownTableView: View {
             if available > 0 {
                 let layout = TableLayoutPlan(
                     table: measured,
-                    available: available,
+                    available: framed ? available - 2 * Self.frameInset - 2 : available,
                     gutter: Self.gutter,
                     headerAccessoryWidth: sortControls == nil ? 0 : Self.sortAccessoryWidth
                 )
@@ -66,7 +70,9 @@ struct MarkdownTableView: View {
                     }
                     .contentShape(Rectangle())
                 } else {
-                    let base = dimmed ? MarkdownRenderConfig.os1Dim : .os1Static
+                    let base = framed
+                        ? MarkdownRenderConfig.os1Document
+                        : dimmed ? MarkdownRenderConfig.os1Dim : .os1Static
                     let config = quoteSelection == nil
                         ? base
                         : base.withTextContextMenu(value: .os1QuoteSelection)
@@ -85,7 +91,7 @@ struct MarkdownTableView: View {
 
     @ViewBuilder
     private func grid(_ layout: TableLayoutPlan) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let rows = VStack(alignment: .leading, spacing: 0) {
             row(measured.headers, widths: layout.widths, isHeader: true)
             ForEach(Array(measured.rows.enumerated()), id: \.offset) { index, cells in
                 row(
@@ -97,6 +103,16 @@ struct MarkdownTableView: View {
             }
         }
         .textSelection(.enabled)
+        if framed {
+            // The document frame: the table hugs its columns inside a
+            // hairline, with the header row on a fill step.
+            let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+            rows
+                .clipShape(shape)
+                .overlay(shape.strokeBorder(OS1VisualStyle.border, lineWidth: 1))
+        } else {
+            rows
+        }
     }
 
     @ViewBuilder
@@ -126,6 +142,9 @@ struct MarkdownTableView: View {
             }
         }
         .padding(.vertical, isHeader ? Self.headerPadding : Self.cellPadding)
+        .padding(.vertical, framed ? 2 : 0)
+        .padding(.horizontal, framed ? Self.frameInset : 0)
+        .background(framed && isHeader ? OS1VisualStyle.hover : .clear)
         .overlay(alignment: .bottom) {
             if !isLast {
                 Rectangle()
@@ -160,6 +179,8 @@ struct MarkdownTableView: View {
     }
 
     private static let sortAccessoryWidth: CGFloat = 15
+    /// Side padding inside a framed table's hairline.
+    private static let frameInset: CGFloat = 14
 
     private var bodyColor: Color {
         dimmed ? OS1VisualStyle.textNarration : OS1VisualStyle.text

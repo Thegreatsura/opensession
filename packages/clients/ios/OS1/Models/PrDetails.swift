@@ -71,6 +71,31 @@ struct PrFile: Decodable, Equatable, Identifiable {
 /// The PR's preview environment, when the repo builds one.
 struct PrStaging: Decodable, Equatable {
     var url: String?
+    /// The deployment's configured landing route, used when the session has
+    /// not recorded one. Absent on servers that predate it.
+    var defaultPath: String?
+
+    /// The preview link: the session's recorded route when it has one, else
+    /// the configured landing route, else the root. Mirrors the web's
+    /// `stagingHref` (src/frontend/lib/preview-url.ts).
+    func href(previewPath: String?) -> URL? {
+        guard let url, !url.isEmpty else { return nil }
+        let path = previewPath.flatMap { $0.isEmpty ? nil : $0 } ?? defaultPath
+        return URL(string: Self.withPreviewPath(url, path))
+    }
+
+    /// Append a root-relative route to a base URL, string for string like the
+    /// web's `withPreviewPath`: leading slashes on the route and trailing
+    /// slashes on the base collapse to one, a query in the route is kept, and
+    /// an empty or bare "/" route leaves the base unchanged.
+    static func withPreviewPath(_ base: String, _ path: String?) -> String {
+        guard let path, !path.isEmpty else { return base }
+        let rel = "/" + path.drop(while: { $0 == "/" })
+        if rel == "/" { return base }
+        var trimmed = Substring(base)
+        while trimmed.hasSuffix("/") { trimmed = trimmed.dropLast() }
+        return trimmed + rel
+    }
 }
 
 struct PrComment: Decodable, Equatable {

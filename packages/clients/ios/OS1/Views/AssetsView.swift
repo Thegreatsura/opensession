@@ -473,7 +473,8 @@ private struct AssetPreview: View {
                     opaquePlaceholder
                 }
             case .markdown:
-                textScroll { MarkdownBody($0) }
+                // A file is read as a page, not a chat message.
+                loadedText { MarkdownDocumentView($0) }
             case .text:
                 textScroll { body in
                     if let language = SyntaxHighlighting.language(forPath: asset.path) {
@@ -500,16 +501,25 @@ private struct AssetPreview: View {
         .task(id: asset.path) { await loadTextIfNeeded() }
     }
 
-    @ViewBuilder
     private func textScroll<Content: View>(
         @ViewBuilder _ content: @escaping (String) -> Content
     ) -> some View {
-        if let text {
+        loadedText { text in
             ScrollView {
                 content(text)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
             }
+        }
+    }
+
+    /// The file's text once it has loaded, or the loading and failure states.
+    @ViewBuilder
+    private func loadedText<Content: View>(
+        @ViewBuilder _ content: @escaping (String) -> Content
+    ) -> some View {
+        if let text {
+            content(text)
         } else if textFailed {
             ListPlaceholder(
                 symbol: "exclamationmark.triangle",

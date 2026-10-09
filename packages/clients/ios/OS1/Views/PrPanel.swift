@@ -1092,7 +1092,7 @@ struct PrPanelView: View {
                 }
             }
             Section {
-                if let preview = pr.staging?.url.flatMap(URL.init) {
+                if let preview = pr.staging?.href(previewPath: viewModel.session.previewPath) {
                     Link(destination: preview) {
                         Label("Open the preview", systemImage: "globe")
                     }

@@ -185,6 +185,11 @@ enum OS1VisualStyle {
             ? UIColor(white: 0.180, alpha: 1)
             : UIColor(white: 1.0, alpha: 1)
     })
+    /// A Markdown file's page: one semantic step off the app's canvas, so a
+    /// document reads as a sheet of paper rather than a chat transcript.
+    /// Light lifts to the grouped grey; dark rises off black to the first
+    /// elevated grey, where code wells still sit a step below.
+    static let documentPage = Color(uiColor: .secondarySystemBackground)
     #else
     static let background = Color(nsColor: .windowBackgroundColor)
     static let raised = Color(nsColor: .underPageBackgroundColor)
@@ -266,6 +271,7 @@ enum OS1VisualStyle {
     /// The Mac window background is already a grey the composer floats on, so
     /// the transcript needs no canvas of its own here — see the iOS note.
     static let chatCanvas = Color(nsColor: .windowBackgroundColor)
+    static let documentPage = Color(nsColor: .textBackgroundColor)
     /// Neutral gray, resolved per appearance. It does NOT follow iOS's light
     /// value down: `windowBackgroundColor` is itself around #ECECEC in light,
     /// so the bubble is the LIFTED surface on the Mac and has to stay above
