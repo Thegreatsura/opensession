@@ -234,6 +234,19 @@ struct PrReviewCardsScreenshot: View {
                     .font(.title2.weight(.semibold))
                     .foregroundStyle(OS1VisualStyle.text)
                     .padding(.top, 8)
+                // A team asked on GitHub only: the server expands it to its
+                // members, and the row still names the team.
+                reviewRows(
+                    OsReviewSummary(
+                        verdict: "approve", confidence: 4, risk: .low, recovery: .minutes,
+                        findings: 0, blocking: 0, stale: false
+                    ),
+                    reviewers: [
+                        PrReviewer(login: "acme/reviewers", state: "PENDING", isTeam: true),
+                        PrReviewer(login: "sam-reviews", state: "APPROVED"),
+                    ],
+                    requested: ["kent", "grant"]
+                )
                 reviewRows(
                     OsReviewSummary(
                         verdict: "approve", confidence: 5, risk: .high, recovery: .days,
@@ -255,14 +268,21 @@ struct PrReviewCardsScreenshot: View {
     }
 
     /// The workspace sheet's Review section over a fixture pull request.
-    private func reviewRows(_ review: OsReviewSummary) -> some View {
+    private func reviewRows(
+        _ review: OsReviewSummary,
+        reviewers: [PrReviewer]? = nil,
+        requested: [String]? = nil
+    ) -> some View {
         var pr = PrDetails(number: 128)
         pr.title = "Drop users.legacy_id"
         pr.state = "OPEN"
         pr.osReview = review
+        pr.reviewers = reviewers
+        var session = Session(id: "screenshot-session")
+        session.prReviewRequested = requested
         return WorkspaceReviewRows(
             sessionId: "screenshot-session",
-            sessions: [Session(id: "screenshot-session")],
+            sessions: [session],
             pr: pr,
             repo: "opensession"
         )

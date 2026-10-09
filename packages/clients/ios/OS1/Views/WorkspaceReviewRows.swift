@@ -58,16 +58,23 @@ struct WorkspaceReviewRows: View {
             }
             ReviewerRow(
                 state: WorkspaceReview.state(of: sessions, openSessionId: sessionId),
+                pr: pr,
                 roster: roster,
                 teams: teams,
                 onOpenPr: onOpenPr
             )
         }
         .padding(6)
+        // Follow the roster rather than reading it once after `ensureLoaded`:
+        // that returns at once while another view's fetch is in flight, and
+        // a row that read the empty roster then would name a team request by
+        // its slug and count its members as separate people.
+        .onChange(of: TeamDirectory.shared.names, initial: true) { _, names in
+            roster = names
+            teams = TeamDirectory.shared.reviewTeams
+        }
         .task {
             await TeamDirectory.shared.ensureLoaded()
-            roster = TeamDirectory.shared.names
-            teams = TeamDirectory.shared.reviewTeams
             await InstanceIdentity.shared.ensureLoaded()
             agentName = InstanceIdentity.shared.personaName
         }
@@ -327,6 +334,9 @@ private struct AgentReviewRow: View {
 /// Who was asked to review this, and how to ask, hand over or sign off.
 private struct ReviewerRow: View {
     let state: WorkspaceReview.State
+    /// The open session's pull request: its reviewer list says which team
+    /// GitHub was asked, and who has already given a review.
+    let pr: PrDetails?
     /// Who can be asked, and the teams that can be asked instead.
     let roster: [String]
     let teams: [OS1API.ReviewTeam]
@@ -336,6 +346,9 @@ private struct ReviewerRow: View {
     /// was picked here until the next poll confirms it.
     @State private var request: SessionReviewRequest?
     @State private var githubRequested: [String] = []
+    /// GitHub's requests were cleared here and the PR poll has not caught up:
+    /// its team request must not keep naming the row.
+    @State private var githubWithdrawn = false
     /// Why the last pick was refused. Without it the row simply snaps back,
     /// which reads as the button doing nothing.
     @State private var error: String?
@@ -358,17 +371,40 @@ private struct ReviewerRow: View {
         return request.targets(viewer.userName) || request.targets(viewer.githubLogin)
     }
 
+    /// The team a request names, GitHub's other pending reviewers, and the
+    /// reviews already given, from the request as this device believes it.
+    private var summary: WorkspaceReview.Summary {
+        WorkspaceReview.summary(
+            request: request,
+            githubRequested: githubRequested,
+            pr: githubWithdrawn ? nil : pr,
+            teams: teams,
+            personName: Self.personName
+        )
+    }
+
     /// Somebody else's name on GitHub's list, when there is no request of our
-    /// own to speak for. Only that side can clear those, which the menu does.
+    /// own to speak for and no team request covering them. Only that side can
+    /// clear those, which the menu does.
     private var githubOthers: [String] {
-        guard request == nil else { return [] }
-        return githubRequested.filter {
+        summary.githubOthers.filter {
             !MessageAttribution.isViewer(
                 $0,
                 viewerName: viewer.userName,
                 viewerLogin: viewer.githubLogin
             )
         }
+    }
+
+    /// A team GitHub was asked with no request of ours: it names the row,
+    /// and the row's menu changes or clears it.
+    private var githubTeam: WorkspaceReview.RequestedTeam? {
+        guard let team = summary.team, !team.fromRequest else { return nil }
+        return team
+    }
+
+    private var hasRequest: Bool {
+        request != nil || githubTeam != nil || !githubOthers.isEmpty
     }
 
     var body: some View {
@@ -386,8 +422,8 @@ private struct ReviewerRow: View {
                 }
             },
             name: rowName,
-            detail: Text(rowState),
-            detailSpoken: rowState,
+            detail: Text(rowDetail),
+            detailSpoken: rowDetail,
             tint: tone.ink,
             note: nil,
             error: error,
@@ -443,14 +479,14 @@ private struct ReviewerRow: View {
                                     } label: {
                                         Label(
                                             team.name,
-                                            systemImage: request?.to == team.github
+                                            systemImage: summary.team?.github == team.github
                                                 ? "checkmark.circle" : "person.3"
                                         )
                                     }
                                 }
                             }
                         }
-                        if request != nil || !githubRequested.isEmpty {
+                        if request != nil || !githubRequested.isEmpty || githubTeam != nil {
                             Button(role: .destructive) {
                                 pick(nil)
                             } label: {
@@ -461,7 +497,7 @@ private struct ReviewerRow: View {
                         ReviewActionLabel(
                             title: waitsOnMe
                                 ? nil
-                                : (request != nil || !githubOthers.isEmpty ? "Change" : "Request"),
+                                : (hasRequest ? "Change" : "Request"),
                             spinning: false
                         )
                     }
@@ -473,15 +509,12 @@ private struct ReviewerRow: View {
         .onChange(of: state) { _, _ in adopt() }
     }
 
-    private var team: OS1API.ReviewTeam? {
-        guard let to = request?.to else { return nil }
-        return teams.first { $0.github == to }
-    }
+    private var team: WorkspaceReview.RequestedTeam? { summary.team }
 
     private var tone: ReviewTone {
         if waitsOnMe { return .red }
         if accepted != nil { return .green }
-        return request != nil || !githubOthers.isEmpty ? .yellow : .muted
+        return hasRequest ? .yellow : .muted
     }
 
     /// The face is whoever the review sits with — you, when it is waiting on
@@ -497,12 +530,11 @@ private struct ReviewerRow: View {
     private var rowName: String? {
         if waitsOnMe { return nil }
         if let accepted { return accepted.by }
-        if let team { return team.name }
+        if let team, team.fromRequest { return team.name }
         if let request { return request.to }
-        guard let first = githubOthers.first else { return nil }
-        let more = githubOthers.count - 1
-        let name = Self.personName(first)
-        return more > 0 ? "\(name) +\(more)" : name
+        let names = (githubTeam.map { [$0.name] } ?? []) + githubOthers.map(Self.personName)
+        guard let first = names.first else { return nil }
+        return names.count > 1 ? "\(first) +\(names.count - 1)" : first
     }
 
     /// GitHub's reviewer list arrives as person keys ("michiel") or logins.
@@ -517,7 +549,18 @@ private struct ReviewerRow: View {
     private var rowState: String {
         if waitsOnMe { return "Needs your review" }
         if accepted != nil { return "Reviewed" }
-        return request != nil || !githubOthers.isEmpty ? "Requested" : "No reviewer"
+        return hasRequest ? "Requested" : "No reviewer"
+    }
+
+    /// The state, then any review a teammate gave on their own ("Grant
+    /// approved"): a team's request speaks for its pending members, never
+    /// for one who already answered.
+    private var rowDetail: String {
+        let own = [rowName, accepted?.by].compactMap { $0?.lowercased() }
+        let given = summary.verdicts
+            .filter { !own.contains($0.name.lowercased()) }
+            .map { "\($0.name) \($0.label)" }
+        return ([rowState] + given).joined(separator: " · ")
     }
 
     /// Follow the polled workspace, and drop whatever this device was showing
@@ -525,6 +568,7 @@ private struct ReviewerRow: View {
     private func adopt() {
         request = state.request
         githubRequested = state.githubRequested
+        githubWithdrawn = false
         error = nil
     }
 
@@ -543,7 +587,11 @@ private struct ReviewerRow: View {
         }
         // Clearing a workspace that has no request of its own withdraws
         // GitHub's pending ones, which is what the server does with the call.
-        if name == nil && previous == nil { githubRequested = [] }
+        let previousWithdrawn = githubWithdrawn
+        if name == nil && previous == nil {
+            githubRequested = []
+            githubWithdrawn = true
+        }
         error = nil
         let target = state.ownerId
         Task {
@@ -553,6 +601,7 @@ private struct ReviewerRow: View {
             } catch {
                 request = previous
                 githubRequested = previousGithub
+                githubWithdrawn = previousWithdrawn
                 self.error = (error as? LocalizedError)?.errorDescription
                     ?? error.localizedDescription
             }

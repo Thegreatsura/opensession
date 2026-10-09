@@ -69,6 +69,7 @@ struct WorktreeInfoView: View {
                     overviewSection
                     conversationSection
                     reviewSection
+                        .id("review")
                     pullRequestSection
                     workSection
                     assetsSection
@@ -86,7 +87,7 @@ struct WorktreeInfoView: View {
                 .padding(.bottom, 28)
             }
             #if DEBUG
-            // `OS1_SCROLL_TO=sandbox|runtime|run-settings` brings a section below the fold
+            // `OS1_SCROLL_TO=review|sandbox|runtime|run-settings` brings a section below the fold
             // into the capture tool's screenshot once the sheet has loaded.
             .onChange(of: scrollToForCapture) { _, target in
                 guard let target else { return }

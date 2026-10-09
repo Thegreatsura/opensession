@@ -80,6 +80,105 @@ enum WorkspaceReview {
         )
     }
 
+    /// A review team somebody asked, as the teammate row names it.
+    struct RequestedTeam: Equatable {
+        var name: String
+        /// Its GitHub spec (`org/team`), what the picker marks as current.
+        var github: String
+        /// Asked through Open Session's own request rather than only on GitHub.
+        var fromRequest: Bool
+    }
+
+    /// A review a teammate submitted on the pull request on their own.
+    struct Verdict: Equatable {
+        var name: String
+        /// APPROVED | CHANGES_REQUESTED | COMMENTED
+        var state: String
+
+        var label: String {
+            switch state {
+            case "APPROVED": "approved"
+            case "CHANGES_REQUESTED": "requested changes"
+            default: "commented"
+            }
+        }
+    }
+
+    /// What the teammate row says: the team a request names, everyone else
+    /// GitHub still lists, and the reviews already given.
+    struct Summary: Equatable {
+        var team: RequestedTeam?
+        /// GitHub's pending reviewers no team request speaks for. Empty while
+        /// Open Session has a request of its own, which then speaks for the row.
+        var githubOthers: [String]
+        var verdicts: [Verdict]
+    }
+
+    /// A team request is one fact, so it is one name on the row. GitHub
+    /// requests the team and the server expands it to its members for "asked
+    /// of me", which otherwise reads as one member's name plus a count. Same
+    /// rule as the web's `reviewLines` (lib/review-lines.ts).
+    ///
+    /// `githubRequested` stays the expanded list: the caller still uses it to
+    /// tell whether the review waits on the viewer.
+    static func summary(
+        request: SessionReviewRequest?,
+        githubRequested: [String],
+        pr: PrDetails?,
+        teams: [OS1API.ReviewTeam],
+        personName: (String) -> String = { $0 }
+    ) -> Summary {
+        func team(for spec: String) -> OS1API.ReviewTeam? {
+            let lower = spec.lowercased()
+            return teams.first {
+                let github = $0.github.lowercased()
+                return github == lower || github.split(separator: "/").last.map(String.init) == lower
+            }
+        }
+        func key(_ person: String) -> String { personName(person).lowercased() }
+
+        var covered = Set<String>()
+        var named: RequestedTeam?
+        if let request, let match = team(for: request.to) {
+            named = RequestedTeam(name: match.name, github: match.github, fromRequest: true)
+            covered.formUnion((match.members ?? []).map(key))
+        }
+        let open = pr?.isOpen == true
+        let reviewers = open ? pr?.reviewers ?? [] : []
+        for reviewer in reviewers where reviewer.isTeam == true && reviewer.state == "PENDING" {
+            let match = team(for: reviewer.login)
+            covered.formUnion((match?.members ?? []).map(key))
+            if named == nil, request == nil {
+                named = RequestedTeam(
+                    name: match?.name ?? reviewer.login,
+                    github: match?.github ?? reviewer.login,
+                    fromRequest: false
+                )
+            }
+        }
+
+        var seen = Set<String>()
+        let others = request != nil ? [] : githubRequested.filter {
+            let person = key($0)
+            return !covered.contains(person) && seen.insert(person).inserted
+        }
+
+        // First submitted review per person; a pending entry is a request,
+        // which the row already speaks for.
+        var verdicts: [Verdict] = []
+        var given = Set<String>()
+        for reviewer in reviewers where reviewer.isTeam != true {
+            guard let state = reviewer.state,
+                  ["APPROVED", "CHANGES_REQUESTED", "COMMENTED"].contains(state),
+                  !reviewer.login.lowercased().hasSuffix("[bot]")
+            else { continue }
+            let name = personName(reviewer.login)
+            guard given.insert(name.lowercased()).inserted else { continue }
+            verdicts.append(Verdict(name: name, state: state))
+        }
+        return Summary(team: named, githubOthers: others, verdicts: verdicts)
+    }
+
     /// A review the reviewer gave on GitHub instead of pressing "Mark as
     /// reviewed" here. GitHub drops somebody from the requested list the
     /// moment they submit, so "reviewed, and no longer pending" is the test —
