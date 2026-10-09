@@ -169,4 +169,107 @@ struct WorkspaceReviewTests {
         #expect(!team.targets("alex"))
         #expect(!team.targets(""))
     }
+
+    // MARK: Team requests on the teammate row
+
+    private let reviewers = OS1API.ReviewTeam(
+        name: "Reviewers",
+        github: "acme/reviewers",
+        members: ["kent", "grant"]
+    )
+
+    private func pr(_ reviewers: [PrReviewer], state: String = "OPEN") -> PrDetails {
+        PrDetails(number: 1, state: state, reviewers: reviewers)
+    }
+
+    /// GitHub asked the team and the server expanded it to its members; the
+    /// row names the team rather than "kent +1".
+    @Test func aGithubOnlyTeamRequestNamesTheTeam() {
+        let summary = WorkspaceReview.summary(
+            request: nil,
+            githubRequested: ["kent", "grant"],
+            pr: pr([PrReviewer(login: "reviewers", state: "PENDING", isTeam: true)]),
+            teams: [reviewers]
+        )
+        #expect(summary.team == .init(name: "Reviewers", github: "acme/reviewers", fromRequest: false))
+        #expect(summary.githubOthers.isEmpty)
+    }
+
+    /// A team outside the roster still reads as itself, by its GitHub slug.
+    @Test func anUnknownGithubTeamKeepsItsSlug() {
+        let summary = WorkspaceReview.summary(
+            request: nil,
+            githubRequested: [],
+            pr: pr([PrReviewer(login: "acme/other", state: "PENDING", isTeam: true)]),
+            teams: [reviewers]
+        )
+        #expect(summary.team?.name == "acme/other")
+    }
+
+    /// Open Session's request and GitHub's are the same team: one name, and
+    /// it is ours, so the menu offers sign-off rather than only clearing.
+    @Test func aMatchingOpenSessionTeamRequestIsOneTeam() {
+        let summary = WorkspaceReview.summary(
+            request: request(to: "acme/reviewers", recipients: ["kent", "grant"]),
+            githubRequested: ["kent", "grant"],
+            pr: pr([PrReviewer(login: "acme/reviewers", state: "PENDING", isTeam: true)]),
+            teams: [reviewers]
+        )
+        #expect(summary.team == .init(name: "Reviewers", github: "acme/reviewers", fromRequest: true))
+        #expect(summary.githubOthers.isEmpty)
+    }
+
+    /// A member who reviewed on their own keeps that review on the row.
+    @Test func aMembersSubmittedReviewIsKept() {
+        let summary = WorkspaceReview.summary(
+            request: nil,
+            githubRequested: ["kent"],
+            pr: pr([
+                PrReviewer(login: "reviewers", state: "PENDING", isTeam: true),
+                PrReviewer(login: "grant", state: "APPROVED"),
+                PrReviewer(login: "grant", state: "COMMENTED"),
+                PrReviewer(login: "ci[bot]", state: "COMMENTED"),
+            ]),
+            teams: [reviewers]
+        )
+        #expect(summary.team?.name == "Reviewers")
+        #expect(summary.verdicts == [.init(name: "grant", state: "APPROVED")])
+        #expect(summary.verdicts.first?.label == "approved")
+    }
+
+    /// Somebody GitHub asked outside the team still counts beside it.
+    @Test func anUnrelatedGithubRequestStaysBesideTheTeam() {
+        let summary = WorkspaceReview.summary(
+            request: nil,
+            githubRequested: ["kent", "grant", "alex"],
+            pr: pr([PrReviewer(login: "reviewers", state: "PENDING", isTeam: true)]),
+            teams: [reviewers]
+        )
+        #expect(summary.team?.name == "Reviewers")
+        #expect(summary.githubOthers == ["alex"])
+    }
+
+    /// Without any team request, GitHub's people are listed as before.
+    @Test func individualGithubRequestsAreNotFolded() {
+        let summary = WorkspaceReview.summary(
+            request: nil,
+            githubRequested: ["kent", "alex"],
+            pr: pr([PrReviewer(login: "kent", state: "PENDING")]),
+            teams: [reviewers]
+        )
+        #expect(summary.team == nil)
+        #expect(summary.githubOthers == ["kent", "alex"])
+    }
+
+    /// A merged pull request's reviewer list is history, not a live request.
+    @Test func aClosedPullRequestNamesNoTeam() {
+        let summary = WorkspaceReview.summary(
+            request: nil,
+            githubRequested: [],
+            pr: pr([PrReviewer(login: "reviewers", state: "PENDING", isTeam: true)], state: "MERGED"),
+            teams: [reviewers]
+        )
+        #expect(summary.team == nil)
+        #expect(summary.verdicts.isEmpty)
+    }
 }
