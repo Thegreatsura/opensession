@@ -268,6 +268,12 @@ export interface CreateAskInput {
    * owning domain (the keychain's owner-only session card and Settings list).
    */
   personOnly?: boolean;
+  /**
+   * Deliver straight to Slack, never as a session card. For a caller that
+   * already holds the session's card: a session has one card slot, so a
+   * second card would replace the first and strand whoever waits on it.
+   */
+  slackOnly?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -466,7 +472,9 @@ export function registerAsk(input: CreateAskInput): HumanAsk {
     options: input.options?.length ? input.options : undefined,
     mode: input.mode,
     deliver: input.deliver,
-    uiFirst: (!input.personOnly && shouldAskInUiFirst(input)) || undefined,
+    uiFirst:
+      (!input.personOnly && !input.slackOnly && shouldAskInUiFirst(input)) ||
+      undefined,
     domain: input.domain,
     state: "scheduled",
     createdAt: new Date().toISOString(),

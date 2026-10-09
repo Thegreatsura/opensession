@@ -850,6 +850,9 @@ export function makeAskHandler(sessionId: string) {
         await clearAskTimer(sessionId);
         const durableAnswer = pendingAsks.get(sessionId);
         if (durableAnswer?.questionId === questionId) {
+          // Escalation records its Slack ask on the stored entry, after
+          // this handler started.
+          escalatedAskId = durableAnswer.escalatedAskId || escalatedAskId;
           durableAnswer.answerReceived = true;
           durableAnswer.earlyAnswer = a;
           await pendingAsks.set(sessionId, durableAnswer);
@@ -971,6 +974,8 @@ async function escalateAskToSlack(
       options,
       mode: "block",
       deliver: "now",
+      // The run's own card is already up and is what the run waits on.
+      slackOnly: true,
     });
     broadcastToSession(sessionId, {
       type: "notice",
